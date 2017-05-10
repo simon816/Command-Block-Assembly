@@ -10,6 +10,8 @@ class Assembler:
         self.tmp_ref = {}
         self.predef()
         self.return_line = None
+        self.current_macro = None
+        self.macros = {}
 
     def predef(self):
         self.constants['sp'] = Var('stack_pointer')
@@ -49,8 +51,44 @@ class Assembler:
             self.parse(data)
             for i in range(old_len, len(self.lines)):
                 self.lines[i].blocks=[]
+        elif directive == 'define':
+            self.macros[value] = []
+            self.current_macro = value
+        elif directive == 'enddefine':
+            self.current_macro = None
+
+    def handle_macro(self, name):
+        for insn, args in self.macros[name]:
+            self.handle_insn(insn, args)
+
+    def handle_special(self, line):
+        idx = line.find(' ')
+        insn, args = line[:idx], line[idx+1:]
+        if insn == 'ONEQ':
+            split = args.split(',', 2)
+            left = self.parse_ref(split[0].strip())
+            right = self.parse_ref(split[1].strip())
+            ref = None
+            const = None
+            if isinstance(left, Ref):
+                ref = left
+                const = right
+            else:
+                ref = right
+                const = left
+            assert isinstance(ref, Ref)
+            assert isinstance(const, int)
+            self.curr_line = CommandSequence()
+            self.lines.append(self.curr_line)
+            self.curr_line.add_block(CommandBlock(
+                Execute(where=SelEquals(ref, const), cmd=SetConst(ref, -1)),
+                conditional=False, mode='REPEAT'))
+
 
     def handle_insn(self, insn, args):
+        if self.current_macro:
+            self.macros[self.current_macro].append((insn, args))
+            return
 
         if insn == 'ADD':
             self.handle_op(AddConst, OpAdd, args)
@@ -275,7 +313,7 @@ class Assembler:
 
     def write_to_session(self, session):
         for line in self.lines:
-            if len(line.blocks) > 1:
+            if len(line.blocks) > 1: # TODO proper trimming of unused lines
                 session.add_line(line)
 
     def parse(self, text):
@@ -292,8 +330,15 @@ class Assembler:
                 name, value = line.split(' ', 2)
                 self.set_const(name[1:].strip(), value.strip())
             elif line[0] == '#':
-                directive, value = line.split(' ', 2)
+                idx = line.find(' ')
+                directive, value = line, ''
+                if idx != -1:
+                    directive, value = line[:idx].strip(), line[idx+1:].strip()
                 self.handle_directive(directive[1:].strip(), value.strip())
+            elif line[0] == '~':
+                self.handle_special(line[1:])
+            elif line[0] == '!':
+                self.handle_macro(line[1:])
             else:
                 idx = line.find(' ')
                 insn, arg = line, ''

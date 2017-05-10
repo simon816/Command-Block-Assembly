@@ -38,6 +38,10 @@ class Scope:
             return self.tags[val]
         elif param == 'arg':
             return self.args[val]
+        elif param == 'jsonvar':
+            obj_name = '0x%04x' % int(val)
+            return '{"score":{"name":"@e[tag=%s]", "objective":"%s"}}' % (
+                self.entity_tag, obj_name)
         else:
             raise KeyError('unknown command argument %s' % param)
 
@@ -96,7 +100,10 @@ class Session:
         resolved = line.resolve(self.scope)
         self.placer.place(resolved)
         if self.dump:
-            print('line', line.label)
+            if isinstance(line, LabelledSequence):
+                print('line', line.label)
+            else:
+                print('line', line)
             for (_, cmd), branch in resolved:
                 print(cmd)
                 for (_, cmd2) in branch:
