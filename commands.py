@@ -25,6 +25,21 @@ class CommandSequence(object):
             output.append((resolve_block(main), map(resolve_block, branch)))
         return output
 
+class Subsequence:
+
+    def __init__(self):
+        self.commands = []
+        self.post_commands = []
+
+    def get_commands(self):
+        return self.commands + self.post_commands
+
+    def add_command(self, command):
+        self.commands.append(command)
+
+    def add_post_command(self, command):
+        self.post_commands.append(command)
+
 class Ref:
     pass
 
@@ -42,6 +57,7 @@ class Mem(Ref):
 
     def resolve(self, scope):
         return '0x%04x' % scope.memory(self.loc)
+
 class Command:
 
     def select(self, selector, scope, **kwargs):
@@ -90,9 +106,30 @@ class Execute(Command):
         self.where = where
 
     def resolve(self, scope):
+        where = {} if self.where is None else self.where.resolve(scope)
         selector = self.select('e', scope, tag=scope.entity_tag,
-                               **self.where.resolve(scope))
+                               **where)
         return 'execute %s ~ ~ ~ %s' % (selector, self.command.resolve(scope))
+
+class Function(Command):
+
+    def __init__(self, func_name, cond_type=None, cond=None):
+        self.name = func_name
+        self.cond_type = cond_type
+        self.cond = cond
+
+    def resolve(self, scope):
+        cond = ''
+        if self.cond_type is not None:
+            selector = self.select('e', scope, tag=scope.entity_tag,
+                                   **self.cond.resolve(scope))
+            cond = ' %s %s' % (self.cond_type, selector)
+        return 'function %s%s' % (scope.function_name(self.name), cond)
+
+class Testfor(Command):
+
+    def resolve(self, scope):
+        return 'testfor %s' % self.select('e', scope, tag=scope.entity_tag)
 
 class Scoreboard(Command):
     def __init__(self, varref, value):

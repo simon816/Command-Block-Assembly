@@ -8,84 +8,89 @@
 .MEM_SIZE #8
 .WORD_SIZE #8
 
-; Internal functions
-
-:_mem_move_z
-SUB #1, hdd_addr
-CMD tp @e[tag=$tag:_mem_ptr$] ~ ~ ~1
-JMP _mem_seek_z
-
-:_mem_seek_z
-EQU hdd_addr, #0
-JMP _mem_move_z
-RTS
-
-:_mem_move_x
-CMD tp @e[tag=$tag:_mem_ptr$] ~1 ~ ~
-SUB #1, hdd_addr
-JMP _mem_seek_x
-
-:_mem_seek_x
-EQU hdd_addr, #0
-JMP _mem_move_x
-MOV mar, hdd_addr
-MOD MEM_SIZE, hdd_addr
-JMP _mem_seek_z
-
-:_mem_func_ret
-CMD kill @e[tag=$tag:_mem_ptr$]
-RTS
-
-:_mem_read_shift
-TEST execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ testforblock ~ ~ ~ air
-ADD hdd_mul, mbr
-SUB #1, hdd_addr
-MUL #2, hdd_mul
-CMD tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~
-JMP _mem_read_data
-
-:_mem_read_data
-EQU hdd_addr, #0
-JMP _mem_read_shift
-JMP _mem_func_ret
-
-:_mem_write_reduce
-CMDI execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ stone
-CMD tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~
-JMP _mem_write_data
-
-:_mem_write_shift
-MOV hdd_mul, _mem_temp
-MOD #2, _mem_temp
-SUB #1, hdd_addr
-DIV #2, hdd_mul
-EQU _mem_temp, #0
-JMP _mem_write_reduce
-CMDI execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ air
-CMD tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~
-JMP _mem_write_data
-
-:_mem_write_data
-EQU hdd_addr, #0
-JMP _mem_write_shift
-JMP _mem_func_ret
 
 ; Public functions
 
-:read_mem
-CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
-MOV mar, hdd_addr
-DIV MEM_SIZE, hdd_addr
-CALL _mem_seek_x
-MOV WORD_SIZE, hdd_addr
-MOV #1, hdd_mul
-JMP _mem_read_data
 
-:write_mem
-CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
-MOV mar, hdd_addr
-DIV MEM_SIZE, hdd_addr
-CALL _mem_seek_x
-MOV WORD_SIZE, hdd_addr
-MOV mbr, hdd_mul
-JMP _mem_write_data
+; Reads a word (WORD_SIZE) from memory
+; Set mar to the address to read
+; mbr will contain the value once read
+read_mem:
+    CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
+    MOV mar, hdd_addr
+    DIV MEM_SIZE, hdd_addr
+    CALL memory_seek
+    MOV WORD_SIZE, hdd_addr
+    MOV #1, hdd_mul
+
+    ; Reads a vertical word from current position
+    _read_loop:
+    CMP hdd_addr, #0
+    JE _finish
+    TEST execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ testforblock ~ ~ ~ stone
+    ADD hdd_mul, mbr
+    SUB #1, hdd_addr
+    MUL #2, hdd_mul
+    CMD tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~
+    JMP _read_loop
+
+    _finish:
+    CMD kill @e[tag=$tag:_mem_ptr$]
+    RET
+
+
+; Writes a word (WORD_SIZE) to memory
+; Set mar to the address to write
+; set mbr to the value that will be written
+write_mem:
+    CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
+    MOV mar, hdd_addr
+    DIV MEM_SIZE, hdd_addr
+    CALL memory_seek
+    MOV WORD_SIZE, hdd_addr
+    MOV mbr, hdd_mul
+
+    _write_loop:
+    CMP hdd_addr, #0
+    JE _finish
+    MOV hdd_mul, _mem_temp
+    MOD #2, _mem_temp
+    SUB #1, hdd_addr
+    DIV #2, hdd_mul
+
+    CMP _mem_temp, #0
+    JE _write_zero
+    CMD execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ stone
+    JMP _continue
+    _write_zero: CMD execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ air
+    _continue:   CMD tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~
+    JMP _write_loop
+
+    _finish:
+    CMD kill @e[tag=$tag:_mem_ptr$]
+    RET
+
+
+; Internal functions
+
+memory_seek:
+    CMP hdd_addr, #0
+    JE _seek_z
+
+    CMD tp @e[tag=$tag:_mem_ptr$] ~1 ~ ~
+    SUB #1, hdd_addr
+    JMP memory_seek
+
+    _seek_z:
+    MOV mar, hdd_addr
+    MOD MEM_SIZE, hdd_addr
+
+    _seek_z_loop:
+    CMP hdd_addr, #0
+    JE _end
+
+    SUB #1, hdd_addr
+    CMD tp @e[tag=$tag:_mem_ptr$] ~ ~ ~1
+    JMP _seek_z_loop
+
+    _end: RET
