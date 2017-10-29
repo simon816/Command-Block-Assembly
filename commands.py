@@ -131,6 +131,39 @@ class Testfor(Command):
     def resolve(self, scope):
         return 'testfor %s' % self.select('e', scope, tag=scope.entity_tag)
 
+class Tellraw(Command):
+
+    def __init__(self, args, sel_type, sel_args={}):
+        self.args = args
+        self.sel = sel_type
+        self.sel_args = sel_args
+
+    def resolve(self, scope):
+        return 'tellraw %s %s' % (self.select(self.sel, scope, **self.sel_args),
+                                  self.to_json(scope))
+
+    def to_json(self, scope):
+        import json
+        data = {}
+        if len(self.args):
+            data = self.arg_to_json(self.args[0], scope)
+            extras = []
+            for arg in self.args[1:]:
+                extras.append(self.arg_to_json(arg, scope))
+            if len(extras):
+                data['extra'] = extras
+        return json.dumps(data)
+
+    def arg_to_json(self, arg, scope):
+        if type(arg) == str:
+            return {'text': arg}
+        if isinstance(arg, Ref):
+            return {'score':
+                    {'name': self.select('e', scope, tag=scope.entity_tag),
+                     'objective': arg.resolve(scope)}}
+        else:
+            raise RuntimeError('Unknown argument type %r' % type(arg))
+
 class Scoreboard(Command):
     def __init__(self, varref, value):
         assert isinstance(varref, Ref)
@@ -220,7 +253,6 @@ class SelRange(Selector):
 class SelEquals(SelRange):
     def __init__(self, varref, value):
         super(SelEquals, self).__init__(varref, value, value)
-
 
 class LabelledSequence(CommandSequence):
     def __init__(self, label, varname='func_pointer'):

@@ -50,10 +50,6 @@ class Scope:
             return self.tags[val]
         elif param == 'arg':
             return self.args[val]
-        elif param == 'jsonvar':
-            obj_name = '0x%04x' % int(val)
-            return '{"score":{"name":"@e[tag=%s]", "objective":"%s"}}' % (
-                self.entity_tag, obj_name)
         else:
             raise KeyError('unknown command argument %s' % param)
 

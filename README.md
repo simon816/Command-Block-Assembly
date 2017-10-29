@@ -22,14 +22,15 @@ Here's a description of the syntax in rough BNF:
 ```xml
 <program>     ::= <statement> | <whitespace> <statement> | <program> <program>
 <statement>   ::= (<directive> | <label> | <instruction> | <constant> | <comment>) <eol>
-<directive>   ::= "#" <symbol> <whitespace> <reference> <line-end>
+<directive>   ::= "#" <symbol> <whitespace> <ANY> <line-end>
 <label>       ::= (<symbol> | "_" <symbol>) ":" (<instruction> | <line-end>)
 <instruction> ::= (<symbol> | <symbol> <whitespace> <operands>) <line-end>
 <operands>    ::= <reference> | <reference> [<whitespace>] "," [<whitespace>] <operands>
 <constant>    ::= "." <symbol> <whitespace> <reference> <line-end>
 <comment>     ::= ";" <ANY> <eol>
 <line-end>    ::= <EOF> | <eol> | <comment>
-<reference>   ::= "#" <number> | <number> | <symbol>
+<reference>   ::= "#" <number> | <number> | <symbol> | <string>
+<string>      ::= '"' <ANY> '"'
 <symbol>      ::= <ident-start> | <ident-start> <identifier>
 <ident-start> ::= <alpha> | "_"
 <identifier>  ::= <ident-start> | <decimal>
@@ -75,13 +76,19 @@ main:
 |MOD|src, dest|Performs dest modulo src and puts into dest|
 |MOVLT|src, dest|Sets dest equal to src if src is less than dest|
 |MOVGT|src, dest|Sets dest equal to src if src is greater than dest|
-|SWP|left, right|Swaps left with right|
+|XCHG|left, right|Exchanges left with right|
+|MOV|src, dest|Copies src to dest|
 |CMP|left, right|Compares left with right (i.e. `right - left`), result used for jumping|
 |JE|label|Jumps to label if the previous CMP's operands were equal|
+|JNE|label|Jumps to label if the previous CMP's operands were not equal|
 |JL|label|Jumps to label if the previous CMP's right was less than left|
+|JG|label|Jumps to label if the previous CMP's right was greater than left|
+|JLE|label|Jumps to label if the previous CMP's right was less than or equal to the left|
+|JGE|label|Jumps to label if the previous CMP's right was greater than or equal to the left|
 |JMP|label|Unconditionally jumps to label|
 |CALL|label|Jumps to label, returns back after completion|
 |RET||Return from a subroutine (use with CALL)|
+|PRINT|arg1, [...args]|Outputs arguments to chat for all players (`@a` selector)|
 |CMD|bare words|Runs the given command|
 |TEST|bare words|Runs the given command, skipping the next line if the command failed|
 |PUSH||Pushes stack register onto the stack, increments stack pointer|
@@ -266,7 +273,7 @@ As stated in the instruction description, SYNC effectively "pauses" the current 
 
 The current calling stack (nested `/function` calls) will always return to the caller and continue on the next line.  
 SYNC must nullify the next call so the calling stack returns and the game runs a tick.  
-However, this is not possible with  CALL's guarantee to return to caller.
+However, this is not possible with CALL's guarantee to return to caller.
 
 Therefore, CALL must push the address of the next instruction onto the stack, letting RET pop it off later.  
 With that, it is now possible to cause an interrupt between CALL and the subsequent RET.  

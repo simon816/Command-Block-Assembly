@@ -124,6 +124,8 @@ class AsmReader:
             return ('literal', self.read_number())
         elif head.isnumeric():
             return ('address', self.read_number())
+        elif head == '"':
+            return ('string', self.read_string())
         else:
             return ('symbol', self.read_symbol())
 
@@ -143,13 +145,34 @@ class AsmReader:
 
         return int(self.read_at_least_once(str.isdecimal, 'decimal char'))
 
+    def read_string(self):
+        self.read('"')
+        string = ''
+        while True:
+            string += self.read_while(lambda c: c not in '\n\\"')
+            if self.head == '\n':
+                self.syntax_error('Unterminated string')
+            elif self.head == '\\':
+                self.skip(1)
+                if self.head == 'n':
+                    string += '\n'
+                elif self.head == '"':
+                    string  += '"'
+                else:
+                    self.syntax_error('Invalid escape %r' % self.head)
+                self.skip(1)
+            else:
+                break
+        self.read('"')
+        return string
+
     def read_label(self):
         name = self.read_symbol()
         self.read(':')
         return name
 
     def read_symbol(self):
-        symb = self.read(chr_is_identifier_start, 'start of identifier character')
+        symb = self.read(chr_is_identifier_start, 'start of identifier')
         symb += self.read_while(chr_is_identifier)
         return symb
 
@@ -355,7 +378,7 @@ class Assembler:
             with open(path, 'r') as f:
                 data = f.read()
                 assembler = Assembler()
-                assember.enable_sync = self.enable_sync
+                assembler.enable_sync = self.enable_sync
                 assembler.parse(data, path)
                 for sub in assembler.subroutines.keys():
                     if sub.startswith('__'):
@@ -374,17 +397,23 @@ class Assembler:
             'MOVLT': (self.handle_op, None, OpIfLt),
             'MOVGT': (self.handle_op, None, OpIfGt),
 
-            'SWP': self.handle_swap,
+            'XCHG': self.handle_xchg,
             'MOV': self.handle_move,
 
             'CMP': self.handle_cmp,
 
             'JE': self.handle_jump_eq,
+            'JNE': self.handle_jump_neq,
             'JL': self.handle_jump_lt,
+            'JG': self.handle_jump_gt,
+            'JLE': self.handle_jump_lte,
+            'JGE': self.handle_jump_gte,
             'JMP': self.handle_jump,
 
             'CALL': self.handle_call,
             'RET': self.handle_ret,
+
+            'PRINT': self.handle_print,
 
             'CMD': self.handle_cmd,
             'TEST': self.handle_test_cmd,
@@ -451,7 +480,7 @@ class Assembler:
                 cmd = ConstCmd(dest, src)
         self.add_command(cmd)
 
-    def handle_swap(self, src, dest):
+    def handle_xchg(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
         assert isinstance(src, Ref)
         self.add_command(OpSwap(dest, src))
@@ -474,7 +503,7 @@ class Assembler:
         commands.append(SubFn(Var('working_reg'), left))
         self.comparison_args = (commands, left, right)
 
-    def handle_jump_eq(self, dest_arg):
+    def do_equality_jump(self, dest_arg, is_truth):
         arg_type, symbol = dest_arg
         assert arg_type == 'symbol'
         if not self.comparison_args:
@@ -489,12 +518,40 @@ class Assembler:
             ref, const = (left, right) if isinstance(left, Ref) else \
                          (right, left) if isinstance(right, Ref) else (None, None)
             if ref is None:
-                if left == right:
+                if (is_truth and left == right) or (not is_truth and left != right):
                     self.jump_unconditional(symbol)
                 return
             else:
                 truth_test = SelEquals(ref, const)
-        self.jump_if_cond(self.symbol_to_func(symbol), truth_test)
+        jump_fn = self.jump_if_cond if is_truth else self.jump_unless_cond
+        jump_fn(self.symbol_to_func(symbol), truth_test)
+
+    def handle_jump_eq(self, dest_arg):
+        self.do_equality_jump(dest_arg, True)
+
+    def handle_jump_neq(self, dest_arg):
+        self.do_equality_jump(dest_arg, False)
+
+    def handle_jump_lt(self, dest_arg):
+        truth_test = SelRange(Var('working_reg'), max=-1)
+        self.handle_conditional_jump(dest_arg, truth_test, int.__lt__)
+
+    def handle_jump_gt(self, dest_arg):
+        truth_test = SelRange(Var('working_reg'), min=1)
+        self.handle_conditional_jump(dest_arg, truth_test, int.__gt__)
+
+    def handle_jump_lte(self, dest_arg):
+        truth_test = SelRange(Var('working_reg'), max=0)
+        self.handle_conditional_jump(dest_arg, truth_test, int.__le__)
+
+    def handle_jump_gte(self, dest_arg):
+        truth_test = SelRange(Var('working_reg'), min=0)
+        self.handle_conditional_jump(dest_arg, truth_test, int.__ge__)
+
+    def handle_jump(self, dest_arg):
+        ref_type, sub_name = dest_arg
+        assert ref_type == 'symbol'
+        self.jump_unconditional(sub_name)
 
     def handle_conditional_jump(self, dest_arg, truth_test, expr):
         arg_type, symbol = dest_arg
@@ -511,21 +568,23 @@ class Assembler:
             self.add_command(command)
         self.jump_if_cond(self.symbol_to_func(symbol), truth_test)
 
-    def handle_jump_lt(self, dest_arg):
-        truth_test = SelRange(Var('working_reg'), max=-1)
-        self.handle_conditional_jump(dest_arg, truth_test, int.__lt__)
+    def jump_unless_cond(self, dest_if_fail, false_test):
+        self.jump_conditional(dest_if_fail, 'unless', false_test)
 
     def jump_if_cond(self, dest_if_success, truth_test):
+        self.jump_conditional(dest_if_success, 'if', truth_test)
+
+    def jump_conditional(self, dest, cond_type, cond_test):
         cont_name = self.unique_func('cont')
         # Sent to dest if condition passes
-        self.add_command(Function(dest_if_success, cond_type='if', cond=truth_test))
+        self.add_command(Function(dest, cond_type=cond_type, cond=cond_test))
         # create new subsequence to continue execution
         self.split_to_subsequence(cont_name, cond_type='if',
                                   cond=SelEquals(Var('success_tracker'), 0))
         # Work around what appears to be a bug where the SuccessCount of a
         # function is dependent on the last executed function
         # (and not just on the selector as we thought)
-        self.on_subsequence_exists(dest_if_success,
+        self.on_subsequence_exists(dest,
                                    lambda seq: seq.add_post_command(Testfor()))
 
     def on_subsequence_exists(self, name, cb):
@@ -537,11 +596,6 @@ class Assembler:
     def jump_unconditional(self, sub_name):
         self.add_command(Function(self.symbol_to_func(sub_name)))
         self.curr_func = '__unreachable__'
-
-    def handle_jump(self, dest_arg):
-        ref_type, sub_name = dest_arg
-        assert ref_type == 'symbol'
-        self.jump_unconditional(sub_name)
 
     def handle_call(self, sub_arg):
         ref_type, sub_name = sub_arg
@@ -555,7 +609,7 @@ class Assembler:
             self.handle_push()
             self.add_command(Function(self.symbol_to_func(sub_name)))
             self.enter_subsequence(ret_name)
-            # See jump_if_cond for why we need testfor
+            # See jump_conditional for why we need testfor
             self.function_subsequences[ret_name].add_post_command(Testfor())
 
     def handle_ret(self):
@@ -576,6 +630,21 @@ class Assembler:
         self.jump_if_cond(after, SelEquals(Var('success_tracker'), 0))
         # Otherwise, the new subsequence we're on will jump to 'after' after next insn
         self.jump_after_next(after)
+
+    def handle_print(self, arg1, *args):
+        args = [arg1] + list(args)
+        cmd_args = []
+        for arg_type, arg in args:
+            if arg_type == 'string':
+                cmd_args.append(arg)
+            else:
+                arg = self.resolve_ref(arg_type, arg)
+                if arg is None:
+                    raise RuntimeError('Bad argument type %r' % arg_type)
+                if type(arg) == int:
+                    arg = str(arg)
+                cmd_args.append(arg)
+        self.add_command(Tellraw(cmd_args, 'a'))
 
     def handle_cmd(self, cmd):
         self.add_command(Cmd(cmd))
@@ -607,7 +676,7 @@ class Assembler:
         # Set assembler to destination function, immediately turn off sync trigger
         self.enter_subsequence(func)
         self.add_command(SetConst(Var('sync_trigger'), 0))
-        # See jump_if_cond for why we need testfor
+        # See jump_conditional for why we need testfor
         self.function_subsequences[func].add_post_command(Testfor())
 
     def add_lookup_table(self, session):
