@@ -165,9 +165,13 @@ class Tellraw(Command):
             raise RuntimeError('Unknown argument type %r' % type(arg))
 
 class Scoreboard(Command):
+
+    allows_negative = False
+
     def __init__(self, varref, value):
         assert isinstance(varref, Ref)
         assert isinstance(value, int)
+        assert self.allows_negative or value >= 0
         self.var = varref
         self.value = value
 
@@ -178,6 +182,7 @@ class Scoreboard(Command):
 
 class SetConst(Scoreboard):
     op = 'set'
+    allows_negative = True
 
 class AddConst(Scoreboard):
     op = 'add'

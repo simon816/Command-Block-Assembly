@@ -307,11 +307,12 @@ class Assembler:
     def create_subsequence(self, func_name):
         if func_name in self.function_subsequences:
             raise RuntimeError('subsequence %r already defined' % func_name)
-        self.function_subsequences[func_name] = Subsequence()
+        seq = self.function_subsequences[func_name] = Subsequence()
         if func_name in self.on_sub:
             for cb in self.on_sub[func_name]:
-                cb(self.function_subsequences[func_name])
+                cb(seq)
             del self.on_sub[func_name]
+        return seq
 
     def split_to_subsequence(self, name, **func_args):
         # Create a jump on the current subsequence
@@ -399,6 +400,17 @@ class Assembler:
 
             'XCHG': self.handle_xchg,
             'MOV': self.handle_move,
+
+            'AND': self.handle_and,
+            'OR': self.handle_or,
+            'XOR': self.handle_xor,
+            'NOT': self.handle_not,
+
+            'SHL': self.handle_shl,
+            'SHR': self.handle_shr,
+            'SAR': self.handle_sar,
+            'ROL': self.handle_rol,
+            'ROR': self.handle_ror,
 
             'CMP': self.handle_cmp,
 
@@ -492,6 +504,136 @@ class Assembler:
         else:
             cmd = SetConst(dest, src)
         self.add_command(cmd)
+
+    def handle_and(self, src, dest):
+        self.bitwise_op('and', src, dest, 0, 1, OpSub)
+
+    def handle_or(self, src, dest):
+        self.bitwise_op('or', src, dest, 1, 0, OpAdd)
+
+    def handle_xor(self, src, dest):
+        self.bitwise_op('xor', src, dest, 1, 0, OpAdd, OpSub)
+
+    def handle_not(self, ref):
+        ref = self.resolve_ref(*ref)
+        assert isinstance(ref, Ref)
+        work = Var('working_reg')
+        self.add_command(SetConst(work, -1))
+        self.add_command(OpSub(work, ref))
+        self.add_command(OpAssign(ref, work))
+
+    def bitwise_op(self, name, src, dest, cmp_1, cmp_2, Op, Op2=None):
+        """Constructs code like the following:
+void OP(int src, int *dest) {
+    int order = 1;
+    do {
+        if (src / order) % 2 == cmp_1) {
+            if ((*dest / order) % 2 == cmp_2) {
+                *dest = dest {op} order;
+            } else if (op2) {
+                *dest = dest {op2} order;
+            }
+        }
+        order *= 2;
+    } while (order > 1); // Wait until overflow
+}
+"""
+        src, dest = self.get_src_dest(src, dest)
+        order = Var('working_reg')
+        two = Var('working_reg_2')
+        work = Var('working_reg_3')
+
+        self.add_command(SetConst(order, 1))
+        self.add_command(SetConst(two, 2))
+        op_fn = self.unique_func(name)
+        old_func = self.curr_func
+        self.split_to_subsequence(op_fn)
+        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
+        self.add_command(AssignFn(work, src))
+        self.add_command(OpDiv(work, order))
+        self.add_command(OpMod(work, two))
+        cmp_fn = self.unique_func('cmp')
+        self.add_command(Function(cmp_fn, cond_type='if', cond=SelEquals(work, cmp_1)))
+        self.add_command(OpAdd(order, order))
+        self.add_command(Function(op_fn, cond_type='if', cond=SelRange(order, min=1)))
+
+        # Function to run if work%2==cmp_1
+        seq = self.create_subsequence(cmp_fn)
+        seq.add_command(OpAssign(work, dest))
+        seq.add_command(OpDiv(work, order))
+        seq.add_command(OpMod(work, two))
+        seq.add_command(Op(dest, order).where(SelEquals(work, cmp_2)))
+        if Op2 is not None:
+            seq.add_command(Op2(dest, order).where(SelEquals(Var('success_tracker'), 0)))
+
+        self.curr_func = old_func
+
+    def handle_shl(self, src, dest):
+        self.shift_op('shl', src, dest, True)
+
+    def handle_shr(self, src, dest):
+        self.shift_op('shr', src, dest, False)
+
+    def handle_sar(self, src, dest):
+        src, dest = self.get_src_dest(src, dest)
+        raise NotImplementedError() # TODO
+
+    def shift_op(self, name, src, dest, left):
+        # TODO handle 2's complement properly
+        src, dest = self.get_src_dest(src, dest)
+        count = Var('working_reg')
+        self.add_command(OpAssign(count, src))
+        if not left:
+            self.add_command(SetConst(Var('working_reg_2'), 2))
+        old_func = self.curr_func
+        loop = self.unique_func(name)
+        self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
+        if left:
+            self.add_command(OpAdd(dest, dest))
+        else:
+            self.add_command(OpDiv(dest, Var('working_reg_2')))
+        self.add_command(RemConst(count, 1))
+        self.add_command(Function(loop, cond_type='unless', cond=SelEquals(count, 0)))
+        self.curr_func = old_func
+
+    def handle_rol(self, src, dest):
+        src, dest = self.get_src_dest(src, dest)
+        count = Var('working_reg')
+        was_neg = Var('working_reg_2')
+        self.add_command(OpAssign(count, src))
+        old_func = self.curr_func
+        loop = self.unique_func('rol')
+        self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
+        self.add_command(SetConst(was_neg, 0))
+        self.add_command(SetConst(was_neg, 1).where(SelRange(dest, max=-1)))
+        self.add_command(OpAdd(dest, dest))
+        self.add_command(AddConst(dest, 1).where(SelEquals(was_neg, 1)))
+        self.add_command(RemConst(count, 1))
+        self.add_command(Function(loop, cond_type='unless', cond=SelEquals(count, 0)))
+        self.curr_func = old_func
+
+    def handle_ror(self, src, dest):
+        # TODO handle 2's complement properly
+        src, dest = self.get_src_dest(src, dest)
+        count = Var('working_reg')
+        was_lsb = Var('working_reg_2')
+        two = Var('working_reg_3')
+        self.add_command(OpAssign(count, src))
+        self.add_command(SetConst(two, 2))
+        old_func = self.curr_func
+        loop = self.unique_func('ror')
+        self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
+        self.add_command(OpAssign(was_lsb, dest))
+        self.add_command(OpMod(was_lsb, two))
+        self.add_command(OpDiv(dest, two))
+        # Assumption of 32 bit
+        # Remove 1 less than max negative because RemConst doesn't support negatives
+        self.add_command(RemConst(dest, (1<<31) - 1).where(SelEquals(was_lsb, 1)))
+        # Remove remaining 1 thas wasn't removed from above
+        self.add_command(RemConst(dest, 1).where(SelEquals(was_lsb, 1)))
+        self.add_command(RemConst(count, 1))
+        self.add_command(Function(loop, cond_type='unless', cond=SelEquals(count, 0)))
+        self.curr_func = old_func
 
     def handle_cmp(self, left, right):
         """Subtract left from right i.e right - left"""

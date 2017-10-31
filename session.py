@@ -64,6 +64,8 @@ class Session:
             'stack_slot': 'ss_%d',
             'stack_pointer': 'stack_ptr',
             'working_reg': 'working',
+            'working_reg_2': 'working_2',
+            'working_reg_3': 'working_3',
             'success_tracker': 'success_tracker',
             'sync_trigger': 'sync',
             'lookup_pointer': 'lookup'

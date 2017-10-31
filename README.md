@@ -78,6 +78,15 @@ main:
 |MOVGT|src, dest|Sets dest equal to src if src is greater than dest|
 |XCHG|left, right|Exchanges left with right|
 |MOV|src, dest|Copies src to dest|
+|AND|src, dest|Performs bitwise AND, result put into dest|
+|OR|src, dest|Performs bitwise OR and puts into dest|
+|XOR|src, dest|Performs bitwise XOR and puts into dest|
+|NOT|ref|Performs bitwise NOT on ref|
+|SHL|src, dest|Logical shift dest left by src|
+|SHR|src, dest|Logical shift dest right by src|
+|SAR|src, dest|Arithmetic shift dest right by src|
+|ROL|src, dest|Rotates dest left by src|
+|ROR|src, dest|Rotates dest right by src|
 |CMP|left, right|Compares left with right (i.e. `right - left`), result used for jumping|
 |JE|label|Jumps to label if the previous CMP's operands were equal|
 |JNE|label|Jumps to label if the previous CMP's operands were not equal|
@@ -304,3 +313,8 @@ JE is_equal
 JL is_less
 JG is_greater
 ```
+
+## Signed bitwise operations
+
+The bitwise operations (e.g. AND, SHR, ROL) have not been tested for correct handling of negative values.
+Use with caution.
