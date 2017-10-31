@@ -582,7 +582,8 @@ void OP(int src, int *dest) {
         # TODO handle 2's complement properly
         src, dest = self.get_src_dest(src, dest)
         count = Var('working_reg')
-        self.add_command(OpAssign(count, src))
+        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
+        self.add_command(AssignFn(count, src))
         if not left:
             self.add_command(SetConst(Var('working_reg_2'), 2))
         old_func = self.curr_func
@@ -600,7 +601,8 @@ void OP(int src, int *dest) {
         src, dest = self.get_src_dest(src, dest)
         count = Var('working_reg')
         was_neg = Var('working_reg_2')
-        self.add_command(OpAssign(count, src))
+        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
+        self.add_command(AssignFn(count, src))
         old_func = self.curr_func
         loop = self.unique_func('rol')
         self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
@@ -618,7 +620,8 @@ void OP(int src, int *dest) {
         count = Var('working_reg')
         was_lsb = Var('working_reg_2')
         two = Var('working_reg_3')
-        self.add_command(OpAssign(count, src))
+        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
+        self.add_command(AssignFn(count, src))
         self.add_command(SetConst(two, 2))
         old_func = self.curr_func
         loop = self.unique_func('ror')

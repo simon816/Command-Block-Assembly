@@ -46,11 +46,13 @@ if __name__ == '__main__':
     session = Session((x, y, z), writer, args.namespace, stack_size=args.stack,
                       args=sargs, debug=args.debug)
     assembler.write_to_session(session)
-    setup = session.create_setup_function()
+    setup, cleanup = session.create_up_down_functions()
     print('Generated', writer.command_count, 'commands in',
           writer.func_count, 'functions')
     print('== Setup command ==')
     print ('/' + setup)
+    print('== Cleanup command ==')
+    print('/' + cleanup)
 
     if args.jump:
         print('== Jump to %s command ==' % args.jump)

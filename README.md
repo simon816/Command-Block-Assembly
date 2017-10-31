@@ -232,8 +232,11 @@ e.g. to run a subroutine named `main`, use `--jump main`, this will output the e
 The first time a program is loaded into a world, the setup command must be ran before any function calls are made.  
 The setup command is outputted by the assembler.
 
+The assembler also outputs a cleanup function, which performs the opposite operation to setup.
+If command blocks are placed by the setup command, the cleanup command will remove them. If a relative `--place-location`
+was used, the cleanup must be executed from the same location that setup was ran from.
+
 Note: the `/execute` command is required for the subroutine jump. Don't be tempted to run `/function` directly.  
-Doesn't matter for the setup command, however.
 
 # Examples
 Examples can be found in the [examples](https://github.com/simon816/Command-Block-Assembly/tree/master/examples) directory.

@@ -14,22 +14,26 @@ class Scope:
         self.func_names = set()
 
     def variable(self, name, args=()):
-        return self.variables[name] % args
+        return self.trim(self.namespace + '_' + self.variables[name] % args)
 
     def memory(self, orig):
         self.mem_locs[orig] = True
-        return orig
+        return self.trim('%s_x%x' % (self.namespace, orig))
+
+    def trim(self, obj_name):
+        # Objective name length must be <= 16
+        return obj_name[-16:]
 
     def get_objectives(self):
         objectives = []
-        for key,value in self.variables.items():
-            if key == 'stack_slot':
+        for name in self.variables:
+            if name == 'stack_slot':
                 for i in range(self.stack_size):
-                    objectives.append(value % i)
+                    objectives.append(self.variable(name, i))
             else:
-                objectives.append(value)
+                objectives.append(self.variable(name))
         for loc in self.mem_locs:
-            objectives.append('0x%04x' % loc)
+            objectives.append(self.memory(loc))
         return objectives
 
     def get_mem_locs(self):
@@ -46,7 +50,7 @@ class Scope:
     def cmd_arg(self, param, val):
         if param == 'tag':
             if val not in self.tags:
-                self.tags[val] = 'tag_%s' % val
+                self.tags[val] = '%s_tag_%s' % (self.namespace, val)
             return self.tags[val]
         elif param == 'arg':
             return self.args[val]
@@ -59,16 +63,16 @@ class Session:
                  debug=False):
         self.placer = CommandPlacer(pos)
         self.writer = writer
-        self.scope = Scope('etag', namespace, stack_size, {
-            'stack_register': 'stack_reg',
+        self.scope = Scope(namespace + '_etag', namespace, stack_size, {
+            'stack_register': 'sr',
             'stack_slot': 'ss_%d',
-            'stack_pointer': 'stack_ptr',
-            'working_reg': 'working',
-            'working_reg_2': 'working_2',
-            'working_reg_3': 'working_3',
-            'success_tracker': 'success_tracker',
-            'sync_trigger': 'sync',
-            'lookup_pointer': 'lookup'
+            'stack_pointer': 'sp',
+            'working_reg': 'a',
+            'working_reg_2': 'b',
+            'working_reg_3': 'c',
+            'success_tracker': 'st',
+            'sync_trigger': 'sy',
+            'lookup_pointer': 'lk'
         }, args=args)
         self.print_debug = debug
         self.add_stack()
@@ -144,29 +148,45 @@ class Session:
                         print('branch >', cmd2)
                 print()
 
-    def create_setup_function(self, name='setup'):
-        self.scope.add_function_names((name,))
-        func = [
+    def create_up_down_functions(self, setup='setup', cleanup='cleanup'):
+        self.scope.add_function_names((setup, cleanup))
+        up = [
             'kill @e[tag=%s]' % self.scope.entity_tag,
             'summon armor_stand ~ ~2 ~ {Tags:["%s"]}' % self.scope.entity_tag
         ]
+        down = [
+            'kill @e[tag=%s]' % self.scope.entity_tag
+        ]
         for obj in self.scope.get_objectives():
-            func.append('scoreboard objectives add %s dummy' % obj)
+            up.append('scoreboard objectives add %s dummy' % obj)
+            down.append('scoreboard objectives remove %s' % obj)
         for loc in self.scope.get_mem_locs():
-            func.append(SetConst(Mem(loc), 0).resolve(self.scope))
+            up.append(SetConst(Mem(loc), 0).resolve(self.scope))
         for var, val in {
                 'stack_pointer': -1,
                 'working_reg': 0,
                 'success_tracker': 0,
                 'sync_trigger': -1
             }.items():
-            func.append(SetConst(Var(var), val).resolve(self.scope))
-        func.append('stats entity @e[tag=%s] set SuccessCount @e[tag=%s] %s' % (
+            up.append(SetConst(Var(var), val).resolve(self.scope))
+        up.append('stats entity @e[tag=%s] set SuccessCount @e[tag=%s] %s' % (
             self.scope.entity_tag, self.scope.entity_tag,
             self.scope.variable('success_tracker')))
-        func.extend(self.placer.output())
-        self.writer.write_function(name, func)
-        return Function(name).resolve(self.scope)
+        up.extend(self.placer.output())
+        down.extend(self.placer.cleanup())
+        self.writer.write_function(setup, up)
+        self.writer.write_function(cleanup, down)
+        if self.print_debug:
+            print('Function', setup)
+            for cmd in up:
+                print(' ', cmd)
+            print()
+            print('Function', cleanup)
+            for cmd in down:
+                print(' ', cmd)
+            print()
+        return (Function(setup).resolve(self.scope),
+                Function(cleanup).resolve(self.scope))
 
 class FunctionWriter:
 

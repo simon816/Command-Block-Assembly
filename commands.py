@@ -56,7 +56,7 @@ class Mem(Ref):
         self.loc = loc
 
     def resolve(self, scope):
-        return '0x%04x' % scope.memory(self.loc)
+        return scope.memory(self.loc)
 
 class Command:
 
