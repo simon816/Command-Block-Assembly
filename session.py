@@ -3,10 +3,9 @@ from commands import *
 from placer import CommandPlacer
 
 class Scope:
-    def __init__(self, e_tag, namespace, stack_size, variables, args={}):
-        self.entity_tag = e_tag
+    def __init__(self, namespace, tag_name, variables, args={}):
+        self.entity_tag = namespace + '_' + tag_name
         self.namespace = namespace
-        self.stack_size = stack_size
         self.variables = variables
         self.mem_locs = {}
         self.tags = {}
@@ -14,7 +13,10 @@ class Scope:
         self.func_names = set()
 
     def variable(self, name, args=()):
-        return self.trim(self.namespace + '_' + self.variables[name] % args)
+        var = self.variables[name]
+        if type(var) == tuple:
+            var = var[0]
+        return self.trim(self.namespace + '_' + var % args)
 
     def memory(self, orig):
         self.mem_locs[orig] = True
@@ -27,9 +29,12 @@ class Scope:
     def get_objectives(self):
         objectives = []
         for name in self.variables:
-            if name == 'stack_slot':
-                for i in range(self.stack_size):
-                    objectives.append(self.variable(name, i))
+            if type(self.variables[name]) == tuple:
+                template, options = self.variables[name]
+                for args in options:
+                    if not type(args) in [tuple, list]:
+                        args = (args,)
+                    objectives.append(self.variable(name, *args))
             else:
                 objectives.append(self.variable(name))
         for loc in self.mem_locs:
@@ -53,6 +58,8 @@ class Scope:
                 self.tags[val] = '%s_tag_%s' % (self.namespace, val)
             return self.tags[val]
         elif param == 'arg':
+            if val not in self.args:
+                raise KeyError('Missing argument %r, use --arg' % val)
             return self.args[val]
         else:
             raise KeyError('unknown command argument %s' % param)
@@ -63,9 +70,10 @@ class Session:
                  debug=False):
         self.placer = CommandPlacer(pos)
         self.writer = writer
-        self.scope = Scope(namespace + '_etag', namespace, stack_size, {
+        self.stack_size = stack_size
+        self.scope = Scope(namespace, 'etag', {
             'stack_register': 'sr',
-            'stack_slot': 'ss_%d',
+            'stack_slot': ('ss_%d', range(stack_size)),
             'stack_pointer': 'sp',
             'working_reg': 'a',
             'working_reg_2': 'b',
@@ -73,37 +81,35 @@ class Session:
             'success_tracker': 'st',
             'sync_trigger': 'sy',
             'lookup_pointer': 'lk'
-        }, args=args)
+        }, args)
         self.print_debug = debug
         self.add_stack()
 
     def add_stack(self, one_function=False):
+        if self.stack_size < 1:
+            return
         push_stack = Subsequence()
         push_stack.add_command(AddConst(Var('stack_pointer'), 1))
 
         pop_stack = Subsequence()
         pop_stack.add_command(RemConst(Var('stack_pointer'), 1))
 
-        STACK_SIZE = self.scope.stack_size
-        if STACK_SIZE < 1:
-            return
-
         current_push_seq = push_stack
         current_pop_seq = pop_stack
         current_push_func = 'stack_push_0'
         current_pop_func = 'stack_pop_0'
         self.scope.add_function_names((current_push_func, current_pop_func))
-        for i in range(STACK_SIZE):
+        for i in range(self.stack_size):
             next_push_func = 'stack/stack_push_%d' % (i+1)
             next_pop_func = 'stack/stack_pop_%d' % (i+1)
             current_push_seq.add_command(OpAssign(Var('stack_slot', i), Var('stack_register'))
                                          .where(SelEquals(Var('stack_pointer'), i)))
-            top = STACK_SIZE - i - 1
+            top = self.stack_size - i - 1
             current_pop_seq.add_command(OpAssign(Var('stack_register'), Var('stack_slot', i))
                                         .where(SelEquals(Var('stack_pointer'), i - 1)))
             if not one_function:
                 self.scope.add_function_names((next_push_func, next_pop_func))
-                is_last = i == STACK_SIZE - 1
+                is_last = i == self.stack_size - 1
                 if not is_last:
                     current_push_seq.add_command(Function(next_push_func, cond_type='if',
                                                           cond=SelEquals(Var('success_tracker'), 0)))

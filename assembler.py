@@ -479,6 +479,9 @@ class Assembler:
         assert isinstance(dest, Ref) # dest must be a reference
         return src, dest
 
+    def assign_op(self, dest, src):
+        return (OpAssign if isinstance(src, Ref) else SetConst)(dest, src)
+
     def handle_op(self, ConstCmd, DynCmd, src, dest):
         src, dest = self.get_src_dest(src, dest)
         if isinstance(src, Ref):
@@ -499,11 +502,7 @@ class Assembler:
 
     def handle_move(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
-        if isinstance(src, Ref):
-            cmd = OpAssign(dest, src)
-        else:
-            cmd = SetConst(dest, src)
-        self.add_command(cmd)
+        self.add_command(self.assign_op(dest, src))
 
     def handle_and(self, src, dest):
         self.bitwise_op('and', src, dest, 0, 1, OpSub)
@@ -548,8 +547,7 @@ void OP(int src, int *dest) {
         op_fn = self.unique_func(name)
         old_func = self.curr_func
         self.split_to_subsequence(op_fn)
-        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
-        self.add_command(AssignFn(work, src))
+        self.add_command(self.assign_op(work, src))
         self.add_command(OpDiv(work, order))
         self.add_command(OpMod(work, two))
         cmp_fn = self.unique_func('cmp')
@@ -582,8 +580,7 @@ void OP(int src, int *dest) {
         # TODO handle 2's complement properly
         src, dest = self.get_src_dest(src, dest)
         count = Var('working_reg')
-        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
-        self.add_command(AssignFn(count, src))
+        self.add_command(self.assign_op(count, src))
         if not left:
             self.add_command(SetConst(Var('working_reg_2'), 2))
         old_func = self.curr_func
@@ -601,8 +598,7 @@ void OP(int src, int *dest) {
         src, dest = self.get_src_dest(src, dest)
         count = Var('working_reg')
         was_neg = Var('working_reg_2')
-        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
-        self.add_command(AssignFn(count, src))
+        self.add_command(self.assign_op(count, src))
         old_func = self.curr_func
         loop = self.unique_func('rol')
         self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
@@ -620,8 +616,7 @@ void OP(int src, int *dest) {
         count = Var('working_reg')
         was_lsb = Var('working_reg_2')
         two = Var('working_reg_3')
-        AssignFn = OpAssign if isinstance(src, Ref) else SetConst
-        self.add_command(AssignFn(count, src))
+        self.add_command(self.assign_op(count, src))
         self.add_command(SetConst(two, 2))
         old_func = self.curr_func
         loop = self.unique_func('ror')
@@ -642,9 +637,8 @@ void OP(int src, int *dest) {
         """Subtract left from right i.e right - left"""
         left, right = self.resolve_ref(*left), self.resolve_ref(*right)
         commands = []
-        AssignFn = OpAssign if isinstance(right, Ref) else SetConst
         SubFn = OpSub if isinstance(left, Ref) else RemConst
-        commands.append(AssignFn(Var('working_reg'), right))
+        commands.append(self.assign_op(Var('working_reg'), right))
         commands.append(SubFn(Var('working_reg'), left))
         self.comparison_args = (commands, left, right)
 

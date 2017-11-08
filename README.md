@@ -252,7 +252,7 @@ An example of how the assembly code can make use of the world.
 The "hard drive" is represented by blocks in the world. An air block represents 0, stone = 1.
 
 In this example, data is stored in a 2D plane on the x and z axis.  
-A memory location `loc` is stored at `x = loc / MEM_SIZE`, `z = loc % MEM_SIZE`  
+A memory location `loc` is stored at `x = loc / MEM_SIZE_X`, `z = loc % MEM_SIZE_Z`  
 The value is then WORD_SIZE bits in the y axis. i.e. for an 8-bit word, y=0 is the LSB, y=7 is the MSB.
 
 `hdd_driver.asm` is a library file, and exports the `read_mem`, `write_mem` subroutines along with

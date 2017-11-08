@@ -5,7 +5,10 @@
 .mar 2
 .mbr 3
 ._mem_temp 4
-.MEM_SIZE #8
+
+.MEM_SIZE_X #8
+.MEM_SIZE_Z #8
+
 .WORD_SIZE #8
 
 
@@ -18,7 +21,8 @@
 read_mem:
     CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
     MOV mar, hdd_addr
-    DIV MEM_SIZE, hdd_addr
+    MOV #0, mbr
+    DIV MEM_SIZE_X, hdd_addr
     CALL memory_seek
     MOV WORD_SIZE, hdd_addr
     MOV #1, hdd_mul
@@ -45,7 +49,7 @@ read_mem:
 write_mem:
     CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
     MOV mar, hdd_addr
-    DIV MEM_SIZE, hdd_addr
+    DIV MEM_SIZE_X, hdd_addr
     CALL memory_seek
     MOV WORD_SIZE, hdd_addr
     MOV mbr, hdd_mul
@@ -60,6 +64,7 @@ write_mem:
 
     CMP _mem_temp, #0
     JE _write_zero
+    ; If not zero, write 1. note: this captures -1 and 1
     CMD execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ stone
     JMP _continue
     _write_zero: CMD execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ air
@@ -83,7 +88,7 @@ memory_seek:
 
     _seek_z:
     MOV mar, hdd_addr
-    MOD MEM_SIZE, hdd_addr
+    MOD MEM_SIZE_Z, hdd_addr
 
     _seek_z_loop:
     CMP hdd_addr, #0
