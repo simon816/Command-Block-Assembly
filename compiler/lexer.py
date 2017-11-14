@@ -18,9 +18,9 @@ class Lexer:
         return self.char
 
     def next_char(self):
-        ptr = self.ptr
+        ptr, char = self.ptr, self.char
         c = self.read_char()
-        self.ptr = ptr
+        self.ptr, self.char = ptr, char
         return c
 
     def next_next(self):
@@ -41,12 +41,16 @@ class Lexer:
         self.read_char()
         if self.char == '':
             return Token.EOF
+
         if self.is_digit():
             return self.tokenize_decimal()
         elif self.is_string_start():
             return self.tokenize_string()
         elif self.is_whitespace():
             self.skip_whitespace()
+            return self._read_next_token()
+        elif self.is_comment():
+            self.skip_comment()
             return self._read_next_token()
         elif self.is_identifier_start():
             return self.tokenize_identifier()
@@ -145,8 +149,8 @@ class Lexer:
             return self._maybe(('=', Token.OP_AND_ASSIGN),
                                ('&', Token.OP_AND_AND)) or Token.OP_AND
         elif c == '|':
-            return self._maybe(('=', Token.OP_OR_ASSIGN,
-                                '|', Token.OP_OR_OR)) or Token.OP_OR
+            return self._maybe(('=', Token.OP_OR_ASSIGN),
+                               ('|', Token.OP_OR_OR)) or Token.OP_OR
         elif c == '<':
             return self._maybe(('<=', Token.OP_LSHIFT_ASSIGN),
                                ('<', Token.OP_SHIFT_LEFT),
@@ -177,7 +181,7 @@ class Lexer:
             if next == possible[0]:
                 if len(possible) > 1:
                     # just grab substring and compare
-                    seq = self.code[self.ptr+1:self.ptr+1+len(possible)]
+                    seq = self.code[self.ptr:self.ptr+len(possible)]
                     if seq != possible:
                         continue
                 self.ptr += len(possible)
@@ -187,6 +191,19 @@ class Lexer:
     def skip_whitespace(self):
         self.read_while(self.is_whitespace)
 
+    def skip_comment(self):
+        next = self.next_char()
+        if next == '/':
+            self.read_char()
+            self.read_while(lambda: self.char != '\n')
+        elif next == '*':
+            self.read_char()
+            self.read_while(lambda: self.char != '*' \
+                            or self.next_char() != '/')
+            self.ptr += 2
+        else:
+            assert False
+
     def is_digit(self):
         return self.char.isdigit()
 
@@ -195,6 +212,9 @@ class Lexer:
 
     def is_whitespace(self):
         return self.char in ' \t\r\n'
+
+    def is_comment(self):
+        return self.char == '/' and self.next_char() in '/*'
 
     def is_identifier_start(self):
         c = self.char

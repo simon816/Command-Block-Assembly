@@ -44,14 +44,23 @@ class Node:
 class Statement(Node): pass
 class Expression(Node): pass
 
-class FunctionArg(Node): props = ('type', 'name')
-
 class EmptyStatement(Statement): pass
 EmptyStatement.INSTANCE = EmptyStatement()
 
-class FunctionDeclaration(Statement): props = ('ret_type', 'name', 'params', 'body')
+class FunctionDeclaration(Statement): props = ('type', 'decl', 'body')
+class Declaration(Statement): props = ('type', 'init')
+class ParamDeclaration(Node): props = ('type', 'decl')
+class StructTypeRef(Node): props = ('name',)
 
-class VariableDeclaration(Statement): props = ('type', 'name', 'init')
+class DeclarationSpecifier(Node): props = ('store', 'qual', 'type')
+class InitSpec(Node): props = ('decl', 'val')
+class DeclaratorSpec(Node): props = ('pointer_depth', 'name_spec')
+class ArrayDeclSpec(Node): props = ('name', 'dim')
+class FuncDeclSpec(Node): props = ('name', 'params')
+class StructSpec(Node): props = ('name', 'decl')
+class StructMemberDecl(Node): props = ('spec', 'decl')
+class MemberReference(Node): props = ('parent', 'idx', 'name')
+class TypeName(Node): props = ('type', 'spec')
 
 class LabelledStmt(Statement): props = ('label', 'stmt')
 
@@ -85,6 +94,7 @@ class AssignmentOperatorExpr(Expression): props = ('left', 'op', 'right')
 class UnaryExpr(Expression): props = ('op', 'expr')
 class BinaryOperatorExpr(Expression): props = ('left', 'op', 'right')
 class IncrementExpr(Expression): props = ('dir', 'post', 'expr')
+class MemberAccessExpr(Expression): props = ('expr', 'prop', 'deref')
 
 class Literal(Expression): props = ('val',)
 class IntLiteral(Literal): pass
@@ -181,3 +191,7 @@ Keyword.CONTINUE = Keyword('continue')
 Keyword.BREAK = Keyword('break')
 Keyword.RETURN = Keyword('return')
 
+Keyword.CONST = Keyword('const')
+Keyword.STATIC = Keyword('static')
+Keyword.TYPEDEF = Keyword('typedef')
+Keyword.STRUCT = Keyword('struct')

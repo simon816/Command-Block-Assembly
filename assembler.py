@@ -84,7 +84,7 @@ class AsmReader:
         instr = self.read_symbol().upper()
         whitespace = self.skip_whitespace()
         if self.text and self.head not in '\n;' and not whitespace:
-            self.syntax_error('Expected newline, got %r' % head)
+            self.syntax_error('Expected newline, got %r' % self.head)
         operands = []
         if instr in ['CMD', 'TEST']: # special case
             operands.append(self.read_at_least_once(lambda c: c != '\n', 'non-newline'))
@@ -130,20 +130,23 @@ class AsmReader:
             return ('symbol', self.read_symbol())
 
     def read_number(self):
+        mul = -1 if self.head == '-' else 1
+        if mul == -1: # Read negative sign
+            self.skip(1)
         if self.head == '0':
             type = self.peek()
             if type == 'x':
                 self.skip(2)
-                return int(self.read_at_least_once(chr_is_hex, 'hex char'), 16)
+                return mul*int(self.read_at_least_once(chr_is_hex, 'hex char'), 16)
             elif type == 'b':
                 self.skip(2)
-                return int(self.read_at_least_once(chr_is_bin, 'bin char'), 2)
+                return mul*int(self.read_at_least_once(chr_is_bin, 'bin char'), 2)
             elif type == 'o':
                 self.skip(2)
-                return int(self.read_at_least_once(chr_is_oct, 'oct char'), 8)
+                return mul*int(self.read_at_least_once(chr_is_oct, 'oct char'), 8)
             # fall through to read as decimal number
 
-        return int(self.read_at_least_once(str.isdecimal, 'decimal char'))
+        return mul*int(self.read_at_least_once(str.isdecimal, 'decimal char'))
 
     def read_string(self):
         self.read('"')
@@ -332,6 +335,11 @@ class Assembler:
         return 'sub_' + sub_name
 
     def handle_local_label(self, name):
+        if name.startswith('_'):
+            if name not in ['_setup__']:
+                raise RuntimeError('Unknown special function name: %r' % name)
+            self.enter_subroutine('_' + name)
+            return
         func_name = self.local_to_func_name(name)
         self.split_to_subsequence(func_name)
 
@@ -839,6 +847,9 @@ void OP(int src, int *dest) {
             session.add_subsequence(prev, table)
 
     def write_to_session(self, session):
+        setup = self.subroutines.get('__setup__')
+        if setup is not None:
+            session.set_setup_hook(setup)
         session.load_subroutine_table(self.function_subsequences.keys())
         session.load_subroutine_table(self.included_subroutines)
         if self.enable_sync:

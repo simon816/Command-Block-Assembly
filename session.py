@@ -83,11 +83,16 @@ class Session:
             'lookup_pointer': 'lk'
         }, args)
         self.print_debug = debug
+        self.setup_hook = None
         self.add_stack()
 
     def add_stack(self, one_function=False):
         if self.stack_size < 1:
             return
+
+        dump = Subsequence()
+        stack_dump = ["Stack: ["]
+
         push_stack = Subsequence()
         push_stack.add_command(AddConst(Var('stack_pointer'), 1))
 
@@ -100,6 +105,9 @@ class Session:
         current_pop_func = 'stack_pop_0'
         self.scope.add_function_names((current_push_func, current_pop_func))
         for i in range(self.stack_size):
+            stack_dump.append(Var('stack_slot', i))
+            if i != self.stack_size - 1:
+                stack_dump.append(",")
             next_push_func = 'stack/stack_push_%d' % (i+1)
             next_pop_func = 'stack/stack_pop_%d' % (i+1)
             current_push_seq.add_command(OpAssign(Var('stack_slot', i), Var('stack_register'))
@@ -129,6 +137,11 @@ class Session:
             self.add_subsequence(current_push_func, push_stack)
             self.add_subsequence(current_pop_func, pop_stack)
 
+        stack_dump.append("]")
+        dump.add_command(Tellraw(stack_dump, 'a'))
+        self.scope.add_function_names(('stack_dump',))
+        self.add_subsequence('stack_dump', dump)
+
     def load_subroutine_table(self, known_functions):
         self.scope.add_function_names(known_functions)
 
@@ -153,6 +166,12 @@ class Session:
                     for (_, cmd2) in branch:
                         print('branch >', cmd2)
                 print()
+
+    def set_setup_hook(self, hook):
+        self.setup_hook = hook
+
+    def extended_setup(self, up, down):
+        pass
 
     def create_up_down_functions(self, setup='setup', cleanup='cleanup'):
         self.scope.add_function_names((setup, cleanup))
@@ -180,6 +199,10 @@ class Session:
             self.scope.variable('success_tracker')))
         up.extend(self.placer.output())
         down.extend(self.placer.cleanup())
+        self.extended_setup(up, down)
+        if self.setup_hook:
+            for cmd in self.setup_hook.get_commands():
+                up.append(cmd.resolve(self.scope))
         self.writer.write_function(setup, up)
         self.writer.write_function(cleanup, down)
         if self.print_debug:
