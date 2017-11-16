@@ -56,6 +56,18 @@ class AsmWriter:
             setup += '\n\n'
         return setup + self.output
 
+
+class Preprocessor:
+
+    def transform(self, input):
+        output = ''
+        for line in input.splitlines():
+            strip = line.strip()
+            if strip.startswith('#'):
+                continue
+            output += line + '\n'
+        return output
+
 class Compiler:
     def __init__(self):
         self.types = {}
@@ -247,6 +259,13 @@ class CompilerVisitor(Visitor):
             self.writer.write_constant(reg.name, self.global_offset)
             self.global_offset += 1 # size always 1
 
+        self.writer.write_constant('csp', self.global_offset)
+        self.writer.write_instruction('MOV', '#0', str(self.global_offset))
+        self.global_offset += 1
+        self.writer.write_constant('cbp', self.global_offset)
+        self.writer.write_instruction('MOV', '#0', str(self.global_offset))
+        self.global_offset += 1
+
         self.current_function = None
 
     def visit_program(self, program):
@@ -360,6 +379,9 @@ class CompilerVisitor(Visitor):
         self.current_function = func
         self.functions[name] = func
         self.visit_statements(stmt.body)
+        if not stmt.body or not isinstance(stmt.body[-1], ReturnStmt) \
+           and name != 'main': # main function doesn't return
+            self.write('RET')
         self.current_function = None
         self.writer.end_subroutine()
 
@@ -433,7 +455,7 @@ class CompilerVisitor(Visitor):
     def clear_locals(self):
         self.locals = {}
         self.local_labels = {}
-        local_offset = 0
+        self.local_offset = 0
 
     def add_global(self, type, name):
         assert name not in self.globals
@@ -449,9 +471,10 @@ class CompilerVisitor(Visitor):
         self.local_offset += type.size
         return var
 
-    def new_temporary_var(self, copy_from=None):
-        type = copy_from.type if copy_from else Types.types['int']
-        if len(self.free_gpr) > 0:
+    def new_temporary_var(self, copy_from=None, type=None):
+        type = type if type else copy_from.type if copy_from else Types.types['int']
+        assert type.size > 0
+        if len(self.free_gpr) > 0 and type.size == 1:
             return self.free_gpr.pop()
         tmp = self.add_local(type, 'tmp_%d'% len(self.locals))
         self.temporary_names.add(tmp.name)
@@ -576,9 +599,15 @@ class CompilerVisitor(Visitor):
 
         if type(src) == int:
             s_ref, s_off = '#%d' % src, None
+            size = 1
         elif type(src) == str:
             s_ref, s_off = src, None
+            size = 1
         else:
+            if isinstance(src, Register):
+                size = 1
+            else:
+                size = src.type.size
             src_addr = self.load_address(src)
             steps = unwrap(src_addr, lambda: self.__next_volatile().name)
             s_ref, s_off = act_out(steps)
@@ -590,11 +619,21 @@ class CompilerVisitor(Visitor):
             steps = unwrap(dest_addr, lambda: self.__next_volatile().name)
             d_ref, d_off = act_out(steps)
 
-        move(s_ref, s_off, d_ref, d_off)
+        def shift(ref, off, shift):
+            if shift == 0:
+                return (ref, off)
+            if off is None:
+                assert type(ref) == int, type(ref)
+                return (ref + shift, off)
+            else:
+                return (ref, off + shift)
+
+        for sh in range(size):
+            move(*(shift(s_ref, s_off, sh) + shift(d_ref, d_off, sh)))
 
     def load_address(self, ref):
         if isinstance(ref, Variable):
-            return Relative(rel_to='sp', offset=ref.index)
+            return Relative(rel_to='csp', offset=ref.index)
         if isinstance(ref, Dereference):
             addr = self.load_address(ref.ref)
             return Indirect(addr)
@@ -604,6 +643,8 @@ class CompilerVisitor(Visitor):
             return Direct(ref.name)
         if isinstance(ref, Global):
             return Direct(ref.loc)
+        if isinstance(ref, (Relative, Direct, Offset, Indirect)):
+            return ref
         assert False, type(ref)
 
     def dereference(self, ref):
@@ -759,7 +800,6 @@ class CompilerVisitor(Visitor):
                 label = self.local_label('switch_case')
                 self.writer.write_local_sub(label)
                 choice = self.visit_expression(case.choice)
-                print(choice)
                 assert type(choice) == int, "not a constant"
                 cases[choice] = label
             else: # This is the default case
@@ -795,13 +835,18 @@ class CompilerVisitor(Visitor):
         self.break_jump = (label, True)
 
     def visit_return_stmt(self, stmt):
+        ret_type = self.current_function.ret_type
         if stmt.expr:
-            assert self.current_function.ret_type != 'void'
+            assert ret_type != Types.types['void']
             ret = self.visit_expression(stmt.expr)
-            reg = self.gpr[-1].name # Return value always in last register
-            self.write('MOV', ret, reg)
+            if ret_type.size == 1:
+                reg = self.gpr[-1].name # Return value always in last register
+                self.write('MOV', ret, reg)
+            else:
+                # Move value to position allocated before calling this function
+                self.write('MOV', ret, Relative(rel_to='csp', offset=-ret_type.size))
         else:
-            assert self.current_function.ret_type == 'void'
+            assert ret_type == Types.types['void']
         self.write('RET')
 
     def visit_goto_stmt(self, stmt):
@@ -1001,20 +1046,39 @@ class CompilerVisitor(Visitor):
         assert name in self.functions
         func = self.functions[name]
         assert len(expr.args) == len(func.param_types)
+        large_ret = func.ret_type.size > 1 # Can't fit in single register
+        ret_dest = None
+        if large_ret:
+            ret_dest = self.new_temporary_var(type=func.ret_type)
+
+        # shift base pointer to new stack region
+        self.write('MOV', 'csp', 'cbp')
+        self.write('ADD', self.local_offset, 'cbp')
+        i = 0
         for arg in expr.args:
             var = self.visit_expression(arg)
-            self.write('MOV', var, 'sr')
-            self.write('PUSH')
-        if func.ret_type != Types.types['void']:
-            ret_reg = self.gpr[-1]
+            self.write('MOV', var, Relative(rel_to='cbp', offset=i))
+            if type(var) == int:
+                i += 1
+            else:
+                i += var.type.size
+        register_saved = False
+        if ret_dest is None and func.ret_type != Types.types['void']:
+            ret_dest = self.gpr[-1]
             if len(self.free_gpr) == 0:
-                # TODO restore tmp
-                tmp = self.new_temporary_var()
-                self.write('MOV', ret_reg, tmp)
-        else:
-            ret_reg = None
+                register_saved = True
+                self.write('MOV', ret_reg, 'sr')
+                self.write('PUSH')
+        self.write('MOV', 'csp', 'sr')
+        self.write('PUSH')
+        self.write('MOV', 'cbp', 'csp')
         self.write('CALL', name)
-        return ret_reg
+        self.write('POP')
+        self.write('MOV', 'sr', 'csp')
+        if register_saved:
+            self.write('POP')
+            #TODO delay this self.write('MOV', 'sr', ret_reg)
+        return ret_dest
 
     def func_printf(self, expr):
         args = []
@@ -1026,6 +1090,9 @@ class CompilerVisitor(Visitor):
 
     def string_format(self, template, args):
         ret = []
+        if template == '':
+            assert not args
+            return ['""']
         section = template
         ind = section.find('%')
         while ind != -1 and args:

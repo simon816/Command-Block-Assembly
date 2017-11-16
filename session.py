@@ -91,7 +91,7 @@ class Session:
             return
 
         dump = Subsequence()
-        stack_dump = ["Stack: ["]
+        stack_dump = ["Stack{", Var('stack_pointer') ,"}: ["]
 
         push_stack = Subsequence()
         push_stack.add_command(AddConst(Var('stack_pointer'), 1))

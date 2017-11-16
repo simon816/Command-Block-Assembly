@@ -224,7 +224,7 @@ class Parser:
         # TODO using exceptions is bad
         pos, next = self.lexer.ptr, self.lexer.next
         try:
-            assert next != Keyword.SYNC # quick hack
+            assert next not in [Keyword.SYNC, Keyword.RETURN] # quick hack
             return self.parse_declaration(allow_functions=False)
         except AssertionError as e:
             self.lexer.ptr, self.lexer.next = pos, next

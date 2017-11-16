@@ -76,6 +76,9 @@ class Lexer:
     def tokenize_string(self):
         assert self.char == '"'
         self.read_char()
+        # TODO the lexer needs to be refactored
+        if self.char == '"': # empty string
+            return Token('', Token.Type.STRING)
         string = ''
         while True:
             string += self.read_while(lambda: self.char not in '\n\\"')

@@ -5,7 +5,7 @@ from session import FunctionWriter, DummyWriter
 from placer import Rel
 
 from compiler.asm_extensions import CompilerSession, ExtendedAssembler
-from compiler.compiler import Compiler
+from compiler.compiler import Compiler, Preprocessor
 from compiler.lexer import Lexer
 from compiler.parser_ import Parser
 
@@ -30,7 +30,9 @@ if __name__ == '__main__':
 
     compiler = Compiler()
     with args.file as f:
-        parser = Parser(Lexer(f.read()))
+        pre = Preprocessor()
+        code = pre.transform(f.read())
+        parser = Parser(Lexer(code))
         assembly = compiler.compile_program(parser.parse_program())
 
     if args.dump_asm:

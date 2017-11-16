@@ -40,8 +40,6 @@ class CompilerSession(Session):
         self.add_subsequence('mem_dump', s)
 
     def extended_setup(self, up, down):
-        # temp
-        up.append(SetConst(Var('stack_pointer'), 0).resolve(self.scope))
         for i in range(self.page_size):
             slot = Var('memory_slot', i)
             up.append(SetConst(slot, 0).resolve(self.scope))
@@ -65,11 +63,13 @@ class ExtendedAssembler(Assembler):
         assert type(d_off) == int
         self.add_command(OpAssign(Var('memory_address'), src))
         if s_off != 0:
-            self.add_command(AddConst(Var('memory_address'), s_off))
+            AddFn = AddConst if s_off > 0 else RemConst
+            self.add_command(AddFn(Var('memory_address'), abs(s_off)))
         self.add_command(Function('mem_get'))
         self.add_command(OpAssign(Var('memory_address'), dest))
         if d_off != 0:
-            self.add_command(AddConst(Var('memory_address'), d_off))
+            AddFn = AddConst if d_off > 0 else RemConst
+            self.add_command(AddFn(Var('memory_address'), abs(d_off)))
         self.add_command(Function('mem_set'))
 
     def handle_mov_ind_d(self, src, dest, d_off):
@@ -80,7 +80,8 @@ class ExtendedAssembler(Assembler):
         self.add_command(self.assign_op(Var('memory_buffer'), src))
         self.add_command(OpAssign(Var('memory_address'), dest))
         if offset != 0:
-            self.add_command(AddConst(Var('memory_address'), offset))
+            AddFn = AddConst if offset > 0 else RemConst
+            self.add_command(AddFn(Var('memory_address'), abs(offset)))
         self.add_command(Function('mem_set'))
 
     def handle_mov_ind_s(self, src, s_off, dest):
@@ -90,6 +91,7 @@ class ExtendedAssembler(Assembler):
         assert type(offset) == int
         self.add_command(self.assign_op(Var('memory_address'), src))
         if offset != 0:
-            self.add_command(AddConst(Var('memory_address'), offset))
+            AddFn = AddConst if offset > 0 else RemConst
+            self.add_command(AddFn(Var('memory_address'), abs(offset)))
         self.add_command(Function('mem_get'))
         self.add_command(OpAssign(dest, Var('memory_buffer')))
