@@ -64,9 +64,20 @@ ConditionalBlock = namedtuple('ConditionalBlock', 'parent source output skip_to_
 
 class ParamStr(str):
 
+    def __new__(cls, s, args, n):
+        self = super().__new__(cls, s)
+        self._args = args
+        self._arg_idx = n
+        return self
+
     @property
     def escape(self):
-        return '"%s"' % self.replace('"', '\\"')
+        return ParamStr('"%s"' % self.replace('"', '\\"'), self._args,
+                        self._arg_idx)
+
+    @property
+    def remainder(self):
+        return ParamStr(','.join(self._args[self._arg_idx:]), [], 0)
 
 class Preprocessor:
 
@@ -119,6 +130,7 @@ class Preprocessor:
                     args = []
                     s = ''
                     end = start
+                    arg_num = 0
                     for c in line[start:]:
                         end += 1
                         if c == '(':
@@ -129,11 +141,12 @@ class Preprocessor:
                                 break
                         if brackets == 0:
                             if c == ',':
-                                args.append(s)
+                                args.append(ParamStr(s, args, arg_num))
                                 s = ''
+                                arg_num += 1
                                 continue
                         s += c
-                    args.append(ParamStr(s))
+                    args.append(ParamStr(s, args, arg_num))
                     line = line[:idx] + replacement.format(*args) + line[end:]
                     # Recursively substitute
                     line = self.substitute(line)
@@ -230,7 +243,7 @@ class Preprocessor:
         if not self.block.output:
             return
         import re
-        match = re.match('(\w+)\s*(\((?:\w+\s*,\s*)*(?:\w+)\s*\))?\s+(.+)', arg)
+        match = re.match('(\w+)\s*(\((?:\w+\s*,\s*)*(?:(?:\w+|\.\.\.))\s*\))?\s+(.+)', arg)
         if not match:
             raise Exception('invalid #define')
         name = match.group(1)
@@ -242,8 +255,16 @@ class Preprocessor:
         else:
             params = self._get_params(params)
             for i in range(len(params)):
-                replacement = re.sub(r'(\b|^)#%s(\b|$)' % params[i], '{%d.escape}' % i, replacement)
-                replacement = re.sub(r'(\b|^)%s(\b|$)' % params[i], '{%d}' % i, replacement)
+                if params[i] == '...':
+                    replacement = replacement.replace('#__VA_ARGS__',
+                                                    '{%d.remainder.escape}' % i)
+                    replacement = replacement.replace('__VA_ARGS__',
+                                                      '{%d.remainder}' % i)
+                    continue
+                replacement = re.sub(r'(\b|^)#%s(\b|$)' % params[i],
+                                     '{%d.escape}' % i, replacement)
+                replacement = re.sub(r'(\b|^)%s(\b|$)' % params[i],
+                                     '{%d}' % i, replacement)
 
             self.replacements[name] = (idx, 'function', replacement)
 
@@ -521,6 +542,7 @@ Relative = namedtuple('Relative', 'rel_to offset')
 Indirect = namedtuple('Indirect', 'ref')
 Offset = namedtuple('Offset', 'ref offset')
 Direct = namedtuple('Direct', 'ref')
+IndirectOffset = namedtuple('IndirectOffset', 'ref offset')
 
 class CompilerVisitor(Visitor):
 
@@ -578,13 +600,13 @@ class CompilerVisitor(Visitor):
             self.visit_statement(stmt)
 
     def visit_statement(self, stmt):
-        self.clear_temporary_vars()
-
         if type(stmt) == list:
             self.visit_statements(stmt)
             return
         elif isinstance(stmt, EmptyStatement):
             return
+
+        self.clear_temporary_vars()
 
         stmt_map = {
             Declaration: self.visit_decl,
@@ -634,20 +656,25 @@ class CompilerVisitor(Visitor):
         return func(expr)
 
     def visit_func_decl(self, stmt):
+        self.define_function(stmt.type, stmt.decl, stmt.body)
+
+    def define_function(self, type_spec, def_spec, body = [], def_only=False):
         # We must not be in a function here
         assert self.current_function is None
-        self.clear_locals()
+        if not def_only:
+            self.clear_locals()
 
-        assert stmt.type.store is None
-        assert stmt.type.qual is None
+        assert type_spec.store is None
+        assert type_spec.qual is None
 
-        ret_type = self.get_effective_type(stmt.type, stmt.decl)
+        ret_type = self.get_effective_type(type_spec, def_spec)
 
-        desc = stmt.decl.name_spec
+        desc = def_spec.name_spec
         assert isinstance(desc, FuncDeclSpec)
 
         name = desc.name.val
-        self.writer.write_subroutine(name)
+        if not def_only:
+            self.writer.write_subroutine(name)
 
         param_types = []
         for param in desc.params:
@@ -655,13 +682,16 @@ class CompilerVisitor(Visitor):
             assert param.decl.name_spec is not None
             p_name = Types.get_name_for(param.decl.name_spec)
             param_types.append(type)
-            self.add_local(type, p_name)
+            if not def_only:
+                self.add_local(type, p_name)
 
         func = Function(ret_type=ret_type, name=name, param_types=param_types)
-        self.current_function = func
         self.functions[name] = func
-        self.visit_statements(stmt.body)
-        if not stmt.body or not isinstance(stmt.body[-1], ReturnStmt) \
+        if def_only:
+            return
+        self.current_function = func
+        self.visit_statements(body)
+        if not body or not isinstance(body[-1], ReturnStmt) \
            and name != 'main': # main function doesn't return
             self.write('RET')
         self.current_function = None
@@ -685,6 +715,10 @@ class CompilerVisitor(Visitor):
             self.visit_type_def(decl)
         else:
             for init in decl.init:
+                if isinstance(init.decl.name_spec, FuncDeclSpec):
+                    assert init.val is None
+                    self.define_function(decl.type, init.decl, def_only=True)
+                    continue
                 type_ = self.get_effective_type(decl.type, init.decl)
                 name = Types.get_name_for(init.decl.name_spec)
                 var = self.add_to_scope(type_, name)
@@ -887,10 +921,18 @@ class CompilerVisitor(Visitor):
                     tmp_reg = tmp_reg_getter()
                 actions, b, o = unwrap(ref.ref, tmp_reg_getter, tmp_reg)
                 return (actions + ((b, o, tmp_reg),), tmp_reg, 0)
+            if isinstance(ref, IndirectOffset):
+                if not tmp_reg:
+                    tmp_reg = tmp_reg_getter()
+                actions, b, o = unwrap(ref.ref, tmp_reg_getter, tmp_reg)
+                assert type(o) == int, 'cannot indirectly reference this'
+                return (actions + ((b, None, tmp_reg, ref.offset),), tmp_reg, o)
             assert False, ref
 
         def as_str(base, offset):
-            return base if offset is None else '[%s%s]' % (base, '+0x%x'%offset if offset else '')
+            off = ('+0x%x' % offset if offset >= 0 else '-0x%x' % abs(offset)) \
+                    if offset is not None else ''
+            return base if offset is None else '[%s%s]' % (base, off)
 
         def move(src, src_off, dest, dest_off):
             comment = '\tMOV %s, %s' % (as_str(src, src_off), as_str(dest, dest_off))
@@ -912,7 +954,12 @@ class CompilerVisitor(Visitor):
             actions, base, offset = steps
             base = str(base) # Convert any memory reference to string
             for action in actions:
-                a_base, a_off, a_dest = action
+                a_base, a_off, a_dest, *extra = action
+                if extra: # IndirectOffset
+                    assert type(a_base) != int, 'unsupported array reference'
+                    move(a_base, None, a_dest, None)
+                    self.write('ADD', extra[0], a_dest)
+                    continue
                 move(a_base, a_off, a_dest, None)
             return (base, offset)
 
@@ -935,6 +982,9 @@ class CompilerVisitor(Visitor):
                 size = 1
             elif isinstance(src, Dereference):
                 size = 1
+            elif isinstance(src.type, ArrayType):
+                # Just reference first offset in array
+                size = src.type.type.size
             else:
                 size = src.type.size
             src_addr = self.load_address(src)
@@ -973,9 +1023,12 @@ class CompilerVisitor(Visitor):
         if isinstance(ref, Global):
             return Direct(ref.loc)
         if isinstance(ref, ArrayElement):
-            return Offset(ref=self.load_address(ref.array),
-                          offset=ref.index*ref.type.type.size)
-        if isinstance(ref, (Relative, Direct, Offset, Indirect)):
+            a_ref = self.load_address(ref.array)
+            if type(ref.index) == int:
+                return Offset(ref=a_ref, offset=ref.index*ref.type.size)
+            else:
+                return IndirectOffset(ref=a_ref, offset=ref.index)
+        if isinstance(ref, (Relative, Direct, Offset, Indirect, IndirectOffset)):
             return ref
         assert False, type(ref)
 
@@ -1334,7 +1387,12 @@ class CompilerVisitor(Visitor):
         array = self.visit_expression(expr.expr)
         index = self.visit_expression(expr.sub)
         assert isinstance(array.type, ArrayType), type(array.type)
-        assert type(index) == int, type(index) # TODO non-constant index
+        if type(index) != int:
+            tmp = self.new_temporary_var()
+            with self.mutate(tmp, write_only=True) as ref:
+                self.write('MOV', index, ref)
+                self.write('MUL', array.type.type.size, ref)
+            index = ref # unsafe expose of ref
         return ArrayElement(array=array, index=index, type=array.type.type)
 
     def visit_unary_expr(self, expr):
@@ -1400,7 +1458,7 @@ class CompilerVisitor(Visitor):
         name = expr.ref.val
         if name in self.optimized_functions:
             return self.optimized_functions[name](expr)
-        assert name in self.functions
+        assert name in self.functions, "Unknown function %s" % name
         func = self.functions[name]
         assert len(expr.args) == len(func.param_types)
         large_ret = func.ret_type.size > 1 # Can't fit in single register
@@ -1415,7 +1473,7 @@ class CompilerVisitor(Visitor):
         for arg in expr.args:
             var = self.visit_expression(arg)
             self.write('MOV', var, Relative(rel_to='cbp', offset=i))
-            if type(var) == int:
+            if type(var) in [int, str] or isinstance(var, Register):
                 i += 1
             else:
                 i += var.type.size
