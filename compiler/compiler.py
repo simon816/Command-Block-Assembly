@@ -33,8 +33,12 @@ class AsmWriter:
         self.write_line('')
         self.sub = False
 
-    def write_instruction(self, insn, *args, comment=None):
-        line = '%s%s' % (insn, (' ' + ', '.join(args)) if args else  '')
+    def write_instruction(self, insn, *args, comment=None, raw=False):
+        if raw:
+            line = '%s%s' % (insn, ''.join(args))
+        else:
+            line = '%s%s' % (insn, (' ' + ', '.join(args)) if args else  '')
+            line = line.replace('\n', '\\n')
         if comment:
             line += ' ; ' + comment
         if not self.sub:
@@ -56,17 +60,275 @@ class AsmWriter:
             setup += '\n\n'
         return setup + self.output
 
+ConditionalBlock = namedtuple('ConditionalBlock', 'parent source output skip_to_end')
+
+class ParamStr(str):
+
+    @property
+    def escape(self):
+        return '"%s"' % self.replace('"', '\\"')
 
 class Preprocessor:
 
-    def transform(self, input):
-        output = ''
-        for line in input.splitlines():
+    def __init__(self, input, filename):
+        import os
+        self.dirname = os.path.dirname(filename)
+        self.lines = input.splitlines()
+        self.lineptr = 0
+        self.output = ''
+        self.replacements = {}
+        self.block = ConditionalBlock(None, None, True, False)
+        import time
+        self.replacements.update({
+            '__FILE__': (0, 'simple', filename.replace('\\', '\\\\')),
+            '__LINE__': (1, 'dynamic', lambda: str(self.lineptr)),
+            '__DATE__': (2, 'simple', time.strftime('%b %d %Y')),
+            '__TIME__': (3, 'simple', time.strftime('%H:%M:%S')),
+        })
+
+    def transform(self):
+        while self.lineptr < len(self.lines):
+            line = self.next_line()
             strip = line.strip()
             if strip.startswith('#'):
-                continue
-            output += line + '\n'
-        return output
+                self.process(strip[1:])
+            else:
+                self.append(line)
+        assert self.block.parent is None
+        return self.output
+
+    def append(self, line):
+        if not self.block.output:
+            return
+        self.output += self.substitute(line) + '\n'
+
+    def substitute(self, line):
+        items = sorted(self.replacements.items(), key=lambda r:r[1][0])
+        for key, (_, r_type, replacement) in items:
+            if r_type == 'simple':
+                line = line.replace(key, replacement)
+            elif r_type == 'dynamic':
+                line = line.replace(key, replacement())
+            elif r_type == 'function':
+                while True:
+                    idx = line.find(key + '(')
+                    if idx == -1:
+                        break
+                    start = idx + len(key) + 1
+                    brackets = 0
+                    args = []
+                    s = ''
+                    end = start
+                    for c in line[start:]:
+                        end += 1
+                        if c == '(':
+                            brackets += 1
+                        elif c == ')':
+                            brackets -= 1
+                            if brackets == -1:
+                                break
+                        if brackets == 0:
+                            if c == ',':
+                                args.append(s)
+                                s = ''
+                                continue
+                        s += c
+                    args.append(ParamStr(s))
+                    line = line[:idx] + replacement.format(*args) + line[end:]
+                    # Recursively substitute
+                    line = self.substitute(line)
+        return line
+
+    def process(self, line):
+        while line.endswith('\\'):
+            line = line[:-1] + self.next_line().strip()
+
+        directive, *rest = line.split(' ', 1)
+        rest = rest[0] if rest else ''
+        dir_map = {
+            'include': self.handle_include,
+            'if': self.handle_if,
+            'ifdef': self.handle_ifdef,
+            'ifndef': self.handle_ifndef,
+            'else': self.handle_else,
+            'elif': self.handle_elif,
+            'endif': self.handle_endif,
+            'define': self.handle_define,
+            'undef': self.handle_undef,
+        }
+        func = dir_map.get(directive)
+        if func is None:
+            raise NameError('Unknown directive %s' % directive)
+        func(rest)
+
+    def handle_include(self, arg):
+        arg = arg.strip()
+        search = []
+        if arg.startswith('<'):
+            assert arg.endswith('>')
+            search.extend([]) # $PATH
+            name = arg[1:-1]
+        else:
+            assert arg.startswith('"')
+            assert arg.endswith('"')
+            search.append(self.dirname)
+            name = arg[1:-1]
+        import os
+        for dir in search:
+            path = os.path.join(dir, name)
+            if os.path.exists(path):
+                self.include(path)
+                return
+        # builtins
+        if name in ['stdio.h']:
+            return
+        assert False, "Not found"
+
+    def include(self, path):
+        with open(path, 'r') as file:
+            self.lines[self.lineptr:self.lineptr] = file.read().splitlines()
+
+    def handle_if(self, arg):
+        if not self.block.output:
+            output = False
+        else:
+            output = self.evaluate(arg)
+        self.block = ConditionalBlock(self.block, 'if', output, output)
+
+    def handle_ifdef(self, arg):
+        if not self.block.output:
+            output = False
+        else:
+            output = arg.strip() in self.replacements
+        self.block = ConditionalBlock(self.block, 'if', output, output)
+
+    def handle_ifndef(self, arg):
+        if not self.block.output:
+            output = False
+        else:
+            output = arg.strip() not in self.replacements
+        self.block = ConditionalBlock(self.block, 'if', output, output)
+
+    def handle_else(self, arg):
+        parent = self.block.parent
+        output = self.block.output and not self.block.skip_to_end and parent.output
+        self.block = ConditionalBlock(parent, 'else', output, True)
+
+    def handle_elif(self, arg):
+        parent = self.block.parent
+        if not self.block.skip_to_end and parent.output:
+            output = self.evaluate(arg)
+        else:
+            output = False
+        self.block = ConditionalBlock(parent, 'elif', output,
+                                      self.block.skip_to_end or output)
+
+    def handle_endif(self, arg):
+        self.block = self.block.parent
+
+    def handle_define(self, arg):
+        if not self.block.output:
+            return
+        import re
+        match = re.match('(\w+)\s*(\((?:\w+\s*,\s*)*(?:\w+)\s*\))?\s+(.+)', arg)
+        if not match:
+            raise Exception('invalid #define')
+        name = match.group(1)
+        params = match.group(2)
+        replacement = match.group(3)
+        idx = len(self.replacements)
+        if params is None:
+            self.replacements[name] = (idx, 'simple', replacement)
+        else:
+            params = self._get_params(params)
+            for i in range(len(params)):
+                replacement = re.sub(r'(\b|^)#%s(\b|$)' % params[i], '{%d.escape}' % i, replacement)
+                replacement = re.sub(r'(\b|^)%s(\b|$)' % params[i], '{%d}' % i, replacement)
+
+            self.replacements[name] = (idx, 'function', replacement)
+
+    def _get_params(self, param_match):
+        params = param_match[1:-1].strip()
+        if params:
+            return tuple(map(str.strip, params.split(',')))
+        else:
+            return tuple()
+
+    def evaluate(self, expr):
+        from .lexer import Lexer
+        from .parser_ import Parser
+        import re
+        # Convert "defined var" into "__defined__(__no_def_var__)"
+        expr = re.sub('defined\s+(\w+)', r'__defined__(__no_def_\1__)', expr)
+        expr = Parser(Lexer(self.substitute(expr))).parse_constant_expr()
+        return bool(self.visit_expr(expr))
+
+    def visit_expr(self, expr):
+        if isinstance(expr, IntLiteral):
+            return expr.val
+        elif isinstance(expr, IdentifierExpr):
+            return 0
+        elif isinstance(expr, UnaryExpr):
+            val = self.visit_expr(expr.expr)
+            if expr.op == '+':
+                return +val
+            elif expr.op == '-':
+                return -val
+            elif expr.op == '~':
+                return ~val
+            elif expr.op == '!':
+                return 0 if val else 1
+            else:
+                raise TypeError()
+        elif isinstance(expr, BinaryOperatorExpr):
+            left = self.visit_expr(expr.left)
+            right = self.visit_expr(expr.right)
+            op = {
+                '*': int.__mul__,
+                '/': int.__floordiv__,
+                '%': int.__mod__,
+                '+': int.__add__,
+                '-': int.__sub__,
+                '<<': int.__lshift__,
+                '>>': int.__rshift__,
+                '<': int.__lt__,
+                '<=': int.__le__,
+                '>': int.__gt__,
+                '>=': int.__ge__,
+                '==': int.__eq__,
+                '!=': int.__ne__,
+                '&': int.__and__,
+                '^': int.__xor__,
+                '|': int.__or__,
+                '&&': lambda a, b: a and b,
+                '||': lambda a, b: a or b,
+            }.get(expr.op)
+            if op is None:
+                raise TypeError()
+            return op(left, right)
+        elif isinstance(expr, ConditionalExpr):
+            test = self.visit_expr(expr.cond)
+            return self.visit_expr(expr.true if test else expr.false)
+        elif isinstance(expr, FunctionCallExpr):
+            assert isinstance(expr.ref, IdentifierExpr)
+            name = expr.ref.val
+            if name == '__defined__':
+                macro = expr.args[0].val[9:-2]
+                return macro in self.replacements
+            else:
+                raise TypeError()
+        else:
+            raise TypeError()
+
+    def handle_undef(self, arg):
+        if not self.block.output:
+            return
+        pass
+
+    def next_line(self):
+        line = self.lines[self.lineptr]
+        self.lineptr += 1
+        return line
 
 class Compiler:
     def __init__(self):
@@ -120,6 +382,16 @@ class DecoratedType(Type):
         s = self.type.__str__()
         s += '[static=%s,const=%s]' % (self.static, self.const)
         return s
+
+class ArrayType(Type):
+
+    def __init__(self, type, size):
+        self.type = type
+        self.arr_size = size
+        self.size = type.size * size
+
+    def __str__(self):
+        return '%d*[%s]' % (self.arr_size, self.type)
 
 class VoidType(Type):
 
@@ -200,10 +472,15 @@ class Types:
         members = []
         for member in spec.decl:
             major = Types.major(member.spec)
-            assert len(member.decl) # TODO unnamed types
+            assert len(member.decl), "Members must have a name"
             for decl in member.decl:
-                type = Types.effective(major, decl.pointer_depth, False) # TODO is_array
-                name = decl.name_spec.val # TODO get_name_for
+                is_array = isinstance(decl.name_spec, ArrayDeclSpec)
+                array_size = None
+                if is_array:
+                    assert isinstance(decl.name_spec.dim, IntLiteral)
+                    array_size = decl.name_spec.dim.val
+                type = Types.effective(major, decl.pointer_depth, is_array, array_size)
+                name = Types.get_name_for(decl.name_spec)
                 members.append((type, name))
         struct = StructType(members)
         if struct_name is not None:
@@ -211,10 +488,23 @@ class Types:
         return struct
 
     @staticmethod
-    def effective(type, ptr, is_array):
-        assert not is_array # TODO
+    def get_name_for(spec):
+        if isinstance(spec, ArrayDeclSpec):
+            return spec.name.val
+        elif isinstance(spec, FuncDeclSpec):
+            return spec.name.val
+        else:
+            return spec.val
+
+    @staticmethod
+    def effective(type, ptr, is_array, array_size=None):
         for _ in range(ptr):
             type = Pointer(type)
+        if is_array:
+            if array_size is None:
+                type = Pointer(type) # TODO index offset
+            else:
+                type = ArrayType(type, array_size)
         return type
 
 Variable = namedtuple('Variable', 'index name type')
@@ -225,6 +515,7 @@ Register = namedtuple('Register', 'name')
 Function = namedtuple('Function', 'ret_type name param_types')
 Dereference = namedtuple('Dereference', 'ref')
 StructMember = namedtuple('StructMember', 'var offset type')
+ArrayElement = namedtuple('ArrayElement', 'array index type')
 
 Relative = namedtuple('Relative', 'rel_to offset')
 Indirect = namedtuple('Indirect', 'ref')
@@ -246,7 +537,9 @@ class CompilerVisitor(Visitor):
         self.free_gpr = set(self.gpr)
         self.local_offset = 0
         self.optimized_functions = {
-            'printf': self.func_printf
+            'printf': self.func_printf,
+            '__asm__': self.func_asm,
+            '__test_command': self.func_test,
         }
         self.global_offset = 0
         for reg in self.gpr:
@@ -286,70 +579,59 @@ class CompilerVisitor(Visitor):
 
     def visit_statement(self, stmt):
         self.clear_temporary_vars()
+
         if type(stmt) == list:
             self.visit_statements(stmt)
-        elif isinstance(stmt, Declaration):
-            self.visit_decl(stmt)
-
-        elif isinstance(stmt, ExpressionStmt):
-            self.visit_expr_stmt(stmt)
-
-        elif isinstance(stmt, WhileStmt):
-            self.visit_while_stmt(stmt)
-        elif isinstance(stmt, DoWhileStmt):
-            self.visit_do_while_stmt(stmt)
-        elif isinstance(stmt, ForStmt):
-            self.visit_for_stmt(stmt)
-        elif isinstance(stmt, IfStmt):
-            self.visit_if_stmt(stmt)
-
-        elif isinstance(stmt, ContinueStmt):
-            self.visit_continue_stmt(stmt)
-        elif isinstance(stmt, GotoStmt):
-            self.visit_goto_stmt(stmt)
-        elif isinstance(stmt, BreakStmt):
-            self.visit_break_stmt(stmt)
-        elif isinstance(stmt, LabelledStmt):
-            self.visit_labelled_stmt(stmt)
-
-        elif isinstance(stmt, SwitchStmt):
-            self.visit_switch_stmt(stmt)
-
-        elif isinstance(stmt, ReturnStmt):
-            self.visit_return_stmt(stmt)
-        elif isinstance(stmt, SyncStmt):
-            self.visit_sync_stmt(stmt)
-
+            return
         elif isinstance(stmt, EmptyStatement):
             return
-        else:
+
+        stmt_map = {
+            Declaration: self.visit_decl,
+
+            ExpressionStmt: self.visit_expr_stmt,
+
+            WhileStmt: self.visit_while_stmt,
+
+            DoWhileStmt: self.visit_do_while_stmt,
+            ForStmt: self.visit_for_stmt,
+            IfStmt: self.visit_if_stmt,
+
+            ContinueStmt: self.visit_continue_stmt,
+            GotoStmt: self.visit_goto_stmt,
+            BreakStmt: self.visit_break_stmt,
+            LabelledStmt: self.visit_labelled_stmt,
+
+            SwitchStmt: self.visit_switch_stmt,
+
+            ReturnStmt: self.visit_return_stmt,
+            SyncStmt: self.visit_sync_stmt,
+        }
+        func = stmt_map.get(type(stmt))
+        if func is None:
             raise Exception('Unknown statement type %s' % stmt.__class__.__name__)
+        func(stmt)
 
     def visit_expression(self, expr):
-        if isinstance(expr, AssignmentExpr):
-            return self.visit_assign_expr(expr)
-        elif isinstance(expr, IncrementExpr):
-            return self.visit_increment_expr(expr)
-        elif isinstance(expr, FunctionCallExpr):
-            return self.visit_func_call_expr(expr)
-        elif isinstance(expr, IdentifierExpr):
-            return self.visit_var_expr(expr)
-        elif isinstance(expr, Literal):
-            return self.visit_literal_expr(expr)
-        elif isinstance(expr, AssignmentOperatorExpr):
-            return self.visit_assign_op_expr(expr)
-        elif isinstance(expr, BinaryOperatorExpr):
-            return self.visit_binop_expr(expr)
-        elif isinstance(expr, MemberAccessExpr):
-            return self.visit_member_access_expr(expr)
-        elif isinstance(expr, SizeofExpr):
-            return self.visit_sizeof_expr(expr)
-        elif isinstance(expr, ConditionalExpr):
-            return self.visit_conditional_expr(expr)
-        elif isinstance(expr, UnaryExpr):
-            return self.visit_unary_expr(expr)
-        else:
+        expr_map = {
+            AssignmentExpr: self.visit_assign_expr,
+            IncrementExpr: self.visit_increment_expr,
+            FunctionCallExpr: self.visit_func_call_expr,
+            IdentifierExpr: self.visit_var_expr,
+            IntLiteral: self.visit_literal_expr,
+            StringLiteral: self.visit_literal_expr,
+            AssignmentOperatorExpr: self.visit_assign_op_expr,
+            BinaryOperatorExpr: self.visit_binop_expr,
+            MemberAccessExpr: self.visit_member_access_expr,
+            SizeofExpr: self.visit_sizeof_expr,
+            ConditionalExpr: self.visit_conditional_expr,
+            UnaryExpr: self.visit_unary_expr,
+            ArraySubscriptExpr: self.visit_arr_subscript_expr,
+        }
+        func = expr_map.get(type(expr))
+        if func is None:
             raise Exception('Unknown expression type %s' % expr.__class__.__name__)
+        return func(expr)
 
     def visit_func_decl(self, stmt):
         # We must not be in a function here
@@ -371,7 +653,7 @@ class CompilerVisitor(Visitor):
         for param in desc.params:
             type = self.get_effective_type(param.type, param.decl)
             assert param.decl.name_spec is not None
-            p_name = self.get_name_for(param.decl.name_spec)
+            p_name = Types.get_name_for(param.decl.name_spec)
             param_types.append(type)
             self.add_local(type, p_name)
 
@@ -385,23 +667,18 @@ class CompilerVisitor(Visitor):
         self.current_function = None
         self.writer.end_subroutine()
 
-    def get_name_for(self, spec):
-        if isinstance(spec, ArrayDeclSpec):
-            return spec.name.val
-        elif isinstance(spec, FuncDeclSpec):
-            return spec.name.val
-        else:
-            return spec.val
-
     def get_effective_type(self, type, spec):
         if isinstance(type, DeclarationSpecifier):
-            #assert type.store != Keyword.TYPEDEF
             major = Types.from_spec(type)
         else:
             major = Types.major(type)
+        array_size = None
         is_array = isinstance(spec.name_spec, ArrayDeclSpec)
+        if is_array:
+            assert isinstance(spec.name_spec.dim, IntLiteral)
+            array_size = spec.name_spec.dim.val
         ptr = spec.pointer_depth
-        return Types.effective(major, ptr, is_array)
+        return Types.effective(major, ptr, is_array, array_size)
 
     def visit_decl(self, decl):
         if decl.type.store == Keyword.TYPEDEF:
@@ -409,20 +686,16 @@ class CompilerVisitor(Visitor):
         else:
             for init in decl.init:
                 type_ = self.get_effective_type(decl.type, init.decl)
-                name = self.get_name_for(init.decl.name_spec)
+                name = Types.get_name_for(init.decl.name_spec)
                 var = self.add_to_scope(type_, name)
                 if init.val is not None:
                     if type(init.val) == list:
-                        assert isinstance(type_, StructType)
-                        for val in init.val:
-                            assert val.decl.idx is None # TODO
-                            assert val.decl.parent is None # TODO
-                            name = val.decl.name.val
-                            member = StructMember(var=var,
-                                offset=var.type.name_to_offset[name],
-                                type=var.type.name_to_type[name])
-                            actual_val = self.visit_expression(val.val)
-                            self.write('MOV', actual_val, member)
+                        if isinstance(type_, StructType):
+                            self.struct_init(var, init.val)
+                        elif isinstance(type_, ArrayType):
+                            self.array_init(var, init.val)
+                        else:
+                            assert False, type(type_)
                     else:
                         val = self.visit_expression(init.val)
                         self.write('MOV', val, var)
@@ -433,11 +706,64 @@ class CompilerVisitor(Visitor):
                 else:
                     Types.major(decl.type)
 
+    def struct_init(self, struct_var, init_list):
+        for init_spec in init_list:
+            ret = self.struct_init_member(struct_var, init_spec.decl, init_spec.val)
+            assert ret is None or isinstance(ret, StructMember), type(ret)
+
+    def struct_init_member(self, struct_ref, m_ref, val):
+        if m_ref.idx is not None:
+            struct_ref = self.array_init_elem(struct_ref, m_ref, None, None)
+            if m_ref.name is None:
+                return struct_ref
+        if m_ref.parent is not None:
+            struct_ref = self.struct_init_member(struct_ref, m_ref.parent, None)
+            if m_ref.parent.idx is not None:
+                return struct_ref
+        name = m_ref.name.val
+        struct = struct_ref.type
+        assert isinstance(struct, StructType), type(struct)
+        member = StructMember(var=struct_ref,
+            offset=struct.name_to_offset[name],
+            type=struct.name_to_type[name])
+        if val is not None:
+            if type(val) == list:
+                self.struct_init(member, val)
+                return
+            actual_val = self.visit_expression(val)
+            self.write('MOV', actual_val, member)
+        return member
+
+    def array_init(self, array_var, init_list):
+        idx = 0
+        for init_spec in init_list:
+            ret = self.array_init_elem(array_var, init_spec.decl, idx, init_spec.val)
+            assert isinstance(ret, ArrayElement), type(ret)
+            idx += 1
+
+    def array_init_elem(self, array_var, m_ref, idx, val):
+        # TODO struct arrays don't work properly
+        if m_ref is not None:
+            if m_ref.parent is not None:
+                array_var = self.struct_init_member(array_var, m_ref, None)
+            else:
+                assert m_ref.name is None
+            if m_ref.idx is not None:
+                idx = self.visit_expression(m_ref.idx)
+                assert type(idx) == int
+        element = ArrayElement(array=array_var, index=idx, type=array_var.type)
+        if val is not None:
+            if type(val) == list:
+                return # Inner struct/array
+            actual_val = self.visit_expression(val)
+            self.write('MOV', actual_val, element)
+        return element
+
     def visit_type_def(self, decl):
-        assert len(decl.init) # useless typedef
+        assert len(decl.init), "useless typedef"
         for init in decl.init:
             type = self.get_effective_type(decl.type, init.decl)
-            name = self.get_name_for(init.decl.name_spec)
+            name = Types.get_name_for(init.decl.name_spec)
             Types.add_type(name, type)
 
     def add_to_scope(self, type, name):
@@ -518,8 +844,7 @@ class CompilerVisitor(Visitor):
             return any(map(self.exists, stmt))
         return stmt is not None
 
-    def write(self, opcode, *operands):
-        #self.writer.write_instruction('; %s %s' % (opcode, operands))
+    def write(self, opcode, *operands, raw=False):
         def to_arg(val):
             if type(val) == str:
                 return val
@@ -530,7 +855,6 @@ class CompilerVisitor(Visitor):
             elif isinstance(val, Register):
                 return val.name
             elif isinstance(val, Comparison):
-                # TODO
                 return to_arg(self.resolve_comparison(val))
             elif val is None:
                 raise TypeError('Value is of void type!')
@@ -541,7 +865,7 @@ class CompilerVisitor(Visitor):
             self.move(*operands)
             return
         args = tuple(map(to_arg, operands))
-        self.writer.write_instruction(opcode, *args)
+        self.writer.write_instruction(opcode, *args, raw=raw)
 
     def ref_tools(self):
 
@@ -597,6 +921,9 @@ class CompilerVisitor(Visitor):
     def move(self, src, dest):
         unwrap, act_out, move = self.ref_tools()
 
+        if isinstance(src, Comparison):
+            src = self.resolve_comparison(src)
+
         if type(src) == int:
             s_ref, s_off = '#%d' % src, None
             size = 1
@@ -605,6 +932,8 @@ class CompilerVisitor(Visitor):
             size = 1
         else:
             if isinstance(src, Register):
+                size = 1
+            elif isinstance(src, Dereference):
                 size = 1
             else:
                 size = src.type.size
@@ -643,6 +972,9 @@ class CompilerVisitor(Visitor):
             return Direct(ref.name)
         if isinstance(ref, Global):
             return Direct(ref.loc)
+        if isinstance(ref, ArrayElement):
+            return Offset(ref=self.load_address(ref.array),
+                          offset=ref.index*ref.type.type.size)
         if isinstance(ref, (Relative, Direct, Offset, Indirect)):
             return ref
         assert False, type(ref)
@@ -987,24 +1319,43 @@ class CompilerVisitor(Visitor):
         var = self.visit_expression(expr.expr)
         # Allow nested types
         # TODO refactor
-        assert isinstance(var, Variable) or isinstance(var, StructMember) or isinstance(var, Global)
+        assert isinstance(var, (Variable, StructMember, Global, ArrayElement)), var.__class__
         type = var.type
         if expr.deref:
             assert isinstance(type, Pointer)
             type = type.type
             var = Dereference(var)
-        assert isinstance(type, StructType), "not a struct: %s" % type
+        assert isinstance(type, StructType), "not a struct: " + str(type)
         prop = expr.prop.val
         return StructMember(var=var, offset=type.name_to_offset[prop],
                             type=type.name_to_type[prop])
 
+    def visit_arr_subscript_expr(self, expr):
+        array = self.visit_expression(expr.expr)
+        index = self.visit_expression(expr.sub)
+        assert isinstance(array.type, ArrayType), type(array.type)
+        assert type(index) == int, type(index) # TODO non-constant index
+        return ArrayElement(array=array, index=index, type=array.type.type)
+
     def visit_unary_expr(self, expr):
         val = self.visit_expression(expr.expr)
         if expr.op == '&':
-            # TODO not sure about this
-            if isinstance(val, Variable):
-                return val.index
-            assert False, "Must be a variable"
+            # Essentially this just does LEA (maybe make an opcode instead)
+            addr = self.load_address(val)
+            if isinstance(addr, Direct):
+                assert type(addr.ref) == int, "not supported %s" % addr
+                return addr.ref
+            tmp = self.__next_volatile().name
+            unwrap, act_out, move = self.ref_tools()
+            steps = unwrap(addr, lambda: tmp)
+            base, offset = act_out(steps)
+            self.write('MOV', base, tmp)
+            assert offset is not None
+            if offset != 0:
+                self.write('ADD', offset, tmp)
+                return tmp
+            else:
+                return base
         elif expr.op == '*':
             return Dereference(ref=val)
         elif expr.op == '+':
@@ -1025,10 +1376,16 @@ class CompilerVisitor(Visitor):
                 self.write('NOT', ref)
             return inv
         elif expr.op == '!':
-            var = self.new_temporary_var(val)
-            self.write('MOV', val, var)
-            # TODO
-            # move 1->var if val==0 else move 0->var
+            invert_true = self.local_label('invert_true')
+            end = self.local_label('invert_end')
+            self.compare_and_jump(val, '_' + invert_true)
+            var = self.new_temporary_var()
+            with self.mutate(var, write_only=True) as ref:
+                self.write('MOV', 1, ref)
+                self.write('JMP', '_' + end)
+                self.writer.write_local_sub(invert_true)
+                self.write('MOV', 0, ref)
+            self.writer.write_local_sub(end)
             return var
 
     def visit_sizeof_expr(self, expr):
@@ -1119,6 +1476,69 @@ class CompilerVisitor(Visitor):
 
     def quote(self, string):
         return '"%s"' % string.replace('"', '\\"')
+
+    def func_asm(self, expr):
+        assert expr.args
+        asm = self.visit_expression(expr.args[0])
+        assert type(asm) == str
+        idx = 1
+        # TODO proper argument splitting for self.write
+        write_args = []
+        dests = []
+        while True:
+            ind = asm.find('?')
+            if ind == -1:
+                break
+            arg = self.visit_expression(expr.args[idx])
+            idx += 1
+            start, end = ind, ind+1
+            is_dest, write_only = False, False
+            if ind > 0 and asm[ind - 1] == '>':
+                start -= 1
+                is_dest = True
+                if ind > 1 and asm[ind - 2] == '!':
+                    start -= 1
+                    write_only = True
+            before = asm[:start]
+            if before:
+                write_args.append(before)
+            if is_dest:
+                dests.append((len(write_args), arg, write_only))
+            write_args.append(arg)
+            asm = asm[end:]
+        if asm:
+            write_args.append(asm)
+        assert idx == len(expr.args)
+        if not dests:
+            self.write(*write_args, raw=True)
+        else:
+            with self.mutate_multi(map(lambda d:(d[1], d[2]), dests)) as refs:
+                for i in range(len(refs)):
+                    write_args[dests[i][0]] = refs[i]
+                self.write(*write_args, raw=True)
+
+    def mutate_multi(self, vars):
+        class MutateMulti:
+            def __init__(self, mutators):
+                self.mutators = mutators
+            def __enter__(self):
+                return list(map(lambda m:m.__enter__(), self.mutators))
+            def __exit__(self, *args):
+                for m in self.mutators:
+                    m.__exit__(*args)
+
+        return MutateMulti(list(map(lambda v: self.mutate(v[0], v[1]), vars)))
+
+    def func_test(self, expr):
+        assert len(expr.args) == 1
+        cmd = self.visit_expression(expr.args[0])
+        assert type(cmd) == str
+        tmp = self.new_temporary_var()
+        with self.mutate(tmp, write_only=True) as ref:
+            self.write('MOV', 0, ref)
+            self.write('TEST', cmd)
+            self.write('MOV', 1, ref)
+        return tmp
 
     def visit_var_expr(self, expr):
         if expr.val in self.locals:

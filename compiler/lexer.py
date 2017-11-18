@@ -64,7 +64,9 @@ class Lexer:
         while self.char:
             next = self.read_char()
             if not cond():
-                self.ptr -= 1
+                # EOF
+                if self.char != '':
+                    self.ptr -= 1
                 break
             val += next
         return val
@@ -82,21 +84,28 @@ class Lexer:
         string = ''
         while True:
             string += self.read_while(lambda: self.char not in '\n\\"')
-            if self.char == '\n':
+            next = self.next_char()
+            if next == '\n':
                 self.syntax_error('Unterminated string')
-            elif self.char == '\\':
-                self.ptr += 1
-                if self.char == 'n':
+            elif next == '\\':
+                self.read_char()
+                next = self.read_char()
+                if next == 'n':
                     string += '\n'
-                elif self.char == '"':
+                elif next == '"':
                     string  += '"'
+                elif next == '\\':
+                    string += '\\'
                 else:
-                    self.syntax_error('Invalid escape %r' % self.char)
-                self.ptr += 1
+                    self.syntax_error('Invalid escape \'%s\'' % next)
+                self.read_char()
             else:
                 break
         assert self.read_char() == '"'
         return Token(string, Token.Type.STRING)
+
+    def syntax_error(self, message):
+        raise SyntaxError(message)
 
     def tokenize_identifier(self):
         val = self.read_while(self.is_identifier_part)

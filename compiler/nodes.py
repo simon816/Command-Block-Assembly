@@ -95,6 +95,7 @@ class UnaryExpr(Expression): props = ('op', 'expr')
 class BinaryOperatorExpr(Expression): props = ('left', 'op', 'right')
 class IncrementExpr(Expression): props = ('dir', 'post', 'expr')
 class MemberAccessExpr(Expression): props = ('expr', 'prop', 'deref')
+class ArraySubscriptExpr(Expression): props = ('expr', 'sub')
 
 class Literal(Expression): props = ('val',)
 class IntLiteral(Literal): pass

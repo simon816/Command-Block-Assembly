@@ -469,7 +469,9 @@ class Assembler:
 
         if self.jump_later:
             if old_jump_later is not None:
-                self.add_command(Function(old_jump_later))
+                # Only jump if haven't unconditionally jumped elsewhere
+                if self.curr_func != '__unreachable__':
+                    self.add_command(Function(old_jump_later))
                 self.curr_func = old_jump_later
                 if self.jump_later == old_jump_later:
                     self.jump_later = None
@@ -654,7 +656,7 @@ void OP(int src, int *dest) {
         arg_type, symbol = dest_arg
         assert arg_type == 'symbol'
         if not self.comparison_args:
-            return
+            raise RuntimeError('No corresponding comparison for jump')
         commands, left, right = self.comparison_args
         if isinstance(left, Ref) and isinstance(right, Ref):
             for command in commands:

@@ -30,8 +30,8 @@ if __name__ == '__main__':
 
     compiler = Compiler()
     with args.file as f:
-        pre = Preprocessor()
-        code = pre.transform(f.read())
+        pre = Preprocessor(f.read(), f.name)
+        code = pre.transform()
         parser = Parser(Lexer(code))
         assembly = compiler.compile_program(parser.parse_program())
 
