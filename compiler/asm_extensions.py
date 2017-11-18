@@ -54,6 +54,12 @@ class ExtendedAssembler(Assembler):
             'MOVINDS': self.handle_mov_ind_s
         })
 
+    def handle_ret(self):
+        if not self.enable_sync:
+            # No need to warn here, the compiler is safe with CALL/RET
+            return
+        super().handle_ret()
+
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""
         src, dest = self.get_src_dest(src, dest)

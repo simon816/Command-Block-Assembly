@@ -11,7 +11,7 @@ from compiler.parser_ import Parser
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('file', help="ASM File", type=argparse.FileType('r'))
+    parser.add_argument('file', help="C File", type=argparse.FileType('r'))
     parser.add_argument('--world-dir', help="World Directory")
     parser.add_argument('--namespace', help="Function namespace", default='c_generated')
     parser.add_argument('--rem-existing', help="Remove existing functions in namespace",
@@ -19,7 +19,6 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true', help="Enable debug output")
     parser.add_argument('--stack', help="Stack size", type=int, default=8)
     parser.add_argument('--arg', help="ASM file arguments", action='append')
-    parser.add_argument('--jump', help='Output subroutine jump instruction')
     parser.add_argument('--place-location', default="~1,~,~1",
                         help="Location to place command blocks")
     parser.add_argument('--enable-sync', help="Enable SYNC opcode", action='store_true')
@@ -69,7 +68,8 @@ if __name__ == '__main__':
     print ('/' + setup)
     print('== Cleanup command ==')
     print('/' + cleanup)
-
-    if args.jump:
-        print('== Jump to %s command ==' % args.jump)
-        print('/' + assembler.get_sub_jump_command(args.jump).resolve(session.scope))
+    if 'main' in assembler.subroutines:
+        print('== Run main() ==')
+        print('/' + assembler.get_sub_jump_command('main').resolve(session.scope))
+    else:
+        print('Cannot output jump: No main() function')

@@ -11,6 +11,11 @@ in Minecraft 1.12, Command Block Assembly now outputs functions.
 Functions greatly increase the speed of execution, so Command Block Assembly
 keeps the usage of command blocks to a minimum.
 
+# C Compiler
+
+There is a C compiler that compiles to this assembly language,
+read more [here](https://github.com/simon816/Command-Block-Assembly/blob/master/README_C.md).
+
 # The Assembly Language
 
 It is a simple language with instructions similar to that of x86.
@@ -304,9 +309,6 @@ Instead, they evaluate the most recent CMP instruction.
 
 The assembler keeps a reference to the most recent CMP instruction. If a conditional jump instruction
 is encountered, it fetches this CMP to decide whether to jump or not.
-
-For almost all use-cases, this should not matter, but it's something to keep in mind and may not be what
-one anticipates.
 
 A more accurate conditional jump could be an instruction that takes 3 arguments e.g: `JL left, right, label`.
 However writing out the comparison is clunky when performing a succinct multi-jump like this:

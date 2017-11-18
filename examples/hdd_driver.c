@@ -17,7 +17,7 @@ int __hdd_mul;
 void memory_seek();
 
 void read_mem() {
-    CMD(summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr"], NoGravity:1b, Marker: 1b});
+    CMD(summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker: 1b});
     __hdd_addr = mar;
     mbr = 0;
     __hdd_addr /= MEM_SIZE_X;
@@ -39,7 +39,7 @@ void read_mem() {
 int __mem_temp;
 
 void write_mem() {
-    CMD(summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr"], NoGravity:1b, Marker: 1b});
+    CMD(summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker: 1b});
     __hdd_addr = mar;
     __hdd_addr /= MEM_SIZE_X;
     memory_seek();
