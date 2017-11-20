@@ -175,6 +175,8 @@ class Preprocessor:
         func(rest)
 
     def handle_include(self, arg):
+        if not self.block.output:
+            return
         arg = arg.strip()
         search = []
         if arg.startswith('<'):
@@ -195,7 +197,7 @@ class Preprocessor:
         # builtins
         if name in ['stdio.h']:
             return
-        assert False, "Not found"
+        assert False, "Not found %s" % name
 
     def include(self, path):
         with open(path, 'r') as file:
@@ -353,17 +355,12 @@ class Preprocessor:
 
 class Compiler:
     def __init__(self):
-        self.types = {}
-        self.predef()
-
-    def predef(self):
-        self.types['int'] = IntType()
+        pass
 
     def compile_program(self, program):
         writer = AsmWriter()
         visitor = CompilerVisitor(writer)
         visitor.visit_program(program)
-        #Types.debug()
         return writer.get_output()
 
 class Visitor:
@@ -444,55 +441,43 @@ class StructType(Type):
 
 class Types:
 
-    types = {
-        'int': IntType(),
-        'void': VoidType()
-    }
-    structs = {}
+    def __init__(self):
+        self.types = {
+            'int': IntType(),
+            'void': VoidType()
+        }
+        self.structs = {}
 
-    @staticmethod
-    def add_type(name, type_):
-        assert name not in Types.types
+    def add_type(self, name, type_):
+        assert name not in self.types
         assert isinstance(type_, Type)
-        Types.types[name] = type_
+        self.types[name] = type_
 
-    @staticmethod
-    def debug():
-        for name, type in Types.types.items():
-            print(name, ':', type)
-
-        for name, struct in Types.structs.items():
-            print('struct', name)
-            print(struct)
-
-    @staticmethod
-    def from_spec(type_spec):
-        type = Types.major(type_spec.type)
+    def from_spec(self, type_spec):
+        type = self.major(type_spec.type)
         is_static = type_spec.store == Keyword.STATIC
         is_const = type_spec.qual == Keyword.CONST
         if not is_static and not is_const:
             return type
         return DecoratedType(type, is_static, is_const)
 
-    @staticmethod
-    def major(type):
+    def major(self, type):
         if isinstance(type, IdentifierExpr):
-            return Types.types[type.val]
+            return self.types[type.val]
         elif isinstance(type, StructTypeRef):
-            return Types.structs[type.name.val]
+            return self.structs[type.name.val]
         elif isinstance(type, StructSpec):
-            return Types.define_struct(type)
+            return self.define_struct(type)
         else:
             assert False, "Unknown type %s" % type.__class__.__name__
 
-    @staticmethod
-    def define_struct(spec):
+    def define_struct(self, spec):
         struct_name = spec.name.val if spec.name is not None else None
-        assert struct_name is None or struct_name not in Types.structs
+        assert struct_name is None or struct_name not in self.structs
         assert len(spec.decl)
         members = []
         for member in spec.decl:
-            major = Types.major(member.spec)
+            major = self.major(member.spec)
             assert len(member.decl), "Members must have a name"
             for decl in member.decl:
                 is_array = isinstance(decl.name_spec, ArrayDeclSpec)
@@ -500,16 +485,15 @@ class Types:
                 if is_array:
                     assert isinstance(decl.name_spec.dim, IntLiteral)
                     array_size = decl.name_spec.dim.val
-                type = Types.effective(major, decl.pointer_depth, is_array, array_size)
-                name = Types.get_name_for(decl.name_spec)
+                type = self.effective(major, decl.pointer_depth, is_array, array_size)
+                name = self.get_name_for(decl.name_spec)
                 members.append((type, name))
         struct = StructType(members)
         if struct_name is not None:
-            Types.structs[struct_name] = struct
+            self.structs[struct_name] = struct
         return struct
 
-    @staticmethod
-    def get_name_for(spec):
+    def get_name_for(self, spec):
         if isinstance(spec, ArrayDeclSpec):
             return spec.name.val
         elif isinstance(spec, FuncDeclSpec):
@@ -517,8 +501,7 @@ class Types:
         else:
             return spec.val
 
-    @staticmethod
-    def effective(type, ptr, is_array, array_size=None):
+    def effective(self, type, ptr, is_array, array_size=None):
         for _ in range(ptr):
             type = Pointer(type)
         if is_array:
@@ -555,6 +538,8 @@ class CompilerVisitor(Visitor):
         self.temporary_names = set()
         self.continue_jump = None
         self.break_jump = None
+        self.delayed = []
+        self.types = Types()
         self.gpr = tuple(map(Register, ('a', 'b', 'c', 'd')))
         self.free_gpr = set(self.gpr)
         self.local_offset = 0
@@ -635,6 +620,9 @@ class CompilerVisitor(Visitor):
         func(stmt)
 
     def visit_expression(self, expr):
+        for delayed in self.delayed:
+            self.write(*delayed)
+        self.delayed = []
         expr_map = {
             AssignmentExpr: self.visit_assign_expr,
             IncrementExpr: self.visit_increment_expr,
@@ -680,7 +668,7 @@ class CompilerVisitor(Visitor):
         for param in desc.params:
             type = self.get_effective_type(param.type, param.decl)
             assert param.decl.name_spec is not None
-            p_name = Types.get_name_for(param.decl.name_spec)
+            p_name = self.types.get_name_for(param.decl.name_spec)
             param_types.append(type)
             if not def_only:
                 self.add_local(type, p_name)
@@ -699,16 +687,16 @@ class CompilerVisitor(Visitor):
 
     def get_effective_type(self, type, spec):
         if isinstance(type, DeclarationSpecifier):
-            major = Types.from_spec(type)
+            major = self.types.from_spec(type)
         else:
-            major = Types.major(type)
+            major = self.types.major(type)
         array_size = None
         is_array = isinstance(spec.name_spec, ArrayDeclSpec)
         if is_array:
             assert isinstance(spec.name_spec.dim, IntLiteral)
             array_size = spec.name_spec.dim.val
         ptr = spec.pointer_depth
-        return Types.effective(major, ptr, is_array, array_size)
+        return self.types.effective(major, ptr, is_array, array_size)
 
     def visit_decl(self, decl):
         if decl.type.store == Keyword.TYPEDEF:
@@ -720,7 +708,7 @@ class CompilerVisitor(Visitor):
                     self.define_function(decl.type, init.decl, def_only=True)
                     continue
                 type_ = self.get_effective_type(decl.type, init.decl)
-                name = Types.get_name_for(init.decl.name_spec)
+                name = self.types.get_name_for(init.decl.name_spec)
                 var = self.add_to_scope(type_, name)
                 if init.val is not None:
                     if type(init.val) == list:
@@ -736,9 +724,9 @@ class CompilerVisitor(Visitor):
             if not decl.init:
                 # structs get defined in these functions, make sure it is created
                 if isinstance(decl.type, DeclarationSpecifier):
-                    Types.from_spec(decl.type)
+                    self.types.from_spec(decl.type)
                 else:
-                    Types.major(decl.type)
+                    self.types.major(decl.type)
 
     def struct_init(self, struct_var, init_list):
         for init_spec in init_list:
@@ -762,7 +750,10 @@ class CompilerVisitor(Visitor):
             type=struct.name_to_type[name])
         if val is not None:
             if type(val) == list:
-                self.struct_init(member, val)
+                if isinstance(member.type, ArrayType):
+                    self.array_init(member, val)
+                else:
+                    self.struct_init(member, val)
                 return
             actual_val = self.visit_expression(val)
             self.write('MOV', actual_val, member)
@@ -785,7 +776,7 @@ class CompilerVisitor(Visitor):
             if m_ref.idx is not None:
                 idx = self.visit_expression(m_ref.idx)
                 assert type(idx) == int
-        element = ArrayElement(array=array_var, index=idx, type=array_var.type)
+        element = ArrayElement(array=array_var, index=idx, type=array_var.type.type)
         if val is not None:
             if type(val) == list:
                 return # Inner struct/array
@@ -797,8 +788,8 @@ class CompilerVisitor(Visitor):
         assert len(decl.init), "useless typedef"
         for init in decl.init:
             type = self.get_effective_type(decl.type, init.decl)
-            name = Types.get_name_for(init.decl.name_spec)
-            Types.add_type(name, type)
+            name = self.types.get_name_for(init.decl.name_spec)
+            self.types.add_type(name, type)
 
     def add_to_scope(self, type, name):
         if self.current_function is None:
@@ -816,6 +807,7 @@ class CompilerVisitor(Visitor):
         self.locals = {}
         self.local_labels = {}
         self.local_offset = 0
+        self.temporary_names.clear()
 
     def add_global(self, type, name):
         assert name not in self.globals
@@ -832,7 +824,7 @@ class CompilerVisitor(Visitor):
         return var
 
     def new_temporary_var(self, copy_from=None, type=None):
-        type = type if type else copy_from.type if copy_from else Types.types['int']
+        type = type if type else copy_from.type if copy_from else self.types.types['int']
         assert type.size > 0
         if len(self.free_gpr) > 0 and type.size == 1:
             return self.free_gpr.pop()
@@ -863,6 +855,10 @@ class CompilerVisitor(Visitor):
         for name in self.temporary_names:
             del self.locals[name]
         self.temporary_names.clear()
+        self.delayed = []
+
+    def add_delayed(self, *args):
+        self.delayed.append(args)
 
     def local_label(self, hint):
         if hint in self.local_labels:
@@ -985,6 +981,7 @@ class CompilerVisitor(Visitor):
             elif isinstance(src.type, ArrayType):
                 # Just reference first offset in array
                 size = src.type.type.size
+                size = src.type.size
             else:
                 size = src.type.size
             src_addr = self.load_address(src)
@@ -1222,7 +1219,7 @@ class CompilerVisitor(Visitor):
     def visit_return_stmt(self, stmt):
         ret_type = self.current_function.ret_type
         if stmt.expr:
-            assert ret_type != Types.types['void']
+            assert ret_type != self.types.types['void']
             ret = self.visit_expression(stmt.expr)
             if ret_type.size == 1:
                 reg = self.gpr[-1].name # Return value always in last register
@@ -1231,7 +1228,7 @@ class CompilerVisitor(Visitor):
                 # Move value to position allocated before calling this function
                 self.write('MOV', ret, Relative(rel_to='csp', offset=-ret_type.size))
         else:
-            assert ret_type == Types.types['void']
+            assert ret_type == self.types.types['void']
         self.write('RET')
 
     def visit_goto_stmt(self, stmt):
@@ -1247,6 +1244,7 @@ class CompilerVisitor(Visitor):
         var = self.visit_expression(expr.left)
         val = self.visit_expression(expr.right)
         self.write('MOV', val, var)
+        return val
 
     def visit_assign_op_expr(self, expr):
         var = self.visit_expression(expr.left)
@@ -1267,6 +1265,7 @@ class CompilerVisitor(Visitor):
             if var == val: # optimize mutating same variable
                 val = ref
             self.write(opcode, val, ref)
+        return val
 
     def mutate(this, var, write_only=False):
         unwrap, act_out, move = this.ref_tools()
@@ -1464,6 +1463,7 @@ class CompilerVisitor(Visitor):
         large_ret = func.ret_type.size > 1 # Can't fit in single register
         ret_dest = None
         if large_ret:
+            # allocate space on stack that visit_return_stmt will inject into
             ret_dest = self.new_temporary_var(type=func.ret_type)
 
         # shift base pointer to new stack region
@@ -1478,11 +1478,11 @@ class CompilerVisitor(Visitor):
             else:
                 i += var.type.size
         register_saved = False
-        if ret_dest is None and func.ret_type != Types.types['void']:
+        if ret_dest is None and func.ret_type != self.types.types['void']:
             ret_dest = self.gpr[-1]
             if len(self.free_gpr) == 0:
                 register_saved = True
-                self.write('MOV', ret_reg, 'sr')
+                self.write('MOV', ret_dest, 'sr')
                 self.write('PUSH')
         self.write('MOV', 'csp', 'sr')
         self.write('PUSH')
@@ -1492,7 +1492,7 @@ class CompilerVisitor(Visitor):
         self.write('MOV', 'sr', 'csp')
         if register_saved:
             self.write('POP')
-            #TODO delay this self.write('MOV', 'sr', ret_reg)
+            self.add_delayed('MOV', 'sr', ret_dest)
         return ret_dest
 
     def func_printf(self, expr):

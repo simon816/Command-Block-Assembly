@@ -224,7 +224,8 @@ class Parser:
         # TODO using exceptions is bad
         pos, next = self.lexer.ptr, self.lexer.next
         try:
-            assert next not in [Keyword.SYNC, Keyword.RETURN] # quick hack
+            assert next not in [Keyword.SYNC, Keyword.RETURN,
+                                Keyword.BREAK, Keyword.CONTINUE] # quick hack
             return self.parse_declaration(allow_functions=False)
         except AssertionError as e:
             self.lexer.ptr, self.lexer.next = pos, next
@@ -404,7 +405,7 @@ class Parser:
         left = self.parse_assignment_expr()
         # Left associate
         while self.read_optional(Token.COMMA):
-            left = BinaryOperationExpr(left=left,op=Token.COMMA,
+            left = BinaryOperatorExpr(left=left,op=Token.COMMA.val,
                                        right=self.parse_assignment_expr())
         return left
 
