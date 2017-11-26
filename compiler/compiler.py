@@ -591,6 +591,9 @@ class CompilerVisitor(Visitor):
         elif isinstance(stmt, EmptyStatement):
             return
 
+        for delayed in self.delayed:
+            self.write(*delayed)
+        self.delayed = []
         self.clear_temporary_vars()
 
         stmt_map = {
@@ -620,9 +623,6 @@ class CompilerVisitor(Visitor):
         func(stmt)
 
     def visit_expression(self, expr):
-        for delayed in self.delayed:
-            self.write(*delayed)
-        self.delayed = []
         expr_map = {
             AssignmentExpr: self.visit_assign_expr,
             IncrementExpr: self.visit_increment_expr,
@@ -808,6 +808,7 @@ class CompilerVisitor(Visitor):
         self.local_labels = {}
         self.local_offset = 0
         self.temporary_names.clear()
+        self.free_gpr = set(self.gpr)
 
     def add_global(self, type, name):
         assert name not in self.globals
