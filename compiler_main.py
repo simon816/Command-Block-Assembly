@@ -5,7 +5,8 @@ from session import FunctionWriter, DummyWriter
 from placer import Rel
 
 from compiler.asm_extensions import CompilerSession, ExtendedAssembler
-from compiler.compiler import Compiler, Preprocessor
+from compiler.compiler import Compiler
+from compiler.preprocessor import Preprocessor
 from compiler.lexer import Lexer
 from compiler.parser_ import Parser
 

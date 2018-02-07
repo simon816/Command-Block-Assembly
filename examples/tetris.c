@@ -366,13 +366,13 @@ void main() {
         }
         MOVE(-WIDTH,0,1);
     }
-	new_shape();
+    new_shape();
     draw_shape();
     // While lever is active
     while (TEST_CMD(testforblock 206 57 -9 lever powered=true)) {
-		sync;
-		tick();
-	}
+        sync;
+        tick();
+    }
 
     CMD(kill @e[tag=TAG]);
 }
