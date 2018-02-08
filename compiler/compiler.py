@@ -300,6 +300,8 @@ class CompilerVisitor(Visitor):
     def add_to_scope(self, type, name):
         if self.current_function is None:
             return self.add_global(type, name)
+        elif isinstance(type, DecoratedType) and type.static:
+            return self.add_static_local(type, name)
         else:
             return self.add_local(type, name)
 
@@ -328,6 +330,14 @@ class CompilerVisitor(Visitor):
         var = Variable(index=self.local_offset, type=type, name=name)
         self.locals[name] = var
         self.local_offset += type.size
+        return var
+
+    def add_static_local(self, type, name):
+        # Globally stored, locally scoped
+        assert name not in self.locals
+        var = Global(loc=self.global_offset, type=type, name=name)
+        self.locals[name] = var
+        self.global_offset += type.size
         return var
 
     def new_temporary_var(self, copy_from=None, type=None):
