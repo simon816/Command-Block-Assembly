@@ -63,16 +63,20 @@ class CommandPlacer:
         else:
             block_type = 'command_block'
 
-        flags = 0
+        state = {}
         if block.cond:
-            flags |= 8
-        direction = 3 # south
+            state['conditional'] = 'true'
+        direction = 'south'
         if rotate:
-            direction = 5 # east
-        flags |= direction
+            direction = 'east'
+        state['facing'] = direction
+
+        state_str = '[' + ','.join([k+'='+v for k,v in state.items()]) + ']'
 
         data = '{TrackOutput:0,auto:%db,Command:"%s"}' % (
             1 if block.auto else 0, escape(command))
 
-        return 'setblock %s %s %s %s %d replace %s' % (
-            self.x, self.y, self.z, block_type, flags, data)
+        block = block_type + state_str + data
+
+        return 'setblock %s %s %s %s replace' % (
+            self.x, self.y, self.z, block)

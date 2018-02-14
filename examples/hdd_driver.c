@@ -26,12 +26,12 @@ void read_mem() {
     __hdd_mul = 1;
 
     while (__hdd_addr) {
-        if(TEST_CMD(execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ testforblock ~ ~ ~ stone)) {
+        if(TEST_CMD(execute at @e[tag=$tag:_mem_ptr$] if block ~ ~ ~ stone)) {
             mbr += __hdd_mul;
         }
         __hdd_addr -= 1;
         __hdd_mul *= 2;
-        CMD(tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~);
+        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~);
     }
     CMD(kill @e[tag=$tag:_mem_ptr$]);
 }
@@ -52,18 +52,18 @@ void write_mem() {
         __hdd_addr -= 1;
         __hdd_mul /= 2;
         if (__mem_temp == 0) {
-            CMD(execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ air);
+            CMD(execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ air);
         } else {
-            CMD(execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ stone);
+            CMD(execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ stone);
         }
-        CMD(tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~);
+        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~);
     }
     CMD(kill @e[tag=$tag:_mem_ptr$]);
 }
 
 void memory_seek() {
     while (__hdd_addr) {
-        CMD(tp @e[tag=$tag:_mem_ptr$] ~1 ~ ~);
+        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~1 ~ ~);
         __hdd_addr -= 1;
     }
 
@@ -72,7 +72,7 @@ void memory_seek() {
 
     while (__hdd_addr) {
         __hdd_addr -= 1;
-        CMD(tp @e[tag=$tag:_mem_ptr$] ~ ~ ~1);
+        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~ ~1);
     }
 }
 

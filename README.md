@@ -241,8 +241,6 @@ The assembler also outputs a cleanup function, which performs the opposite opera
 If command blocks are placed by the setup command, the cleanup command will remove them. If a relative `--place-location`
 was used, the cleanup must be executed from the same location that setup was ran from.
 
-Note: the `/execute` command is required for the subroutine jump. Don't be tempted to run `/function` directly.  
-
 # Examples
 Examples can be found in the [examples](https://github.com/simon816/Command-Block-Assembly/tree/master/examples) directory.
 

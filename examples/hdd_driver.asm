@@ -31,11 +31,11 @@ read_mem:
     _read_loop:
     CMP hdd_addr, #0
     JE _finish
-    TEST execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ testforblock ~ ~ ~ stone
+    TEST execute at @e[tag=$tag:_mem_ptr$] if block ~ ~ ~ stone
     ADD hdd_mul, mbr
     SUB #1, hdd_addr
     MUL #2, hdd_mul
-    CMD tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~
+    CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~
     JMP _read_loop
 
     _finish:
@@ -65,10 +65,10 @@ write_mem:
     CMP _mem_temp, #0
     JE _write_zero
     ; If not zero, write 1. note: this captures -1 and 1
-    CMD execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ stone
+    CMD execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ stone
     JMP _continue
-    _write_zero: CMD execute @e[tag=$tag:_mem_ptr$] ~ ~ ~ setblock ~ ~ ~ air
-    _continue:   CMD tp @e[tag=$tag:_mem_ptr$] ~ ~1 ~
+    _write_zero: CMD execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ air
+    _continue:   CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~
     JMP _write_loop
 
     _finish:
@@ -82,7 +82,7 @@ memory_seek:
     CMP hdd_addr, #0
     JE _seek_z
 
-    CMD tp @e[tag=$tag:_mem_ptr$] ~1 ~ ~
+    CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~1 ~ ~
     SUB #1, hdd_addr
     JMP memory_seek
 
@@ -95,7 +95,7 @@ memory_seek:
     JE _end
 
     SUB #1, hdd_addr
-    CMD tp @e[tag=$tag:_mem_ptr$] ~ ~ ~1
+    CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~ ~1
     JMP _seek_z_loop
 
     _end: RET

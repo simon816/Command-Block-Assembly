@@ -99,6 +99,14 @@ class Session:
         pop_stack = Subsequence()
         pop_stack.add_command(RemConst(Var('stack_pointer'), 1))
 
+        # workaround MC-125058
+        track_bug = SetConst(Var('success_tracker'), 0)
+        # See add_tracked_command in Assembler
+        def Tracked(command):
+            return ExecuteChain() \
+               .store('success').score(EntityTag, Var('success_tracker')) \
+               .run(command)
+
         current_push_seq = push_stack
         current_pop_seq = pop_stack
         current_push_func = 'stack_push_0'
@@ -110,19 +118,21 @@ class Session:
                 stack_dump.append(",")
             next_push_func = 'stack/stack_push_%d' % (i+1)
             next_pop_func = 'stack/stack_pop_%d' % (i+1)
-            current_push_seq.add_command(OpAssign(Var('stack_slot', i), Var('stack_register'))
-                                         .where(SelEquals(Var('stack_pointer'), i)))
+            current_push_seq.add_command(track_bug)
+            current_push_seq.add_command(Tracked(OpAssign(Var('stack_slot', i), Var('stack_register'),
+                                          where=SelEquals(Var('stack_pointer'), i))))
             top = self.stack_size - i - 1
-            current_pop_seq.add_command(OpAssign(Var('stack_register'), Var('stack_slot', i))
-                                        .where(SelEquals(Var('stack_pointer'), i - 1)))
+            current_pop_seq.add_command(track_bug)
+            current_pop_seq.add_command(Tracked(OpAssign(Var('stack_register'), Var('stack_slot', i),
+                                        where=SelEquals(Var('stack_pointer'), i - 1))))
             if not one_function:
                 self.scope.add_function_names((next_push_func, next_pop_func))
                 is_last = i == self.stack_size - 1
                 if not is_last:
-                    current_push_seq.add_command(Function(next_push_func, cond_type='if',
-                                                          cond=SelEquals(Var('success_tracker'), 0)))
-                    current_pop_seq.add_command(Function(next_pop_func, cond_type='if',
-                                                          cond=SelEquals(Var('success_tracker'), 0)))
+                    current_push_seq.add_command(Execute.If(SelEquals(Var('success_tracker'), 0),
+                                                    Function(next_push_func)))
+                    current_pop_seq.add_command(Execute.If(SelEquals(Var('success_tracker'), 0),
+                                                   Function(next_pop_func)))
                     self.add_subsequence(current_push_func, current_push_seq)
                     self.add_subsequence(current_pop_func, current_pop_seq)
                     current_push_seq = Subsequence()
@@ -194,9 +204,6 @@ class Session:
                 'sync_trigger': -1
             }.items():
             up.append(SetConst(Var(var), val).resolve(self.scope))
-        up.append('stats entity @e[tag=%s] set SuccessCount @e[tag=%s] %s' % (
-            self.scope.entity_tag, self.scope.entity_tag,
-            self.scope.variable('success_tracker')))
         up.extend(self.placer.output())
         down.extend(self.placer.cleanup())
         self.extended_setup(up, down)
@@ -221,7 +228,7 @@ class FunctionWriter:
 
     def __init__(self, world_directory, namespace):
         self.func_dir = os.path.join(world_directory,
-                                     'data', 'functions', namespace)
+                                     'data', namespace, 'functions')
         self.func_count = 0
         self.command_count = 0
 

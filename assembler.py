@@ -82,11 +82,14 @@ class Assembler:
             del self.on_sub[func_name]
         return seq
 
-    def split_to_subsequence(self, name, **func_args):
+    def split_to_subsequence(self, name, cond_chain=None):
         # Create a jump on the current subsequence
         # don't jump if we're currently unreachable
         if self.curr_func != '__unreachable__':
-            self.add_command(Function(name, **func_args))
+            if cond_chain is not None:
+                self.add_command(cond_chain.run(Function(name)))
+            else:
+                self.add_command(Function(name))
         # Change assembler state to new subsequence
         self.enter_subsequence(name)
 
@@ -134,6 +137,17 @@ class Assembler:
 
     def add_command(self, command):
         self.function_subsequences[self.curr_func].add_command(command)
+
+    def make_tracked_command(self, command):
+        return ExecuteChain() \
+               .store('success').score(EntityTag, Var('success_tracker')) \
+               .run(command)
+
+    def add_tracked_command(self, command):
+        # Bug where success_tracker isn't set if the command fails
+        # So need to force to 0. See MC-125058
+        self.add_command(SetConst(Var('success_tracker'), 0))
+        self.add_command(self.make_tracked_command(command))
 
     def handle_directive(self, directive, value):
         if directive == 'include':
@@ -326,18 +340,24 @@ void OP(int src, int *dest) {
         self.add_command(OpDiv(work, order))
         self.add_command(OpMod(work, two))
         cmp_fn = self.unique_func('cmp')
-        self.add_command(Function(cmp_fn, cond_type='if', cond=SelEquals(work, cmp_1)))
+        self.add_command(Execute.If(SelEquals(work, cmp_1), Function(cmp_fn)))
         self.add_command(OpAdd(order, order))
-        self.add_command(Function(op_fn, cond_type='if', cond=SelRange(order, min=1)))
+        self.add_command(Execute.If(SelRange(order, min=1), Function(op_fn)))
 
         # Function to run if work%2==cmp_1
         seq = self.create_subsequence(cmp_fn)
         seq.add_command(OpAssign(work, dest))
         seq.add_command(OpDiv(work, order))
         seq.add_command(OpMod(work, two))
-        seq.add_command(Op(dest, order).where(SelEquals(work, cmp_2)))
+        op_cmd = Op(dest, order, where=SelEquals(work, cmp_2))
+        if Op2 is None:
+            seq.add_command(op_cmd)
+        else:
+            # See add_tracked_command and MC-125058
+            seq.add_command(SetConst(Var('success_tracker'), 0))
+            seq.add_command(self.make_tracked_command(op_cmd))
         if Op2 is not None:
-            seq.add_command(Op2(dest, order).where(SelEquals(Var('success_tracker'), 0)))
+            seq.add_command(Op2(dest, order, where=SelEquals(Var('success_tracker'), 0)))
 
         self.curr_func = old_func
 
@@ -360,13 +380,13 @@ void OP(int src, int *dest) {
             self.add_command(SetConst(Var('working_reg_2'), 2))
         old_func = self.curr_func
         loop = self.unique_func(name)
-        self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
+        self.split_to_subsequence(loop, ExecuteChain.unless_where(SelEquals(count, 0)))
         if left:
             self.add_command(OpAdd(dest, dest))
         else:
             self.add_command(OpDiv(dest, Var('working_reg_2')))
         self.add_command(RemConst(count, 1))
-        self.add_command(Function(loop, cond_type='unless', cond=SelEquals(count, 0)))
+        self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
         self.curr_func = old_func
 
     def handle_rol(self, src, dest):
@@ -376,13 +396,13 @@ void OP(int src, int *dest) {
         self.add_command(self.assign_op(count, src))
         old_func = self.curr_func
         loop = self.unique_func('rol')
-        self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
+        self.split_to_subsequence(loop, ExecuteChain.unless_where(SelEquals(count, 0)))
         self.add_command(SetConst(was_neg, 0))
-        self.add_command(SetConst(was_neg, 1).where(SelRange(dest, max=-1)))
+        self.add_command(SetConst(was_neg, 1, where=SelRange(dest, max=-1)))
         self.add_command(OpAdd(dest, dest))
-        self.add_command(AddConst(dest, 1).where(SelEquals(was_neg, 1)))
+        self.add_command(AddConst(dest, 1, where=SelEquals(was_neg, 1)))
         self.add_command(RemConst(count, 1))
-        self.add_command(Function(loop, cond_type='unless', cond=SelEquals(count, 0)))
+        self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
         self.curr_func = old_func
 
     def handle_ror(self, src, dest):
@@ -395,17 +415,17 @@ void OP(int src, int *dest) {
         self.add_command(SetConst(two, 2))
         old_func = self.curr_func
         loop = self.unique_func('ror')
-        self.split_to_subsequence(loop, cond_type='unless', cond=SelEquals(count, 0))
+        self.split_to_subsequence(loop, ExecuteChain.unless_where(SelEquals(count, 0)))
         self.add_command(OpAssign(was_lsb, dest))
         self.add_command(OpMod(was_lsb, two))
         self.add_command(OpDiv(dest, two))
         # Assumption of 32 bit
         # Remove 1 less than max negative because RemConst doesn't support negatives
-        self.add_command(RemConst(dest, (1<<31) - 1).where(SelEquals(was_lsb, 1)))
+        self.add_command(RemConst(dest, (1<<31) - 1, where=SelEquals(was_lsb, 1)))
         # Remove remaining 1 thas wasn't removed from above
-        self.add_command(RemConst(dest, 1).where(SelEquals(was_lsb, 1)))
+        self.add_command(RemConst(dest, 1, where=SelEquals(was_lsb, 1)))
         self.add_command(RemConst(count, 1))
-        self.add_command(Function(loop, cond_type='unless', cond=SelEquals(count, 0)))
+        self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
         self.curr_func = old_func
 
     def handle_cmp(self, left, right):
@@ -483,23 +503,26 @@ void OP(int src, int *dest) {
         self.jump_if_cond(self.symbol_to_func(symbol), truth_test)
 
     def jump_unless_cond(self, dest_if_fail, false_test):
-        self.jump_conditional(dest_if_fail, 'unless', false_test)
+        self.jump_conditional(dest_if_fail, ExecuteChain.unless_where(false_test))
 
     def jump_if_cond(self, dest_if_success, truth_test):
-        self.jump_conditional(dest_if_success, 'if', truth_test)
+        self.jump_conditional(dest_if_success, ExecuteChain.if_where(truth_test))
 
-    def jump_conditional(self, dest, cond_type, cond_test):
+    def jump_conditional(self, dest, cond_chain):
         cont_name = self.unique_func('cont')
         # Sent to dest if condition passes
-        self.add_command(Function(dest, cond_type=cond_type, cond=cond_test))
+        # dont use add_tracked_command, MC-125145
+        #self.add_tracked_command(cond_chain.run(Function(dest)))
+        # Set success_tracker, MC-125145
+        self.add_command(SetConst(Var('success_tracker'), 0))
+        self.add_command(cond_chain.run(Function(dest)))
         # create new subsequence to continue execution
-        self.split_to_subsequence(cont_name, cond_type='if',
-                                  cond=SelEquals(Var('success_tracker'), 0))
-        # Work around what appears to be a bug where the SuccessCount of a
-        # function is dependent on the last executed function
-        # (and not just on the selector as we thought)
+        self.split_to_subsequence(cont_name, ExecuteChain.if_where(
+                                    SelEquals(Var('success_tracker'), 0)))
+        # Work around MC-125145
         self.on_subsequence_exists(dest,
-                                   lambda seq: seq.add_post_command(Testfor()))
+                                   lambda seq: seq.add_post_command(
+                                       SetConst(Var('success_tracker'), 1)))
 
     def on_subsequence_exists(self, name, cb):
         if name in self.function_subsequences:
@@ -523,8 +546,9 @@ void OP(int src, int *dest) {
             self.handle_push()
             self.add_command(Function(self.symbol_to_func(sub_name)))
             self.enter_subsequence(ret_name)
-            # See jump_conditional for why we need testfor
-            self.function_subsequences[ret_name].add_post_command(Testfor())
+            # MC-125145
+            self.function_subsequences[ret_name].add_post_command(
+                SetConst(Var('success_tracker'), 1))
 
     def handle_ret(self):
         if not self.enable_sync:
@@ -537,11 +561,18 @@ void OP(int src, int *dest) {
         self.curr_func = '__unreachable__'
 
     def handle_test_cmd(self, cmd):
-        self.handle_cmd(cmd)
+        # Work around execute store bug
+        # use working_reg instead of success_tracker because jump_if_cond resets success_tracker
+        # Temp: store result because success doesn't work properly
+        self.add_command(SetConst(Var('working_reg'), 0))
+        self.add_command(ExecuteChain() \
+               .store('result').score(EntityTag, Var('working_reg')) \
+               .run(Cmd(cmd)))
         after = self.unique_func('test_after')
         self.create_subsequence(after) # In preparation for the jump
         # If command failed, jump to after
-        self.jump_if_cond(after, SelEquals(Var('success_tracker'), 0))
+        # use working_reg instead of success_tracker
+        self.jump_if_cond(after, SelEquals(Var('working_reg'), 0))
         # Otherwise, the new subsequence we're on will jump to 'after' after next insn
         self.jump_after_next(after)
 
@@ -575,7 +606,7 @@ void OP(int src, int *dest) {
 
         if not self.has_created_sync:
             seq = CommandSequence()
-            cmd = Execute(SelEquals(Var('sync_trigger'), 1), Function('func_lookup_table'))
+            cmd = Execute.where(SelEquals(Var('sync_trigger'), 1), Function('func_lookup_table'))
             seq.add_block(CommandBlock(cmd, conditional=False, mode='REPEAT', auto=True))
             self.new_command_block_line(seq)
             self.has_created_sync = True
@@ -590,8 +621,9 @@ void OP(int src, int *dest) {
         # Set assembler to destination function, immediately turn off sync trigger
         self.enter_subsequence(func)
         self.add_command(SetConst(Var('sync_trigger'), 0))
-        # See jump_conditional for why we need testfor
-        self.function_subsequences[func].add_post_command(Testfor())
+        # MC-125145 workaround
+        self.function_subsequences[func].add_post_command(
+            SetConst(Var('success_tracker'), 1))
 
     def add_lookup_table(self, session):
         i = 0
@@ -600,15 +632,22 @@ void OP(int src, int *dest) {
         for func, id in self.sync_func_ids.items():
             table_name = 'func_lookup_table' + ('_%d' % i if i > 0 else '')
             if prev: # Attach chain onto prev table
-                table.add_command(Function(table_name, cond_type='if',
-                                           cond=SelEquals(Var('success_tracker'), 0)))
+                table.add_command(Execute.If(SelEquals(Var('success_tracker'), 0),
+                                             Function(table_name)))
+                # MC-125145 workaround
+                table.add_command(SetConst(Var('success_tracker'), 1))
                 session.load_subroutine_table((prev, table_name))
                 session.add_subsequence(prev, table)
                 table = Subsequence()
-            table.add_command(Function(func, cond_type='if',
-                                       cond=SelEquals(Var('lookup_pointer'), id)))
+            # See add_tracked_command for why this is needed
+            table.add_command(SetConst(Var('success_tracker'), 0))
+            # was make_tracked_command, but not for MC-125145 workaround
+            table.add_command(
+                Execute.If(SelEquals(Var('lookup_pointer'), id), Function(func)))
             prev = table_name
             i += 1
+        # MC-125145 workaround
+        table.add_command(SetConst(Var('success_tracker'), 1))
         if prev is not None:
             session.load_subroutine_table((prev,))
             session.add_subsequence(prev, table)
@@ -626,4 +665,4 @@ void OP(int src, int *dest) {
         session.add_command_blocks(self.command_block_lines)
 
     def get_sub_jump_command(self, sub_name):
-        return Execute(None, Function(self.sub_to_func_name(sub_name)))
+        return Function(self.sub_to_func_name(sub_name))

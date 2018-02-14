@@ -25,12 +25,12 @@ class CompilerSession(Session):
             getter = Subsequence()
             setter = Subsequence()
             def gen_fn(fn, p):
-                return Function(pair_name(fn, p), cond_type='if',
-                                cond=SelRange(mar, min=p.min, max=p.max))
+                return Execute.If(SelRange(mar, min=p.min, max=p.max),
+                                  Function(pair_name(fn, p)))
             def gen_assign(n, g=True):
                 slot = Var('memory_slot', n)
-                return OpAssign(mbr if g else slot, slot if g else mbr) \
-                                .where(SelEquals(mar, n))
+                return OpAssign(mbr if g else slot, slot if g else mbr,
+                                where=SelEquals(mar, n))
 
             if pair.left and pair.left.left:
                 getter.add_command(gen_fn('mem_get', pair.left))

@@ -1,3 +1,5 @@
+import abc
+
 class CommandBlock:
     def __init__(self, command, conditional=True, mode='CHAIN', auto=True):
         self.command = command
@@ -8,7 +10,7 @@ class CommandBlock:
     def resolve(self, scope):
         return self.command.resolve(scope)
 
-class CommandSequence(object):
+class CommandSequence:
     def __init__(self):
         self.blocks = []
 
@@ -40,7 +42,13 @@ class Subsequence:
     def add_post_command(self, command):
         self.post_commands.append(command)
 
-class Ref:
+class Resolvable(metaclass=abc.ABCMeta):
+
+    @abc.abstractmethod
+    def resolve(self, scope):
+        pass
+
+class Ref(Resolvable):
     pass
 
 class Var(Ref):
@@ -58,26 +66,49 @@ class Mem(Ref):
     def resolve(self, scope):
         return scope.memory(self.loc)
 
-class Command:
+class SimpleResolve(Resolvable):
 
-    def select(self, selector, scope, **kwargs):
-        output = '@' + selector
-        if 'selectors' in dir(self):
-            for sel in self.selectors:
-                kwargs.update(sel.resolve(scope))
-        if not kwargs:
-            return output
-        output += '['
-        for key,value in kwargs.items():
-            output += '%s=%s,' % (key, str(value))
-        output = output[:len(output)-1] + ']'
+    def __init__(self, *args):
+        self.args = args
+
+    def resolve(self, scope):
+        return ' '.join(map(lambda el: el.resolve(scope) \
+                             if isinstance(el, Resolvable) \
+                             else el, self.args))
+
+class Pos(SimpleResolve):
+    def __init__(self, x, y, z):
+        super().__init__(*map(str, (x, y, z)))
+
+
+class Command(Resolvable):
+    pass
+
+def make_selector(selector, **kwargs):
+    output = '@' + selector
+    if not kwargs:
         return output
 
-    def where(self, clause):
-        if not 'selectors' in dir(self):
-            self.selectors = []
-        self.selectors.append(clause)
-        return self
+    def str_pairs(items):
+        output = []
+        for key, value in items:
+            if type(value) == dict:
+                value = '{%s}' % str_pairs(value.items())
+            output.append('%s=%s' % (key, value))
+        return ','.join(output)
+
+    return '%s[%s]' % (output, str_pairs(kwargs.items()))
+
+class Selector(Resolvable):
+
+    def __init__(self, where):
+        self.where = where
+
+    def resolve(self, scope):
+        where = {} if not self.where else self.where.resolve(scope)
+        return make_selector('e', tag=scope.entity_tag, **where)
+
+EntityTag = Selector(None)
 
 class Cmd(Command):
     def __init__(self, cmd):
@@ -101,35 +132,103 @@ class Cmd(Command):
         return cmd
 
 class Execute(Command):
-    def __init__(self, where, cmd):
+
+    def __init__(self, chain, cmd):
+        self.chain = SimpleResolve(*chain._components)
         self.command = cmd
-        self.where = where
+
+    @staticmethod
+    def where(where, cmd):
+        return ExecuteChain().where(where).run(cmd)
+
+    @staticmethod
+    def If(cond, cmd):
+        return ExecuteChain.if_where(cond).run(cmd)
+
+    @staticmethod
+    def Unless(cond, cmd):
+        return ExecuteChain.unless_where(cond).run(cmd)
 
     def resolve(self, scope):
-        where = {} if self.where is None else self.where.resolve(scope)
-        selector = self.select('e', scope, tag=scope.entity_tag,
-                               **where)
-        return 'execute %s ~ ~ ~ %s' % (selector, self.command.resolve(scope))
+        return 'execute %s run %s' % (self.chain.resolve(scope),
+                                      self.command.resolve(scope))
+
+class ExecuteChain:
+
+    def __init__(self):
+        self._components = []
+
+    def add(self, *args):
+        for arg in args:
+            if type(arg) in [str, int]:
+                self._components.append(str(arg))
+            elif isinstance(arg, Resolvable):
+                self._components.append(arg)
+            else:
+                assert False, type(arg)
+        return self
+
+    def run(self, cmd):
+        return Execute(self, cmd)
+
+    @staticmethod
+    def unless_where(cond):
+        return ExecuteChain().cond('unless').where(cond)
+
+    @staticmethod
+    def if_where(cond):
+        return ExecuteChain().cond('if').where(cond)
+
+    def where(self, select_arg):
+        return self.add('as', Selector(select_arg))
+
+    def cond(self, cond_type):
+        return ExecuteChain.Cond(self, cond_type)
+
+    class Cond:
+
+        def add(self, *args):
+            return self.parent.add(*((self.cond_type,) + args))
+
+        def __init__(self, parent, cond_type):
+            self.parent = parent
+            self.cond_type = cond_type
+
+        def where(self, select_arg):
+            return self.add('entity', Selector(select_arg))
+
+        def score(self, target, t_objective, operator, source, s_objective):
+            return self.add('score', target, t_objective, operator, source,
+                             s_objective)
+
+        def score_range(self, target, objective, range):
+            return self.add('score', target, objective, 'matches', range)
+
+    def store(self, store_type):
+        return ExecuteChain.Store(self, store_type)
+
+    class Store:
+
+        def add(self, *args):
+            return self.parent.add(*(('store', self.store_type) + args))
+
+        def __init__(self, parent, store_type):
+            self.parent = parent
+            self.store_type = store_type
+
+        def score(self, name, objective):
+            return self.add('score', name, objective)
+
+        def entity(self, target, path, data_type, scale):
+            return self.add('entity', target, path, data_type, scale)
 
 class Function(Command):
 
-    def __init__(self, func_name, cond_type=None, cond=None):
+    def __init__(self, func_name):
         self.name = func_name
-        self.cond_type = cond_type
-        self.cond = cond
 
     def resolve(self, scope):
-        cond = ''
-        if self.cond_type is not None:
-            selector = self.select('e', scope, tag=scope.entity_tag,
-                                   **self.cond.resolve(scope))
-            cond = ' %s %s' % (self.cond_type, selector)
-        return 'function %s%s' % (scope.function_name(self.name), cond)
-
-class Testfor(Command):
-
-    def resolve(self, scope):
-        return 'testfor %s' % self.select('e', scope, tag=scope.entity_tag)
+        return 'function %s' % scope.function_name(self.name)
 
 class Tellraw(Command):
 
@@ -139,7 +238,7 @@ class Tellraw(Command):
         self.sel_args = sel_args
 
     def resolve(self, scope):
-        return 'tellraw %s %s' % (self.select(self.sel, scope, **self.sel_args),
+        return 'tellraw %s %s' % (make_selector(self.sel, **self.sel_args),
                                   self.to_json(scope))
 
     def to_json(self, scope):
@@ -159,7 +258,7 @@ class Tellraw(Command):
             return {'text': arg}
         if isinstance(arg, Ref):
             return {'score':
-                    {'name': self.select('e', scope, tag=scope.entity_tag),
+                    {'name': EntityTag.resolve(scope),
                      'objective': arg.resolve(scope)}}
         else:
             raise RuntimeError('Unknown argument type %r' % type(arg))
@@ -168,16 +267,17 @@ class Scoreboard(Command):
 
     allows_negative = False
 
-    def __init__(self, varref, value):
+    def __init__(self, varref, value, where=None):
         assert isinstance(varref, Ref)
         assert isinstance(value, int)
         assert self.allows_negative or value >= 0
         self.var = varref
         self.value = value
+        self.selector = Selector(where)
 
     def resolve(self, scope):
         return 'scoreboard players %s %s %s %d' % (
-            self.op, self.select('e', scope, tag=scope.entity_tag),
+            self.op, self.selector.resolve(scope),
             self.var.resolve(scope), self.value)
 
 class SetConst(Scoreboard):
@@ -190,36 +290,25 @@ class AddConst(Scoreboard):
 class RemConst(Scoreboard):
     op = 'remove'
 
-class InRange(Scoreboard):
-    def __init__(self, varref, min, max=None):
-        self.var = varref
-        self.min = min
-        self.max = ' %d' % max if max is not None else ''
-
-    def resolve(self, scope):
-        return 'scoreboard players test %s %s %d%s' % (
-            self.select('e', scope, tag=scope.entity_tag),
-            self.var.resolve(scope), self.min, self.max)
-
-class Tag(Scoreboard):
+class Tag(Command):
     def __init__(self, tag, op='add'):
         self.tag = tag
         self.op = op
 
     def resolve(self, scope):
-        return 'scoreboard players tag %s %s %s' % (
-            self.select('e', scope, tag=scope.entity_tag), self.op, self.tag)
+        return 'tag %s %s %s' % (EntityTag.resolve(scope), self.op, self.tag)
 
 
 class Operation(Command):
-    def __init__(self, left, right):
+    def __init__(self, left, right, where=None):
         assert isinstance(left, Ref)
         assert isinstance(right, Ref)
         self.left = left
         self.right = right
+        self.selector = Selector(where)
 
     def resolve(self, scope):
-        selector = self.select('e', scope, tag=scope.entity_tag)
+        selector = self.selector.resolve(scope)
         return 'scoreboard players operation %s %s %s %s %s' % (
             selector, self.left.resolve(scope), self.op,
             selector, self.right.resolve(scope))
@@ -235,10 +324,10 @@ class OpIfLt(Operation): op = '<'
 class OpIfGt(Operation): op = '>'
 class OpSwap(Operation): op = '><'
 
-class Selector(object):
+class SelectorArgs(Resolvable):
     pass
 
-class SelRange(Selector):
+class SelRange(SelectorArgs):
     def __init__(self, varref, min=None, max=None):
         assert min is not None or max is not None
         assert isinstance(varref, Ref)
@@ -248,12 +337,14 @@ class SelRange(Selector):
 
     def resolve(self, scope):
         name = self.var.resolve(scope)
-        sel = {}
+        range = ''
         if self.min is not None:
-            sel['score_%s_min' % name] = self.min
-        if self.max is not None:
-            sel['score_%s' % name] = self.max
-        return sel
+            range = '%d' % self.min
+        if self.max is not None and self.max != self.min:
+            range += '..%d' % self.max
+        elif self.max is None:
+            range += '..'
+        return { 'scores': { name: range } }
 
 class SelEquals(SelRange):
     def __init__(self, varref, value):

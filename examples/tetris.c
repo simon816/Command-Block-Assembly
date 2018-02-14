@@ -6,10 +6,10 @@
 #define WIDTH 10
 #define HEIGHT 20
 
-#define ISSET(color) TEST_CMD(execute @e[tag=TAG] ~ ~ ~ testforblock ~ ~ ~ wool color)
-#define SET(color) CMD(execute @e[tag=TAG] ~ ~ ~ setblock ~ ~ ~ wool color);
-#define MOVE(xshift, yshift, zshift) CMD(tp @e[tag=TAG] ~xshift ~yshift ~zshift);
-#define RESET_POS(bogus) CMD(tp @e[tag=TAG] LOCATION);
+#define ISSET(color) TEST_CMD(execute at @e[tag=TAG] if block ~ ~ ~ color)
+#define SET(color) CMD(execute at @e[tag=TAG] run setblock ~ ~ ~ color);
+#define MOVE(xshift, yshift, zshift) CMD(execute as @e[tag=TAG] at @s run tp @s ~xshift ~yshift ~zshift);
+#define RESET_POS(bogus) CMD(execute as @e[tag=TAG] at @s run tp @s LOCATION);
 
 #define WHITE 0
 #define ORANGE 1
@@ -58,26 +58,26 @@ void display_seek(int row1, int col1) {
 
 void set() {
     if (mode == 1) {
-        can_fit *= ISSET(BLACK);
+        can_fit *= ISSET(black_wool);
         return;
     }
     switch (active_shape.color) {
-        case WHITE: SET(WHITE); return;
-        case ORANGE: SET(ORANGE); return;
-        case MAGENTA: SET(MAGENTA); return;
-        case LIGHT_BLUE: SET(LIGHT_BLUE); return;
-        case YELLOW: SET(YELLOW); return;
-        case LIME: SET(LIME); return;
-        case PINK: SET(PINK); return;
-        case LIGHT_GREY: SET(LIGHT_GREY); return;
-        case GREY: SET(GREY); return;
-        case CYAN: SET(CYAN); return;
-        case PURPLE: SET(PURPLE); return;
-        case BLUE: SET(BLUE); return;
-        case BROWN: SET(BROWN); return;
-        case GREEN: SET(GREEN); return;
-        case RED: SET(RED); return;
-        case BLACK: SET(BLACK); return;
+        case WHITE: SET(white_wool); return;
+        case ORANGE: SET(orange_wool); return;
+        case MAGENTA: SET(magenta_wool); return;
+        case LIGHT_BLUE: SET(light_blue_wool); return;
+        case YELLOW: SET(yellow_wool); return;
+        case LIME: SET(lime_wool); return;
+        case PINK: SET(pink_wool); return;
+        case LIGHT_GREY: SET(light_gray_wool); return;
+        case GREY: SET(gray_wool); return;
+        case CYAN: SET(cyan_wool); return;
+        case PURPLE: SET(purple_wool); return;
+        case BLUE: SET(blue_wool); return;
+        case BROWN: SET(brown_wool); return;
+        case GREEN: SET(green_wool); return;
+        case RED: SET(red_wool); return;
+        case BLACK: SET(black_wool); return;
         default: printf("INVALID COLOR %d", active_shape.color);
     }
 }
@@ -287,7 +287,7 @@ void new_shape() {
 void clear_line() {
     int shift = 0;
     do {
-        CMD(execute @e[tag=TAG] ~ ~ ~ clone ~ ~ ~-1 ~-WIDTH ~ ~-1 ~-WIDTH ~ ~);
+        CMD(execute at @e[tag=TAG] run clone ~ ~ ~-1 ~-WIDTH ~ ~-1 ~-WIDTH ~ ~);
         MOVE(0,0,-1);
         shift += 1;
     } while (shift < HEIGHT - position.row);
@@ -303,7 +303,7 @@ void check_line() {
     for (i = 0; i < active_shape.height; i++) {
         int has_black = 0;
         for (j = 0; j < WIDTH; j++) {
-            if (ISSET(BLACK)) {
+            if (ISSET(black_wool)) {
                 has_black = 1;
             }
             MOVE(1,0,0);
@@ -327,21 +327,21 @@ void tick() {
     } else {
         position.row += 1;
         // Rotate
-        if (TEST_CMD(testforblock 206 57 -11 stone_button powered=true)) {
-            CMD(setblock 206 57 -11 stone_button powered=false,facing=up);
+        if (TEST_CMD(execute if block 206 57 -11 stone_button[powered=true])) {
+            CMD(setblock 206 57 -11 stone_button[powered=false,face=floor]);
             position.rotation = (position.rotation + 1) % 4;
             ASM_swap(active_shape.width, active_shape.height);
         }
         // Left
-        if (TEST_CMD(testforblock 204 57 -9 stone_button powered=true)) {
-            CMD(setblock 204 57 -9 stone_button powered=false,facing=up);
+        if (TEST_CMD(execute if block 204 57 -9 stone_button[powered=true])) {
+            CMD(setblock 204 57 -9 stone_button[powered=false,face=floor]);
             if (position.offset > 0) {
                 position.offset -= 1;
             }
         }
         // Right
-        if (TEST_CMD(testforblock 208 57 -9 stone_button powered=true)) {
-            CMD(setblock 208 57 -9 stone_button powered=false,facing=up);
+        if (TEST_CMD(execute if block 208 57 -9 stone_button[powered=true])) {
+            CMD(setblock 208 57 -9 stone_button[powered=false,face=floor]);
             if (position.offset < WIDTH) {
                 position.offset += 1;
             }
@@ -361,7 +361,7 @@ void main() {
     RESET_POS(0);
     for (i = 0; i < 20; i++) {
         for (j = 0; j < WIDTH; j++) {
-            SET(BLACK);
+            SET(black_wool);
             MOVE(1,0,0);
         }
         MOVE(-WIDTH,0,1);
@@ -369,7 +369,7 @@ void main() {
     new_shape();
     draw_shape();
     // While lever is active
-    while (TEST_CMD(testforblock 206 57 -9 lever powered=true)) {
+    while (TEST_CMD(execute if block 206 57 -9 lever[powered=true])) {
         sync;
         tick();
     }
