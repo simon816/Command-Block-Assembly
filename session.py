@@ -26,6 +26,9 @@ class Scope:
         # Objective name length must be <= 16
         return obj_name[-16:]
 
+    def nbt_path(self, path):
+        return 'ArmorItems[0].tag.' + path
+
     def get_objectives(self):
         objectives = []
         for name in self.variables:
@@ -185,9 +188,11 @@ class Session:
 
     def create_up_down_functions(self, setup='setup', cleanup='cleanup'):
         self.scope.add_function_names((setup, cleanup))
+        item = '{id:"minecraft:stone",Count:1b,tag:{}}'
+        nbt = '{Tags:["%s"],ArmorItems:[%s]}' % (self.scope.entity_tag, item)
         up = [
             'kill @e[tag=%s]' % self.scope.entity_tag,
-            'summon armor_stand ~ ~2 ~ {Tags:["%s"]}' % self.scope.entity_tag
+            'summon armor_stand ~ ~2 ~ ' + nbt
         ]
         down = [
             'kill @e[tag=%s]' % self.scope.entity_tag

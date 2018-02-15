@@ -106,9 +106,17 @@ class Selector(Resolvable):
 
     def resolve(self, scope):
         where = {} if not self.where else self.where.resolve(scope)
-        return make_selector('e', tag=scope.entity_tag, **where)
+        return make_selector('e', tag=scope.entity_tag, limit=1, **where)
 
 EntityTag = Selector(None)
+
+class Path(Resolvable):
+
+    def __init__(self, path):
+        self.path = path
+
+    def resolve(self, scope):
+        return scope.nbt_path(self.path)
 
 class Cmd(Command):
     def __init__(self, cmd):
@@ -219,8 +227,17 @@ class ExecuteChain:
         def score(self, name, objective):
             return self.add('score', name, objective)
 
-        def entity(self, target, path, data_type, scale):
-            return self.add('entity', target, path, data_type, scale)
+        def entity(self, data_type):
+            return self.add('entity', EntityTag, Path(data_type), data_type, 1)
+
+class DataGet(Command):
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def resolve(self, scope):
+        return 'data get entity %s %s' % (EntityTag.resolve(scope),
+                                          self.path.resolve(scope))
 
 class Function(Command):
 
@@ -289,6 +306,15 @@ class AddConst(Scoreboard):
 
 class RemConst(Scoreboard):
     op = 'remove'
+
+class GetValue(Command):
+
+    def __init__(self, var):
+        self.var = var
+
+    def resolve(self, scope):
+        return 'scoreboard players get %s %s' % (EntityTag.resolve(scope),
+                                                 self.var.resolve(scope))
 
 class Tag(Command):
     def __init__(self, tag, op='add'):

@@ -1,6 +1,21 @@
 from commands import *
 from asm_reader import AsmReader
 
+def type_aware(fn):
+    def wrap(*args):
+        self, d_type, *fn_args = args
+        fn_args.insert(0, self)
+        ret = fn(*fn_args)
+        if type(ret) == tuple:
+            cmd, dest = ret
+        else:
+            cmd, dest = None, ret
+        self.add_cast(d_type, cmd, dest)
+
+    wrap.type_aware = True
+    wrap.func = fn
+    return wrap
+
 class Assembler:
 
     def __init__(self):
@@ -149,6 +164,29 @@ class Assembler:
         self.add_command(SetConst(Var('success_tracker'), 0))
         self.add_command(self.make_tracked_command(command))
 
+    def add_cast(self, type, cmd, dest):
+        # Short-circuit for 32 bit since scoreboards already are 32 bits
+        if type == 'L':
+            if cmd is not None:
+                self.add_command(cmd)
+            return
+        if cmd is None:
+            cmd = GetValue(dest)
+        data_type = {
+            'B': 'byte',
+            'W': 'short',
+            'L': 'int',
+            'Q': 'long'
+        }[type]
+        # store result of cmd into nbt of the specified type
+        self.add_command(ExecuteChain() \
+                         .store('result').entity(data_type).run(cmd))
+        # move nbt value back out to scoreboard
+        self.add_command(ExecuteChain() \
+                         .store('result').score(EntityTag, dest) \
+                         .run(DataGet(data_type)))
+
+
     def handle_directive(self, directive, value):
         if directive == 'include':
             import os
@@ -226,17 +264,41 @@ class Assembler:
     def handle_insn(self, insn, args):
         old_jump_later = self.jump_later
 
+        insn, *type_mod = insn.split('.', 2)
+
+        def unwrap(handler):
+            t_aware = hasattr(handler, 'type_aware')
+            assert not type_mod or t_aware, insn + " does not support types"
+            if t_aware:
+                d_type = type_mod[0] if type_mod else 'L'
+                old_handler = handler
+                handler = lambda *args: old_handler(d_type, *args)
+            return t_aware, handler
+
+
         if insn in self.instructions:
             handler = self.instructions[insn]
             real_func = handler
+
             if type(handler) == tuple:
                 real_func, *h_args = handler
-                handler = lambda *args: real_func(*(tuple(h_args) + args))
+                t_aware, _handler = unwrap(real_func)
+                handler = lambda *args: _handler(*(tuple(h_args) + args))
+            else:
+                t_aware, handler = unwrap(handler)
+
             try:
                 handler(*args)
             except TypeError as e:
                 import inspect
-                expect_args, *_= inspect.getargspec(real_func)
+                actual_func = real_func.func if t_aware else real_func
+                expect_args, *_= inspect.getargspec(actual_func)
+                # type aware functions have one extra arg
+                if t_aware:
+                    expect_args = expect_args[:-1]
+                # Special case where handle_op has two more args
+                if real_func == self.handle_op:
+                    expect_args = expect_args[:-2]
                 expect_count = len(expect_args) - 1 # remove self
                 found = len(args)
                 if expect_count == found:
@@ -271,6 +333,7 @@ class Assembler:
     def assign_op(self, dest, src):
         return (OpAssign if isinstance(src, Ref) else SetConst)(dest, src)
 
+    @type_aware
     def handle_op(self, ConstCmd, DynCmd, src, dest):
         src, dest = self.get_src_dest(src, dest)
         if isinstance(src, Ref):
@@ -282,33 +345,38 @@ class Assembler:
                 cmd = DynCmd(dest, Var('working_reg'))
             else:
                 cmd = ConstCmd(dest, src)
-        self.add_command(cmd)
+        return cmd, dest
 
     def handle_xchg(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
         assert isinstance(src, Ref)
         self.add_command(OpSwap(dest, src))
 
+    @type_aware
     def handle_move(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
-        self.add_command(self.assign_op(dest, src))
+        return self.assign_op(dest, src), dest
 
+    @type_aware
     def handle_and(self, src, dest):
-        self.bitwise_op('and', src, dest, 0, 1, OpSub)
+        return self.bitwise_op('and', src, dest, 0, 1, OpSub)
 
+    @type_aware
     def handle_or(self, src, dest):
-        self.bitwise_op('or', src, dest, 1, 0, OpAdd)
+        return self.bitwise_op('or', src, dest, 1, 0, OpAdd)
 
+    @type_aware
     def handle_xor(self, src, dest):
-        self.bitwise_op('xor', src, dest, 1, 0, OpAdd, OpSub)
+        return self.bitwise_op('xor', src, dest, 1, 0, OpAdd, OpSub)
 
+    @type_aware
     def handle_not(self, ref):
         ref = self.resolve_ref(*ref)
         assert isinstance(ref, Ref)
         work = Var('working_reg')
         self.add_command(SetConst(work, -1))
         self.add_command(OpSub(work, ref))
-        self.add_command(OpAssign(ref, work))
+        return OpAssign(ref, work), ref
 
     def bitwise_op(self, name, src, dest, cmp_1, cmp_2, Op, Op2=None):
         """Constructs code like the following:
@@ -360,13 +428,17 @@ void OP(int src, int *dest) {
             seq.add_command(Op2(dest, order, where=SelEquals(Var('success_tracker'), 0)))
 
         self.curr_func = old_func
+        return dest
 
+    @type_aware
     def handle_shl(self, src, dest):
-        self.shift_op('shl', src, dest, True)
+        return self.shift_op('shl', src, dest, True)
 
+    @type_aware
     def handle_shr(self, src, dest):
-        self.shift_op('shr', src, dest, False)
+        return self.shift_op('shr', src, dest, False)
 
+    @type_aware
     def handle_sar(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
         raise NotImplementedError() # TODO
@@ -388,7 +460,9 @@ void OP(int src, int *dest) {
         self.add_command(RemConst(count, 1))
         self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
         self.curr_func = old_func
+        return dest
 
+    @type_aware
     def handle_rol(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
         count = Var('working_reg')
@@ -404,7 +478,9 @@ void OP(int src, int *dest) {
         self.add_command(RemConst(count, 1))
         self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
         self.curr_func = old_func
+        return dest
 
+    @type_aware
     def handle_ror(self, src, dest):
         # TODO handle 2's complement properly
         src, dest = self.get_src_dest(src, dest)
@@ -427,6 +503,7 @@ void OP(int src, int *dest) {
         self.add_command(RemConst(count, 1))
         self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
         self.curr_func = old_func
+        return dest
 
     def handle_cmp(self, left, right):
         """Subtract left from right i.e right - left"""

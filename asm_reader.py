@@ -81,6 +81,8 @@ class AsmReader:
 
     def next_instruction(self):
         instr = self.read_symbol().upper()
+        if self.head == '.':
+            instr += self.read('.') + self.read_symbol().upper()
         whitespace = self.skip_whitespace()
         if self.text and self.head not in '\n;' and not whitespace:
             self.syntax_error('Expected newline, got %r' % self.head)
