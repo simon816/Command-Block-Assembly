@@ -62,6 +62,9 @@ class Parser:
 
     def parse_initializer_list(self):
         inits = []
+        def mkchild(parent, child):
+            return child if parent is None else MemberReference(idx=parent.idx,
+                    name=parent.name, child=mkchild(parent.child, child))
         while True:
             member_ref = None
             read_designator = False
@@ -69,10 +72,11 @@ class Parser:
                 if self.read_optional(Token.OPEN_SQUARE):
                     idx = self.parse_constant_expr()
                     self.read(Token.CLOSE_SQUARE)
-                    member_ref = MemberReference(parent=member_ref, idx=idx)
+                    member_ref = mkchild(member_ref, MemberReference(idx=idx))
                 elif self.read_optional(Token.DOT):
                     member = self.parse_identifier()
-                    member_ref = MemberReference(parent=member_ref, name=member)
+                    member_ref = mkchild(member_ref,
+                                         MemberReference(name=member))
                 else:
                     break
                 read_designator = True

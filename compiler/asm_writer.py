@@ -21,6 +21,8 @@ class AsmWriter:
         self.write_line('.%s %s' % (name, value))
 
     def write_subroutine(self, name):
+        if name == '__setup__':
+            return
         self.write_line('%s:' % name)
         self.indent = 4
         self.sub = True
@@ -55,4 +57,4 @@ class AsmWriter:
             setup = '__setup__:\n    '
             setup += '\n    '.join(self._setup)
             setup += '\n\n'
-        return setup + self.output
+        return self.output + setup

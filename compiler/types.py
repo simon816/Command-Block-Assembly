@@ -8,10 +8,25 @@ class Type:
     def __repr__(self):
         return self.__str__()
 
+    @property
+    def raw(self):
+        return self
+
 class IntType(Type):
 
     def __init__(self):
         self.size = 1
+        self.suffix = ''
+
+class PartialIntType(IntType):
+
+    def __init__(self, suffix, size_bytes):
+        super().__init__()
+        self.suffix = suffix
+        self.s_bytes = size_bytes
+
+    def __str__(self):
+        return super().__str__() + '[%s]' % self.suffix
 
 class Pointer(Type):
 
@@ -30,6 +45,10 @@ class DecoratedType(Type):
         self.static = static
         self.const = const
 
+    @property
+    def raw(self):
+        return self.type
+
     def __str__(self):
         s = self.type.__str__()
         s += '[static=%s,const=%s]' % (self.static, self.const)
@@ -45,6 +64,16 @@ class ArrayType(Type):
     def __str__(self):
         return '%d*[%s]' % (self.arr_size, self.type)
 
+class FunctionType(Type):
+
+    def __init__(self, ret_type, param_types):
+        self.size = 0
+        self.type = ret_type
+        self.param_types = param_types
+
+    def __str__(self):
+        return self.type.__str__() + str(self.param_types)
+
 class VoidType(Type):
 
     def __init__(self):
@@ -56,13 +85,19 @@ class StructType(Type):
         self.members = members
         self.name_to_offset = {}
         self.name_to_type = {}
+        self.name_to_index = {}
+        self.index_to_name = {}
         offset = 0
+        idx = 0
         for member in members:
             type, name = member
             assert name not in self.name_to_type
             self.name_to_offset[name] = offset
             self.name_to_type[name] = type
+            self.index_to_name[idx] = name
+            self.name_to_index[name] = idx
             offset += type.size
+            idx += 1
         self.size = offset
 
     def __str__(self):
@@ -78,6 +113,8 @@ class Types:
     def __init__(self):
         self.types = {
             'int': IntType(),
+            'char': PartialIntType('B', 1),
+            'short': PartialIntType('W', 2),
             'void': VoidType()
         }
         self.structs = {}
@@ -119,7 +156,7 @@ class Types:
                 if is_array:
                     assert isinstance(decl.name_spec.dim, IntLiteral)
                     array_size = decl.name_spec.dim.val
-                type = self.effective(major, decl.pointer_depth, is_array, array_size)
+                type = self.effective(major, decl.pointer_depth, is_array, False, array_size)
                 name = self.get_name_for(decl.name_spec)
                 members.append((type, name))
         struct = StructType(members)
@@ -135,7 +172,8 @@ class Types:
         else:
             return spec.val
 
-    def effective(self, type, ptr, is_array, array_size=None):
+    def effective(self, type, ptr, is_array, is_function, array_size=None,
+                  func_params=None):
         for _ in range(ptr):
             type = Pointer(type)
         if is_array:
@@ -143,4 +181,6 @@ class Types:
                 type = Pointer(type) # TODO index offset
             else:
                 type = ArrayType(type, array_size)
+        if is_function:
+            type = FunctionType(type, tuple(func_params))
         return type

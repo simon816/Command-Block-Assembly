@@ -59,7 +59,7 @@ class ArrayDeclSpec(Node): props = ('name', 'dim')
 class FuncDeclSpec(Node): props = ('name', 'params')
 class StructSpec(Node): props = ('name', 'decl')
 class StructMemberDecl(Node): props = ('spec', 'decl')
-class MemberReference(Node): props = ('parent', 'idx', 'name')
+class MemberReference(Node): props = ('child', 'idx', 'name')
 class TypeName(Node): props = ('type', 'spec')
 
 class LabelledStmt(Statement): props = ('label', 'stmt')

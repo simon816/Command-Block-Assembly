@@ -72,23 +72,28 @@ class Preprocessor:
                     s = ''
                     end = start
                     arg_num = 0
-                    for c in line[start:]:
-                        end += 1
-                        if c == '(':
-                            brackets += 1
-                        elif c == ')':
-                            brackets -= 1
-                            if brackets == -1:
-                                break
-                        if brackets == 0:
-                            if c == ',':
-                                args.append(ParamStr(s, args, arg_num))
-                                s = ''
-                                arg_num += 1
-                                continue
-                        s += c
+                    while brackets != -1:
+                        for c in line[start:]:
+                            end += 1
+                            if c == '(':
+                                brackets += 1
+                            elif c == ')':
+                                brackets -= 1
+                                if brackets == -1:
+                                    break
+                            if brackets == 0:
+                                if c == ',':
+                                    args.append(ParamStr(s, args, arg_num))
+                                    s = ''
+                                    arg_num += 1
+                                    continue
+                            s += c
+                        if brackets != -1:
+                            start = end
+                            line += self.next_line()
                     args.append(ParamStr(s, args, arg_num))
                     line = line[:idx] + replacement.format(*args) + line[end:]
+                    line = line.replace('##', '') # needs ro be done properly
                     # Recursively substitute
                     line = self.substitute(line)
         return line
@@ -196,6 +201,8 @@ class Preprocessor:
         if params is None:
             self.replacements[name] = (idx, 'simple', replacement)
         else:
+            # Escape braces
+            replacement = replacement.replace('{', '{{').replace('}', '}}')
             params = self._get_params(params)
             for i in range(len(params)):
                 if params[i] == '...':
