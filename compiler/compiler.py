@@ -663,12 +663,18 @@ class CompilerVisitor(Visitor):
                 array_size = spec.name_spec.dim.val
         is_function = isinstance(spec.name_spec, FuncDeclSpec)
         params = None
+        is_varargs = False
         if is_function:
             params = []
             for param in spec.name_spec.params:
+                if isinstance(param, VarArgs):
+                    is_varargs = True
+                    break
                 params.append(self.get_effective_type(param.type, param.decl))
         ptr = spec.pointer_depth
-        return self.types.effective(major, ptr, is_array, is_function, array_size, params)
+        return self.types.effective(major, ptr,
+                                    is_array, is_function,
+                                    array_size, params, is_varargs)
 
     ### Statements
 
@@ -923,7 +929,8 @@ class CompilerVisitor(Visitor):
         assert func_symbol is not None, "Function name " + name + " does not exist"
         assert isinstance(func_symbol.type, FunctionType), name + " is not a function"
         func = func_symbol.type
-        assert len(expr.args) == len(func.param_types)
+        a_len, p_len = len(expr.args), len(func.param_types)
+        assert a_len == p_len or (func.is_varargs and a_len >= p_len)
         if func.type.size <= IR.ReturnRegister.type.size:
             ret_dest = IR.ReturnRegister
         else:

@@ -180,7 +180,7 @@ class Lexer:
             return Token.OP_BITNOT
 
         elif c == '.':
-            return Token.DOT
+            return self._maybe('..', Token.VARARG) or Token.DOT
 
         else:
             assert False, 'unknown operator %r' % c

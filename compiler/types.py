@@ -66,13 +66,17 @@ class ArrayType(Type):
 
 class FunctionType(Type):
 
-    def __init__(self, ret_type, param_types):
+    def __init__(self, ret_type, param_types, is_varargs):
         self.size = 0
         self.type = ret_type
         self.param_types = param_types
+        self.is_varargs = is_varargs
 
     def __str__(self):
-        return self.type.__str__() + str(self.param_types)
+        param_types = list(map(str, self.param_types))
+        if self.is_varargs:
+            param_types.append('...')
+        return '%s(%s)' % (self.type.__str__(), ', '.join(param_types))
 
 class VoidType(Type):
 
@@ -173,7 +177,7 @@ class Types:
             return spec.val
 
     def effective(self, type, ptr, is_array, is_function, array_size=None,
-                  func_params=None):
+                  func_params=None, is_varargs=False):
         for _ in range(ptr):
             type = Pointer(type)
         if is_array:
@@ -182,5 +186,5 @@ class Types:
             else:
                 type = ArrayType(type, array_size)
         if is_function:
-            type = FunctionType(type, tuple(func_params))
+            type = FunctionType(type, tuple(func_params), is_varargs)
         return type

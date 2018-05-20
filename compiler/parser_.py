@@ -119,9 +119,11 @@ class Parser:
             return name
 
     def parse_param_list(self):
-        # varargs would go here if supported
         params = [self.parse_param_decl()]
         while self.read_optional(Token.COMMA):
+            if self.read_optional(Token.VARARG):
+                params.append(VarArgs.INSTANCE)
+                break
             params.append(self.parse_param_decl())
         return params
 
