@@ -25,7 +25,9 @@ class Preprocessor:
     def __init__(self, input, filename):
         import os
         self.dirname = os.path.dirname(filename)
+        self.search_paths = [os.path.join(os.path.dirname(__file__), 'include')]
         self.lines = input.splitlines()
+        self.lines.insert(0, '#include <builtin.h>')
         self.lineptr = 0
         self.output = ''
         self.replacements = {}
@@ -124,10 +126,9 @@ class Preprocessor:
         if not self.block.output:
             return
         arg = arg.strip()
-        search = []
+        search = list(self.search_paths)
         if arg.startswith('<'):
             assert arg.endswith('>')
-            search.extend([]) # $PATH
             name = arg[1:-1]
         else:
             assert arg.startswith('"')
@@ -140,9 +141,6 @@ class Preprocessor:
             if os.path.exists(path):
                 self.include(path)
                 return
-        # builtins
-        if name in ['stdio.h']:
-            return
         assert False, "Not found %s" % name
 
     def include(self, path):
@@ -191,9 +189,9 @@ class Preprocessor:
         if not self.block.output:
             return
         import re
-        match = re.match('(\w+)\s*(\((?:\w+\s*,\s*)*(?:(?:\w+|\.\.\.))\s*\))?\s+(.+)', arg)
+        match = re.match('(\w+)\s*(\((?:\w+\s*,\s*)*(?:(?:\w+|\.\.\.))\s*\))?(?:\s+|$)(.*)', arg)
         if not match:
-            raise Exception('invalid #define')
+            raise Exception('invalid #define "%s"' % arg)
         name = match.group(1)
         params = match.group(2)
         replacement = match.group(3)

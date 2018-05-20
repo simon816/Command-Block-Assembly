@@ -22,8 +22,14 @@ class Compiler(IRVisitor):
         self.writer.write_instruction('MOV', '#0', '1')
         self.optimizer = Optimizer(self)
         visitor = CompilerVisitor(self.optimizer.handle_insn)
+        self.load_libs(visitor)
         visitor.visit_program(program)
         return self.writer.get_output()
+
+    def load_libs(self, visitor):
+        from .lib import libs
+        for lib_name, exports in libs.items():
+            visitor.import_py_lib(exports())
 
     def write_registers(self, *regs):
         for i in range(len(regs)):
@@ -465,11 +471,10 @@ class CompilerVisitor(Visitor):
         self.scope = ScopeManager()
         self.current_function = None
         self.loop_attacher = LoopAttacher(None, None, self, None)
-        self.python_functions = {
-            'printf': self.func_printf,
-            '__asm__': self.func_asm,
-            '__test_command': self.func_test,
-        }
+        self.python_functions = {}
+
+    def import_py_lib(self, lib_exports):
+        self.python_functions.update(lib_exports)
 
     def eliminate_offset(self, slot):
         if isinstance(slot, IR.SlotOffset):
@@ -923,14 +928,14 @@ class CompilerVisitor(Visitor):
 
     def visit_func_call_expr(self, expr):
         name = expr.ref.val
-        if name in self.python_functions:
-            return self.python_functions[name](expr)
         func_symbol = self.scope.lookup(name)
         assert func_symbol is not None, "Function name " + name + " does not exist"
         assert isinstance(func_symbol.type, FunctionType), name + " is not a function"
         func = func_symbol.type
         a_len, p_len = len(expr.args), len(func.param_types)
         assert a_len == p_len or (func.is_varargs and a_len >= p_len)
+        if name in self.python_functions:
+            return self.python_functions[name](self, expr)
         if func.type.size <= IR.ReturnRegister.type.size:
             ret_dest = IR.ReturnRegister
         else:
@@ -961,88 +966,6 @@ class CompilerVisitor(Visitor):
         self.emit(IR.Call(name))
         self.emit(IR.Pop(IR.StackPointer))
         return ret_dest
-
-    def func_printf(self, expr):
-        assert expr.args
-        tpl = self.visit_expression(expr.args[0])
-        assert isinstance(tpl, IR.LiteralString),\
-               "printf called with non-constant string"
-        args = self.string_format(tpl.val, expr.args[1:])
-        self.emit(IR.Print(tuple(map(self.eliminate_offset, args))))
-        return IR.ReturnRegister
-
-    def string_format(self, template, args):
-        ret = []
-        if template == '':
-            assert not args
-            return ['""']
-        section = template
-        ind = section.find('%')
-        while ind != -1 and args:
-            next = section[ind+1]
-            arg = self.visit_expression(args.pop(0))
-            if next == 's':
-                assert isinstance(arg, IR.LiteralString)
-            elif next == 'd':
-                pass # TODO assert type of integer
-            else:
-                assert False
-            if isinstance(arg, IR.LiteralString):
-                arg = self.quote(arg.val)
-            before = section[:ind]
-            if before:
-                ret.append(self.quote(before))
-            ret.append(arg)
-            section = section[ind+2:]
-            ind = section.find('%')
-        if ind == -1 and section:
-            ret.append(self.quote(section))
-        assert ind == -1 and not args
-        return ret
-
-    def quote(self, string):
-        return '"%s"' % string.replace('"', '\\"')
-
-    def func_asm(self, expr):
-        assert expr.args, "__asm__ takes at least 1 argument"
-        asm = self.visit_expression(expr.args[0])
-        assert isinstance(asm, IR.LiteralString),\
-               "__asm__ called with non-constant string"
-        asm = asm.val
-        idx = 1
-        elements = []
-        while True:
-            ind = asm.find('?')
-            if ind == -1:
-                break
-            arg = self.visit_expression(expr.args[idx])
-            idx += 1
-            start, end = ind, ind+1
-            is_dest, write_only = False, False
-            if ind > 0 and asm[ind - 1] == '>':
-                start -= 1
-                is_dest = True
-                if ind > 1 and asm[ind - 2] == '!':
-                    start -= 1
-                    write_only = True
-            before = asm[:start]
-            if before:
-                elements.append((before, None, None))
-            elements.append((self.eliminate_offset(arg), write_only, is_dest))
-            asm = asm[end:]
-        if asm:
-            elements.append((asm, None, None))
-        assert idx == len(expr.args)
-        self.emit(IR.Asm(args=tuple(elements)))
-
-    def func_test(self, expr):
-        assert len(expr.args) == 1, "__test_command takes 1 argument"
-        cmd = self.visit_expression(expr.args[0])
-        assert isinstance(cmd, IR.LiteralString),\
-               "__test_command called with non-constant string"
-        res = IR.Slot(self.type('int'))
-        self.emit(IR.Test(cmd.val, res))
-        return res
 
     def visit_var_expr(self, expr):
         var = self.scope.lookup(expr.val)

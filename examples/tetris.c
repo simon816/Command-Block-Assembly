@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "mclib.h"
 
 #define LOCATION 202 56 -33
