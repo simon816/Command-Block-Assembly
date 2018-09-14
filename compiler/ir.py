@@ -6,7 +6,7 @@ class IR:
 
     _counter = 0
 
-    FunctionBegin = namedtuple('FunctionBegin', 'name storage')
+    FunctionBegin = namedtuple('FunctionBegin', 'name storage pragma')
     FunctionEnd = namedtuple('FunctionEnd', '')
 
     Label = namedtuple('Label', 'label')

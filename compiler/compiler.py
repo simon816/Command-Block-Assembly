@@ -40,6 +40,13 @@ class Compiler(IRVisitor):
         self.insn_func_map[type(insn)](insn)
 
     def handle_fn_begin(self, insn):
+        if insn.pragma:
+            if 'event_handler' in insn.pragma:
+                handler = insn.pragma['event_handler']
+                conds = ';'.join(map(
+                    lambda i: '%s=%s' % i, handler['conditions'].items()))
+                self.writer.write_directive('event_handler', '%s %s %s' % (
+                    insn.name, handler['event_name'], conds))
         self.writer.write_subroutine(insn.name)
         self.func_name = insn.name
         self.func_store = insn.storage
@@ -472,6 +479,7 @@ class CompilerVisitor(Visitor):
         self.current_function = None
         self.loop_attacher = LoopAttacher(None, None, self, None)
         self.python_functions = {}
+        self.pragmas = {}
 
     def import_py_lib(self, lib_exports):
         self.python_functions.update(lib_exports)
@@ -525,6 +533,31 @@ class CompilerVisitor(Visitor):
         self.local_labels[label] += 1
         return IR.Label('%s_%d' %(label, self.local_labels[label]))
 
+    ### Pragmas
+
+    def visit_pragma(self, pragma):
+        name, args = pragma.val.split(' ', 1)
+        pragmas = {
+            'event_handler': self.visit_pragma_event_handler,
+            'event_condition': self.visit_pragma_event_condition,
+        }
+        assert name in pragmas, "Unknown pragma '%s'" % name
+        pragmas[name](args)
+
+    def visit_pragma_event_handler(self, event_name):
+        assert self.current_function is None, "event_handler must be outside of function"
+        assert 'event_handler' not in self.pragmas, "Multiple event handlers"
+        self.pragmas['event_handler'] = {
+            'event_name': event_name,
+            'conditions': {}
+        }
+
+    def visit_pragma_event_condition(self, condition):
+        assert 'event_handler' in self.pragmas, "Not in event_handler context"
+        key, operator, value = condition.split(' ', 2)
+        assert operator == '=='
+        self.pragmas['event_handler']['conditions'][key] = value
+
     ### Declarations
 
     def get_name_and_type(self, type, spec):
@@ -548,10 +581,16 @@ class CompilerVisitor(Visitor):
 
         self.local_labels = {}
 
+        pragma = {}
+        # check pragmas
+        if 'event_handler' in self.pragmas:
+            pragma['event_handler'] = self.pragmas['event_handler']
+            del self.pragmas['event_handler']
+
         # Enter function scope
         with self.scope:
             self.emit(IR.FunctionBegin(func_symbol.name,
-                                       self.scope.current_storage))
+                                       self.scope.current_storage, pragma))
 
             params = decl.decl.name_spec.params
             # Declare parameter symbols
@@ -647,7 +686,8 @@ class CompilerVisitor(Visitor):
                 child = mem_ref.child
             index, offset, v_type = read_next_element(list_type, index, mem_ref)
             if child is not None:
-                val = self.visit_list_init_data(v_type, [InitSpec(decl=child, val=init_spec.val)])
+                val = self.visit_list_init_data(v_type,
+                            [InitSpec(decl=child, val=init_spec.val)])
             elif type(init_spec.val) == list:
                 val = self.visit_list_init_data(v_type, init_spec.val)
             else:

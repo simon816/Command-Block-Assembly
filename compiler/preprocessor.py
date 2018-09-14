@@ -1,6 +1,8 @@
 from collections import namedtuple
 from .nodes import *
 
+import re
+
 ConditionalBlock = namedtuple('ConditionalBlock', 'parent source output skip_to_end')
 
 class ParamStr(str):
@@ -94,8 +96,9 @@ class Preprocessor:
                             start = end
                             line += self.next_line()
                     args.append(ParamStr(s, args, arg_num))
-                    line = line[:idx] + replacement.format(*args) + line[end:]
-                    line = line.replace('##', '') # needs ro be done properly
+                    replaced = replacement.format(*args)
+                    line = line[:idx] + replaced + line[end:]
+                    line = re.sub('\s*##\s*', '', line) # needs ro be done properly
                     # Recursively substitute
                     line = self.substitute(line)
         return line
@@ -116,6 +119,7 @@ class Preprocessor:
             'endif': self.handle_endif,
             'define': self.handle_define,
             'undef': self.handle_undef,
+            'pragma': self.handle_pragma,
         }
         func = dir_map.get(directive)
         if func is None:
@@ -188,7 +192,6 @@ class Preprocessor:
     def handle_define(self, arg):
         if not self.block.output:
             return
-        import re
         match = re.match('(\w+)\s*(\((?:\w+\s*,\s*)*(?:(?:\w+|\.\.\.))\s*\))?(?:\s+|$)(.*)', arg)
         if not match:
             raise Exception('invalid #define "%s"' % arg)
@@ -226,7 +229,6 @@ class Preprocessor:
     def evaluate(self, expr):
         from .lexer import Lexer
         from .parser_ import Parser
-        import re
         # Convert "defined var" into "__defined__(__no_def_var__)"
         expr = re.sub('defined\s+(\w+)', r'__defined__(__no_def_\1__)', expr)
         expr = Parser(Lexer(self.substitute(expr))).parse_constant_expr()
@@ -293,6 +295,9 @@ class Preprocessor:
         if not self.block.output:
             return
         pass
+
+    def handle_pragma(self, arg):
+        self.append("_Pragma(%s)" % ParamStr(arg, None, None).escape)
 
     def next_line(self):
         line = self.lines[self.lineptr]

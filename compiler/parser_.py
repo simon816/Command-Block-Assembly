@@ -15,6 +15,13 @@ class Parser:
         return stmts
 
     def parse_external_decl(self):
+        if self.lexer.next.type == Token.Type.IDENTIFIER:
+            if self.lexer.next.val == '_Pragma':
+                self.next()
+                self.read(Token.OPEN_PAREN)
+                pragma = self.parse_string()
+                self.read(Token.CLOSE_PAREN)
+                return Pragma(val=pragma.val)
         # TODO using exceptions is bad
         pos, next = self.lexer.ptr, self.lexer.next
         try:
@@ -616,7 +623,8 @@ class Parser:
 
     def parse_identifier(self):
         token = self.lexer.next_token()
-        assert token.type == Token.Type.IDENTIFIER
+        assert token.type == Token.Type.IDENTIFIER, \
+               'expected identifier, got %r' % token.val
         return IdentifierExpr(val=token.val)
 
     def parse_number(self):

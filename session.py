@@ -1,5 +1,6 @@
 import os
 from commands import *
+from datapack import Advancement
 from placer import CommandPlacer
 
 class Scope:
@@ -180,6 +181,36 @@ class Session:
                         print('branch >', cmd2)
                 print()
 
+    def add_event_handler(self, event_name, conditions, handler):
+        if event_name == 'minecraft:tick':
+            assert not conditions
+            self.writer.write_tag('functions', 'tick', [
+                self.scope.function_name(handler)
+            ], namespace='minecraft')
+            if self.print_debug:
+                print('Tag')
+                print('Tick handler:', handler)
+                print()
+            return
+        # TODO refactor
+        trampoline = handler + '_trampoline'
+        self.scope.add_function_names((trampoline,))
+        fn_name = self.scope.function_name(trampoline)
+        adv = Advancement('adv_' + handler)
+        adv.event_criteria(handler, event_name, conditions)
+        adv.reward_function(fn_name)
+        self.writer.write_advancement(adv)
+        if self.print_debug:
+            print('Advancement', adv.name)
+            print(adv.to_json())
+            print()
+        trampoline_seq = Subsequence()
+        trampoline_seq.add_command(SimpleResolve('advancement', 'revoke', '@s',
+                 'only', self.scope.namespace + ':' + adv.name))
+        trampoline_seq.add_command(Function(handler))
+        self.add_subsequence(trampoline, trampoline_seq)
+
+
     def set_setup_hook(self, hook):
         self.setup_hook = hook
 
@@ -228,50 +259,3 @@ class Session:
             print()
         return (Function(setup).resolve(self.scope),
                 Function(cleanup).resolve(self.scope))
-
-class FunctionWriter:
-
-    def __init__(self, world_directory, namespace):
-        self.func_dir = os.path.join(world_directory,
-                                     'data', namespace, 'functions')
-        self.func_count = 0
-        self.command_count = 0
-
-    def write_function(self, name_parts, command_list):
-        name = self.sanitize_name(name_parts)
-        file = os.path.join(self.func_dir, name + '.mcfunction')
-        try:
-            os.makedirs(os.path.dirname(file))
-        except FileExistsError as e:
-            pass
-        with open(file, 'w', encoding='utf8') as f:
-            for command in command_list:
-                f.write(command)
-                f.write('\n')
-        self.func_count += 1
-        self.command_count += len(command_list)
-
-    def sanitize_name(self, parts):
-        return parts # TODO
-
-    def empty_directory(self):
-        import shutil
-        try:
-            for file in os.listdir(self.func_dir):
-                path = os.path.join(self.func_dir, file)
-                if os.path.isfile(path):
-                    os.remove(path)
-                else:
-                    shutil.rmtree(path)
-        except FileNotFoundError as e:
-            pass
-
-class DummyWriter:
-
-    def __init__(self):
-        self.func_count = 0
-        self.command_count = 0
-
-    def write_function(self, name_parts, command_list):
-        self.func_count += 1
-        self.command_count += len(command_list)

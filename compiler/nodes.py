@@ -103,6 +103,8 @@ class Literal(Expression): props = ('val',)
 class IntLiteral(Literal): pass
 class StringLiteral(Literal): pass
 
+class Pragma(Node): props = ('val',)
+
 class Token:
 
     class Type:

@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from session import FunctionWriter, DummyWriter
+from datapack import DataPackWriter, DummyWriter
 from placer import Rel
 
 from compiler.asm_extensions import CompilerSession, ExtendedAssembler
@@ -14,6 +14,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('file', help="C File", type=argparse.FileType('r'))
     parser.add_argument('--world-dir', help="World Directory")
+    parser.add_argument('--as_zip', action='store_true', help="Write datapack as zip file")
     parser.add_argument('--namespace', help="Function namespace", default='c_generated')
     parser.add_argument('--rem-existing', help="Remove existing functions in namespace",
                         action='store_true')
@@ -52,17 +53,19 @@ if __name__ == '__main__':
     x, y, z = map(parse_pos, args.place_location.split(',', 3))
 
     if args.world_dir:
-        world_dir = os.path.realpath(args.world_dir)
-        writer = FunctionWriter(world_dir, args.namespace)
+        data_dir = os.path.join(os.path.realpath(args.world_dir), 'datapacks')
+        writer = DataPackWriter(data_dir, args.namespace, args.as_zip)
         if args.rem_existing:
-            writer.empty_directory()
+            writer.delete_existing()
     else:
         writer = DummyWriter()
+    writer.open()
 
     session = CompilerSession((x, y, z), writer, args.namespace, stack_size=args.stack,
                       args=sargs, debug=args.debug, page_size=args.page_size)
     assembler.write_to_session(session)
     setup, cleanup = session.create_up_down_functions()
+    writer.close()
     print('Generated', writer.command_count, 'commands in',
           writer.func_count, 'functions')
     print('== Setup command ==')

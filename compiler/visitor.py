@@ -42,7 +42,13 @@ class Visitor:
 
     def visit_program(self, program):
         for decl in program:
+            if isinstance(decl, Pragma):
+                self.visit_pragma(decl)
+                continue
             self.visit_declaration(decl)
+
+    def visit_pragma(self, pragma):
+        pass
 
     def visit_declaration(self, decl):
         if isinstance(decl, Declaration):

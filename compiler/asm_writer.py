@@ -16,9 +16,14 @@ class AsmWriter:
             self.write_instruction(*args)
         elif type == 'local_subroutine':
             self.write_local_sub(*args)
+        elif type == 'directive':
+            self.write_directive(*args)
 
     def write_constant(self, name, value):
         self.write_line('.%s %s' % (name, value))
+
+    def write_directive(self, name, value):
+        self.write_line('#%s %s' % (name, value))
 
     def write_subroutine(self, name):
         if name == '__setup__':
