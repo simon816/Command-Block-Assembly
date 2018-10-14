@@ -212,8 +212,8 @@ class Preprocessor:
                     replacement = replacement.replace('__VA_ARGS__',
                                                       '{%d.remainder}' % i)
                     continue
-                replacement = re.sub(r'(\b|^)#%s(\b|$)' % params[i],
-                                     '{%d.escape}' % i, replacement)
+                replacement = re.sub(r'(\W|^)#%s(\b|$)' % params[i],
+                                     '\\1{%d.escape}' % i, replacement)
                 replacement = re.sub(r'(\b|^)%s(\b|$)' % params[i],
                                      '{%d}' % i, replacement)
 

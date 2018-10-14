@@ -60,6 +60,11 @@ class AsmReader:
             const = self.next_constant()
             self.end_of_line()
             return const
+        elif char == '@':
+            self.skip(1)
+            ent_local = self.next_entity_local()
+            self.end_of_line()
+            return ent_local
         elif char == '_':
             self.skip(1)
             return self.next_local_label()
@@ -105,6 +110,10 @@ class AsmReader:
         self.read_whitespace()
         value = self.read_ref()
         return ('const', (name, value))
+
+    def next_entity_local(self):
+        name = self.read_symbol()
+        return ('entity_local', name)
 
     def next_local_label(self):
         return ('local_label', self.read_label())

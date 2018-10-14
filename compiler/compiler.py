@@ -20,6 +20,7 @@ class Compiler(IRVisitor):
                              *(self.temp_registers + list(self.volatile_reg)))
         self.writer.write_instruction('MOV', '#0', '0')
         self.writer.write_instruction('MOV', '#0', '1')
+        self.entity_locals = {}
         self.optimizer = Optimizer(self)
         visitor = CompilerVisitor(self.optimizer.handle_insn)
         self.load_libs(visitor)
@@ -60,6 +61,10 @@ class Compiler(IRVisitor):
 
     def handle_label(self, insn):
         self.writer.write_local_sub(insn.label)
+
+    def handle_entity_local(self, insn):
+        self.entity_locals[insn.offset] = insn.name
+        self.writer.write_entity_local(insn.name)
 
     def handle_jump(self, insn):
         self.writer.write_instruction('JMP',  self.label(insn.dest))
@@ -182,8 +187,8 @@ class Compiler(IRVisitor):
             self.writer.write_instruction(opcode, right, tmp_ref)
             self._write_relative_move(tmp_ref, None, d_ref, d_off)
             self.free_slot(tmp_slot)
-        elif insn.op in [IR.Op.Eq, IR.Op.Neq, IR.Op.Lt,
-                         IR.Op.Gt, IR.Op.LtEq, IR.Op.GtEq]:
+        elif insn.op.__class__ in map(lambda o:o.__class__, [IR.Op.Eq,
+                    IR.Op.Neq, IR.Op.Lt, IR.Op.Gt, IR.Op.LtEq, IR.Op.GtEq]):
             jmpcode = {
                 IR.Op.Eq.__class__: 'JE',
                 IR.Op.Neq.__class__: 'JNE',
@@ -202,7 +207,17 @@ class Compiler(IRVisitor):
             self._write_relative_move('#0', None, dest, dest_off)
             self.writer.write_local_sub(lbl)
         elif insn.op is IR.Op.LogAnd:
-            assert False, str(insn)
+            left = self.get_final_location(insn.left)
+            right = self.get_final_location(insn.right)
+            dest, dest_off = self.get_effective_location(insn.dest)
+            self._write_relative_move('#0', None, dest, dest_off)
+            self.writer.write_instruction('CMP', left, '#0')
+            lbl = 'and_end_%d' % abs(hash(insn)) # TODO
+            self.writer.write_instruction('JE', '_' + lbl)
+            self.writer.write_instruction('CMP', right, '#0')
+            self.writer.write_instruction('JE', '_' + lbl)
+            self._write_relative_move('#1', None, dest, dest_off)
+            self.writer.write_local_sub(lbl)
         elif insn.op is IR.Op.LogOr:
             assert False, str(insn)
         else:
@@ -323,6 +338,8 @@ class Compiler(IRVisitor):
             return base, 0
         if isinstance(ref, IR.GlobalSlot):
             return None, ref.offset
+        if isinstance(ref, IR.EntityLocalSlot):
+            return self.entity_locals[ref.offset], None
         assert False, "Don't know how to handle " + str(ref)
 
     def __next_volatile(self):
@@ -414,12 +431,23 @@ class LocalStorage(Storage):
     def relative_base(self):
         return IR.StackPointer
 
+class EntityLocalStorage(Storage):
+
+    def __str__(self):
+        return 'EntityLocal'
+
+    @property
+    def relative_base(self):
+        return IR.EntityLocalBase
+
 class ScopeManager:
 
-    def __init__(self):
+    def __init__(self, compiler):
+        self.compiler = compiler
         self.global_table = SymbolTable()
         self.current_table = self.global_table
         self.global_storage = GlobalStorage()
+        self.entity_local_storage = EntityLocalStorage()
         self.current_storage = self.global_storage
 
     def __enter__(self):
@@ -443,7 +471,13 @@ class ScopeManager:
         return self.current_table.lookup(name)
 
     def declare_symbol(self, name, type, can_redeclare=False):
-        return self.current_table.declare(name, type, self.store(type),
+        if type is self.compiler.types.types['entity_local']:
+            # hijack entity_local
+            unit = self.entity_local_storage.insert(type)
+            self.compiler.emit(IR.EntityLocalVar(name, unit.offset))
+        else:
+            unit = self.store(type)
+        return self.current_table.declare(name, type, unit,
                                           can_redeclare)
 
     def store(self, type):
@@ -475,7 +509,9 @@ class CompilerVisitor(Visitor):
         super().__init__()
         self.on_instruction = on_instruction
         self.types = Types()
-        self.scope = ScopeManager()
+        self.types.add_type('entity_local', DecoratedType(IntType(),
+                    static=True, const=False))
+        self.scope = ScopeManager(self)
         self.current_function = None
         self.loop_attacher = LoopAttacher(None, None, self, None)
         self.python_functions = {}
@@ -489,6 +525,9 @@ class CompilerVisitor(Visitor):
             if slot.base is IR.GlobalIndex:
                 assert isinstance(slot.offset, IR.LiteralInt), str(slot)
                 return IR.GlobalSlot(slot.offset.val, slot.type)
+            if slot.base is IR.EntityLocalBase:
+                assert isinstance(slot.offset, IR.LiteralInt), str(slot)
+                return IR.EntityLocalSlot(slot.offset.val, slot.type)
             base = self.eliminate_offset(slot.base)
             if isinstance(base, IR.GlobalSlot):
                 assert isinstance(slot.offset, IR.LiteralInt), str(slot)

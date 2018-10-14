@@ -19,6 +19,11 @@ class Scope:
             var = var[0]
         return self.trim(self.namespace + '_' + var % args)
 
+    def entity_local(self, name):
+        name = 'el_%s' % name
+        self.variables[name] = name
+        return self.variable(name)
+
     def memory(self, orig):
         self.mem_locs[orig] = True
         return self.trim('%s_x%x' % (self.namespace, orig))

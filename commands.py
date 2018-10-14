@@ -49,7 +49,9 @@ class Resolvable(metaclass=abc.ABCMeta):
         pass
 
 class Ref(Resolvable):
-    pass
+
+    def selector(self, where):
+        return ETagSelector(where)
 
 class Var(Ref):
     def __init__(self, nameref, *args):
@@ -65,6 +67,16 @@ class Mem(Ref):
 
     def resolve(self, scope):
         return scope.memory(self.loc)
+
+class EntityLocal(Ref):
+    def __init__(self, name):
+        self.name = name
+
+    def resolve(self, scope):
+        return scope.entity_local(self.name)
+
+    def selector(self, where):
+        return Selector('s', where)
 
 class SimpleResolve(Resolvable):
 
@@ -101,14 +113,29 @@ def make_selector(selector, **kwargs):
 
 class Selector(Resolvable):
 
-    def __init__(self, where):
+    def __init__(self, type, where):
+        self.type = type
         self.where = where
 
-    def resolve(self, scope):
-        where = {} if not self.where else self.where.resolve(scope)
-        return make_selector('e', tag=scope.entity_tag, limit=1, **where)
+    def resolve_params(self, scope):
+        if not self.where:
+            return {}
+        return self.where.resolve(scope)
 
-EntityTag = Selector(None)
+    def resolve(self, scope):
+        return make_selector(self.type, **self.resolve_params(scope))
+
+class ETagSelector(Selector):
+
+    def __init__(self, where):
+        super().__init__('e', where)
+
+    def resolve_params(self, scope):
+        where = super().resolve_params(scope)
+        where.update(tag=scope.entity_tag, limit=1)
+        return where
+
+EntityTag = ETagSelector(None)
 
 class Path(Resolvable):
 
@@ -161,6 +188,10 @@ class Execute(Command):
         return 'execute %s run %s' % (self.chain.resolve(scope),
                                       self.command.resolve(scope))
 
+def ensure_selector(sel_arg):
+    return sel_arg.as_selector() if isinstance(sel_arg, SelectorArgs) \
+           else sel_arg
+
 class ExecuteChain:
 
     def __init__(self):
@@ -188,7 +219,7 @@ class ExecuteChain:
         return ExecuteChain().cond('if').where(cond)
 
     def where(self, select_arg):
-        return self.add('as', Selector(select_arg))
+        return self.add('as', ensure_selector(select_arg))
 
     def cond(self, cond_type):
         return ExecuteChain.Cond(self, cond_type)
@@ -203,7 +234,7 @@ class ExecuteChain:
             self.cond_type = cond_type
 
         def where(self, select_arg):
-            return self.add('entity', Selector(select_arg))
+            return self.add('entity', ensure_selector(select_arg))
 
         def score(self, target, t_objective, operator, source, s_objective):
             return self.add('score', target, t_objective, operator, source,
@@ -225,18 +256,20 @@ class ExecuteChain:
             self.store_type = store_type
 
         def score(self, name, objective):
-            return self.add('score', name, objective)
+            return self.add('score', ensure_selector(name), objective)
 
-        def entity(self, data_type):
-            return self.add('entity', EntityTag, Path(data_type), data_type, 1)
+        def entity(self, target, data_type):
+            return self.add('entity', ensure_selector(target), \
+                            Path(data_type), data_type, 1)
 
 class DataGet(Command):
 
-    def __init__(self, path):
+    def __init__(self, target, path):
+        self.target = target
         self.path = Path(path)
 
     def resolve(self, scope):
-        return 'data get entity %s %s' % (EntityTag.resolve(scope),
+        return 'data get entity %s %s' % (self.target.resolve(scope),
                                           self.path.resolve(scope))
 
 class Function(Command):
@@ -290,7 +323,7 @@ class Scoreboard(Command):
         assert self.allows_negative or value >= 0
         self.var = varref
         self.value = value
-        self.selector = Selector(where)
+        self.selector = varref.selector(where)
 
     def resolve(self, scope):
         return 'scoreboard players %s %s %s %d' % (
@@ -331,13 +364,13 @@ class Operation(Command):
         assert isinstance(right, Ref)
         self.left = left
         self.right = right
-        self.selector = Selector(where)
+        self.left_sel = left.selector(where)
+        self.right_sel = right.selector(where)
 
     def resolve(self, scope):
-        selector = self.selector.resolve(scope)
         return 'scoreboard players operation %s %s %s %s %s' % (
-            selector, self.left.resolve(scope), self.op,
-            selector, self.right.resolve(scope))
+            self.left_sel.resolve(scope), self.left.resolve(scope), self.op,
+            self.right_sel.resolve(scope), self.right.resolve(scope))
 
 
 class OpAssign(Operation): op = '='
@@ -351,7 +384,16 @@ class OpIfGt(Operation): op = '>'
 class OpSwap(Operation): op = '><'
 
 class SelectorArgs(Resolvable):
-    pass
+
+    def as_selector(self):
+        return ETagSelector(self)
+
+class SimpleSelectorArgs(SelectorArgs):
+    def __init__(self, args):
+        self.args = args
+
+    def resolve(self, scope):
+        return dict(self.args)
 
 class SelRange(SelectorArgs):
     def __init__(self, varref, min=None, max=None):
@@ -360,6 +402,9 @@ class SelRange(SelectorArgs):
         self.var = varref
         self.min = min
         self.max = max
+
+    def as_selector(self):
+        return self.var.selector(self)
 
     def resolve(self, scope):
         name = self.var.resolve(scope)

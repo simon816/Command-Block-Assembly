@@ -10,6 +10,7 @@ class IR:
     FunctionEnd = namedtuple('FunctionEnd', '')
 
     Label = namedtuple('Label', 'label')
+    EntityLocalVar = namedtuple('EntityLocalVar', 'name offset')
 
     Jump = namedtuple('Jump', 'dest')
     JumpIf = namedtuple('JumpIf', 'dest cond')
@@ -30,10 +31,12 @@ class IR:
     StackPointer = namedtuple('StackPointer', 'type')(IntType())
     BasePointer = namedtuple('BasePointer', 'type')(IntType())
     GlobalIndex = namedtuple('GlobalIndex', 'type')(IntType())
+    EntityLocalBase = namedtuple('EntityLocalBase', 'type')(IntType())
     ReturnRegister = namedtuple('ReturnRegister', 'type')(IntType())
 
     SlotOffset = namedtuple('SlotOffset', 'base offset type')
     GlobalSlot = namedtuple('GlobalSlot', 'offset type')
+    EntityLocalSlot = namedtuple('EntityLocalSlot', 'offset type')
     Dereference = namedtuple('Dereference', 'addr type')
     Free = namedtuple('Free', 'slot')
 
@@ -120,6 +123,7 @@ class IRVisitor:
             IR.FunctionBegin: self.handle_fn_begin,
             IR.FunctionEnd: self.handle_fn_end,
             IR.Label: self.handle_label,
+            IR.EntityLocalVar: self.handle_entity_local,
             IR.Jump: self.handle_jump,
             IR.JumpIf: self.handle_jump_if,
             IR.JumpIfNot: self.handle_jump_if_not,
@@ -152,6 +156,9 @@ class IRVisitor:
         self.emit(insn)
 
     def handle_label(self, insn):
+        self.emit(insn)
+
+    def handle_entity_local(self, insn):
         self.emit(insn)
 
     def handle_jump(self, insn):

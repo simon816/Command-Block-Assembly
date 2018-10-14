@@ -45,6 +45,8 @@ class Assembler:
             if token == 'const':
                 name, ref = arg
                 self.define_const(name, self.resolve_ref(*ref))
+            elif token == 'entity_local':
+                self.define_entity_local(arg)
             elif token == 'label':
                 self.handle_label(arg)
             elif token == 'instruction':
@@ -69,6 +71,9 @@ class Assembler:
         if name in self.constants:
             raise RuntimeError('Constant %r already defined' % name)
         self.constants[name] = value
+
+    def define_entity_local(self, name):
+        self.define_const(name, EntityLocal(name))
 
     def get_const(self, name):
         return self.constants[name]
@@ -180,11 +185,11 @@ class Assembler:
         }[type]
         # store result of cmd into nbt of the specified type
         self.add_command(ExecuteChain() \
-                         .store('result').entity(data_type).run(cmd))
+                         .store('result').entity(EntityTag, data_type).run(cmd))
         # move nbt value back out to scoreboard
         self.add_command(ExecuteChain() \
                          .store('result').score(EntityTag, dest) \
-                         .run(DataGet(data_type)))
+                         .run(DataGet(EntityTag, data_type)))
 
 
     def handle_directive(self, directive, value):

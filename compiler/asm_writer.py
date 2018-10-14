@@ -25,6 +25,9 @@ class AsmWriter:
     def write_directive(self, name, value):
         self.write_line('#%s %s' % (name, value))
 
+    def write_entity_local(self, name):
+        self.write_line('@%s' % name)
+
     def write_subroutine(self, name):
         if name == '__setup__':
             return
