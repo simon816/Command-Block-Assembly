@@ -10,8 +10,17 @@ class Parser:
 
     def parse_program(self):
         stmts = []
-        while self.lexer.next != Token.EOF:
-            stmts.append(self.parse_external_decl())
+        try:
+            while self.lexer.next != Token.EOF:
+                stmts.append(self.parse_external_decl())
+        except AssertionError as e:
+            c = self.lexer.code
+            p = self.lexer.ptr
+            prev = c[:p]
+            line_start = prev[prev.rindex('\n'):]
+            line_end = c[p:c.index('\n', p)]
+            raise SyntaxError(e, ('input.c', prev.count('\n') + 1,
+                                  len(line_start), line_start+line_end))
         return stmts
 
     def parse_external_decl(self):
@@ -276,6 +285,12 @@ class Parser:
                 next_next = self.lexer.next_next()
                 if next_next == Token.COLON:
                     return self.parse_label_stmt()
+                if next.val == '_Pragma':
+                    self.next()
+                    self.read(Token.OPEN_PAREN)
+                    pragma = self.parse_string()
+                    self.read(Token.CLOSE_PAREN)
+                    return Pragma(val=pragma.val)
             stmt = ExpressionStmt(expr=self.parse_expression())
             self.read(Token.SEMICOLON)
             return stmt

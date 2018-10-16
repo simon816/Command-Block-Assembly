@@ -221,7 +221,39 @@ class ExecuteChain:
     def where(self, select_arg):
         return self.add('as', ensure_selector(select_arg))
 
+    def at(self, select_arg):
+        return self.add('at', ensure_selector(select_arg))
+
+    def at_pos(self, pos):
+        return self.add('positioned', pos)
+
+    def at_entity_pos(self, select_arg):
+        return self.add('positioned', 'as', ensure_selector(select_arg))
+
+    def align(self, axes):
+        assert [axis for axis in axes if axis in 'xyz']
+        return self.add('align', axes)
+
+    def facing(self, pos):
+        return self.add('facing', pos)
+
+    def facing_entity(self, select_arg, feature):
+        assert feature == 'eyes' or feature == 'feet'
+        return self.add('facing', 'entity', ensure_selector(select_arg), \
+                        feature)
+
+    def rotated(self, y, x):
+        return self.add('rotated', y, x)
+
+    def rotated_as_entity(self, select_arg):
+        return self.add('rotated', 'as', ensure_selector(select_arg))
+
+    def anchored(self, anchor):
+        assert anchor == 'feet' or anchor == 'eyes'
+        return self.add('anchored', anchor)
+
     def cond(self, cond_type):
+        assert cond_type == 'if' or cond_type == 'unless'
         return ExecuteChain.Cond(self, cond_type)
 
     class Cond:
@@ -420,6 +452,25 @@ class SelRange(SelectorArgs):
 class SelEquals(SelRange):
     def __init__(self, varref, value):
         super(SelEquals, self).__init__(varref, value, value)
+
+class ComboSelectorArgs(SelectorArgs):
+    def __new__(cls, first, second):
+        if first is None: return second
+        if second is None: return first
+        return SelectorArgs.__new__(cls)
+
+    def __init__(self, first, second):
+        self.first = first
+        self.second = second
+
+    def as_selector(self):
+        raise TypeError('Cannot get ComboSelectorArgs as a selector')
+
+    def resolve(self, scope):
+        sel = {}
+        sel.update(self.first.resolve(scope))
+        sel.update(self.second.resolve(scope))
+        return sel
 
 class LabelledSequence(CommandSequence):
     def __init__(self, label, varname='func_pointer'):

@@ -5,7 +5,9 @@ class AsmWriter:
         self.indent = 0
         self.sub = False
         self._setup = []
+        self.after_sub = []
 
+    # TODO unused
     def write_statement(self, stmt):
         type, *args = stmt
         if type == 'constant':
@@ -39,6 +41,12 @@ class AsmWriter:
         self.indent = 0
         self.write_line('')
         self.sub = False
+        for after in self.after_sub:
+            self.output += after
+        self.after_sub = []
+
+    def write_after_subroutine(self, block):
+        self.after_sub.append(block)
 
     def write_instruction(self, insn, *args, comment=None, raw=False):
         if raw:
@@ -60,6 +68,7 @@ class AsmWriter:
         self.output += (' ' * self.indent) + line + '\n'
 
     def get_output(self):
+        assert not self.sub
         setup = ''
         if self._setup:
             setup = '__setup__:\n    '

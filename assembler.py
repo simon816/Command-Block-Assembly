@@ -260,6 +260,18 @@ class Assembler:
             'CMD': self.handle_cmd,
             'TEST': self.handle_test_cmd,
 
+            'EXECAS': self.handle_execute_as,
+            'EXECASN': self.handle_execute_as_not,
+            'EXECAT': self.handle_execute_at,
+            'EXECATP': self.handle_execute_at_position,
+            'EXECPOS': self.handle_execute_position,
+            'EXECALI': self.handle_execute_align,
+            'EXECFACP': self.handle_execute_face_pos,
+            'EXECFAC': self.handle_execute_face_entity,
+            'EXECROT': self.handle_execute_rotate,
+            'EXECROTE': self.handle_execute_rotate_entity,
+            'EXECANC': self.handle_execute_anchor,
+
             'PUSH': self.handle_push,
             'POP': self.handle_pop,
 
@@ -675,6 +687,106 @@ void OP(int src, int *dest) {
 
     def handle_cmd(self, cmd):
         self.add_command(Cmd(cmd))
+
+    def _read_selector(self, sel_type, pairs):
+        assert sel_type[0] == 'string'
+        assert len(pairs) % 2 == 0
+        simple = {}
+        sel_args = None
+        for i in range(0, len(pairs), 2):
+            key_type, key = pairs[i]
+            val_type, val = pairs[i + 1]
+            assert val_type == 'string'
+            if key_type == 'string':
+                simple[key] = val
+            elif key_type == 'symbol':
+                # Special case where an entity local can be queried
+                var = self.get_const(key)
+                assert isinstance(var, EntityLocal)
+                min, max = map(lambda v: int(v) if v else None, val.split('..')) \
+                           if '..' in val else [int(val)]*2
+                sel_args = ComboSelectorArgs(sel_args, SelRange(var, min, max))
+            else:
+                assert False, "Bad key type: " + pairs[i]
+        if simple:
+            sel_args = ComboSelectorArgs(sel_args, SimpleSelectorArgs(simple))
+        return Selector(sel_type[1], sel_args)
+
+    def _read_pos(self, x, y, z):
+        coords = []
+        for coord in (x, y, z):
+            type_, val = coord
+            if type_ == 'string':
+                assert val, "Empty string"
+                assert val[0] in '~^', "Invalid pos string '%s'" % val
+                if len(val) > 1:
+                    # check it can parse as a float
+                    float(val[1:])
+            else:
+                ref = self.resolve_ref(type_, val)
+                assert type(ref) == int, "Unknown type %s %s" % (type(ref), ref)
+                val = ref
+            coords.append(val)
+        return Pos(*coords)
+
+    def _execute_chain_helper(self, lbl, chain):
+        arg_type, symbol = lbl
+        assert arg_type == 'symbol'
+        exec_func = self.symbol_to_func(symbol)
+        self.add_command(chain.run(Function(exec_func)))
+
+    def do_execute_as(self, lbl, sel_type, pairs, inverse):
+        chain = ExecuteChain()
+        if inverse:
+            chain = chain.cond('unless')
+        selector = self._read_selector(sel_type, pairs)
+        self._execute_chain_helper(lbl, chain.where(selector))
+
+    def handle_execute_as(self, lbl, sel_type, *pairs):
+        self.do_execute_as(lbl, sel_type, pairs, False)
+
+    def handle_execute_as_not(self, lbl, sel_type, *pairs):
+        self.do_execute_as(lbl, sel_type, pairs, True)
+
+    def handle_execute_at(self, lbl, sel_type, *pairs):
+        self._execute_chain_helper(lbl, ExecuteChain().at(
+            self._read_selector(sel_type, pairs)))
+
+    def handle_execute_at_position(self, lbl, sel_type, *pairs):
+        self._execute_chain_helper(lbl, ExecuteChain().at_entity_pos(
+            self._read_selector(sel_type, pairs)))
+
+    def handle_execute_position(self, lbl, x, y, z):
+        self._execute_chain_helper(lbl, ExecuteChain().at_pos(
+            self._read_pos(x, y, z)))
+
+    def handle_execute_align(self, lbl, axes):
+        arg_type, axes = axes
+        assert arg_type == 'string'
+        self._execute_chain_helper(lbl, ExecuteChain().align(axes))
+
+    def handle_execute_face_pos(self, lbl, x, y, z):
+        self._execute_chain_helper(lbl, ExecuteChain().facing(
+            self._read_pos(x, y, z)))
+
+    def handle_execute_face_entity(self, lbl, sel_type, *pairs):
+        self._execute_chain_helper(lbl, ExecuteChain().facing_entity(
+            self._read_selector(sel_type, pairs)))
+
+    def handle_execute_rotate(self, lbl, y, x):
+        y, x = self.resolve_ref(*y), self.resolve_ref(*x)
+        assert type(y) == int
+        assert type(x) == int
+        self._execute_chain_helper(lbl, ExecuteChain().rotated(y, x))
+
+    def handle_execute_rotate_entity(self, lbl, sel_type, *pairs):
+        self._execute_chain_helper(lbl, ExecuteChain().rotated_as_entity(
+            self._read_selector(sel_type, pairs)))
+
+    def handle_execute_anchor(self, lbl, anchor):
+        arg_type, anchor = anchor
+        assert arg_type == 'string'
+        self._execute_chain_helper(lbl, ExecuteChain().anchored(anchor))
 
     def handle_push(self):
         self.add_command(Function('stack_push_0'))

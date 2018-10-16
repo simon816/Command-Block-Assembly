@@ -70,6 +70,8 @@ class Scope:
             if val not in self.args:
                 raise KeyError('Missing argument %r, use --arg' % val)
             return self.args[val]
+        elif param == 'entity_local':
+            return self.entity_local(val)
         else:
             raise KeyError('unknown command argument %s' % param)
 

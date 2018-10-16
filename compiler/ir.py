@@ -27,6 +27,9 @@ class IR:
     Sync = namedtuple('Sync', '')
     Test = namedtuple('Test', 'cmd dest')
     Asm = namedtuple('Asm', 'args')
+    ExecSel = namedtuple('ExecSel', 'label exec_type sel_type args')
+    ExecEnd = namedtuple('ExecSelEnd', 'label')
+    ExecChain = namedtuple('ExecChain', 'label exec_type args')
 
     StackPointer = namedtuple('StackPointer', 'type')(IntType())
     BasePointer = namedtuple('BasePointer', 'type')(IntType())
@@ -135,6 +138,9 @@ class IRVisitor:
             IR.Sync: self.handle_sync,
             IR.Test: self.handle_test,
             IR.Asm: self.handle_asm,
+            IR.ExecSel: self.handle_exec_sel,
+            IR.ExecEnd: self.handle_exec_end,
+            IR.ExecChain: self.handle_exec_chain,
             IR.Operation: self.handle_operation,
             IR.UnaryOperation: self.handle_unary_operation,
             IR.Print: self.handle_print,
@@ -192,6 +198,15 @@ class IRVisitor:
         self.emit(insn)
 
     def handle_asm(self, insn):
+        self.emit(insn)
+
+    def handle_exec_sel(self, insn):
+        self.emit(insn)
+
+    def handle_exec_end(self, insn):
+        self.emit(insn)
+
+    def handle_exec_chain(self, insn):
         self.emit(insn)
 
     def handle_operation(self, insn):
@@ -384,6 +399,8 @@ class ConstantElimination(IRVisitor):
         left, right = self.literal(insn.left), self.literal(insn.right)
         if left is not None and right is not None:
             val = func(left, right)
+            if type(val) == bool: # for boolean evaluations
+                val = 1 if val else 0
             self.handle_insn(IR.Move(self.int(val), insn.dest))
         elif i_mode & 2 and left == ident:
             self.handle_insn(IR.Move(insn.right, insn.dest))

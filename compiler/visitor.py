@@ -3,6 +3,7 @@ from .nodes import *
 class Visitor:
 
     def __init__(self):
+        self.after_next = None
         self.expr_func_map = {
             AssignmentExpr: self.visit_assign_expr,
             IncrementExpr: self.visit_increment_expr,
@@ -58,20 +59,33 @@ class Visitor:
         else:
             assert False, 'Unknown declaration type %s' % decl.__class__.__name__
 
+    def after_next_statement(self, ir):
+        self.after_next = ir
+
     def visit_statements(self, stmts):
         for stmt in stmts:
             self.visit_statement(stmt)
 
     def visit_statement(self, stmt):
+        prev_after = self.after_next
         if type(stmt) == list:
+            self.after_next = None
             self.visit_statements(stmt)
-            return
+            self.after_next = prev_after
         elif isinstance(stmt, EmptyStatement):
-            return
-
-        func = self.stmt_func_map.get(type(stmt))
-        assert func is not None, 'Unknown statement type %s' % stmt.__class__.__name__
-        func(stmt)
+            pass
+        elif isinstance(stmt, Pragma):
+            self.visit_pragma(stmt)
+        else:
+            func = self.stmt_func_map.get(type(stmt))
+            assert func is not None, 'Unknown statement type %s' % stmt.__class__.__name__
+            func(stmt)
+        if self.after_next:
+            if prev_after:
+                prev_after()
+                if self.after_next == prev_after:
+                    prev_after = None
+                self.after_next = prev_after
 
     def visit_expression(self, expr):
         func = self.expr_func_map.get(type(expr))

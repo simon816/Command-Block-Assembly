@@ -96,9 +96,14 @@ class Preprocessor:
                             start = end
                             line += self.next_line()
                     args.append(ParamStr(s, args, arg_num))
-                    replaced = replacement.format(*args)
+                    try:
+                        replaced = replacement.format(*args)
+                    except IndexError:
+                        raise TypeError(('Substitution error. Want:%s Got:%s\n' +
+                                        'On line: %s') % (
+                            replacement, args, line))
                     line = line[:idx] + replaced + line[end:]
-                    line = re.sub('\s*##\s*', '', line) # needs ro be done properly
+                    line = re.sub('\s*##\s*', '', line) # needs to be done properly
                     # Recursively substitute
                     line = self.substitute(line)
         return line

@@ -52,6 +52,7 @@ class Compiler(IRVisitor):
         self.func_name = insn.name
         self.func_store = insn.storage
         self.slot_to_loc = {}
+        self.temp_writers = {}
 
     def handle_fn_end(self, insn):
         if self.func_name == 'main':
@@ -155,6 +156,43 @@ class Compiler(IRVisitor):
                 dest, dest_off = self.get_effective_location(dest)
             self._write_relative_move(src, None, dest, dest_off)
 
+    def _exec_helper(self, label, exec_type, args):
+        fn = '%s_%s' % (self.func_name, label.label)
+        self.writer.write_instruction('EXEC' + exec_type, fn, *args)
+        self.temp_writers[fn] = self.writer
+        self.writer = AsmWriter()
+        self.writer.write_subroutine(fn)
+
+    def handle_exec_sel(self, insn):
+        def quote(s):
+            return '"%s"' % s.replace('"', '\\"')
+        args = ['"%s"' % insn.sel_type]
+        for k, v in insn.args:
+            if type(k) == str:
+                args.append(quote(k))
+            elif type(k) == tuple:
+                # allow special case for entity local
+                arg_type, arg = k
+                assert arg_type == 'symbol'
+                args.append(arg)
+            args.append(quote(v))
+        self._exec_helper(insn.label, insn.exec_type, args)
+
+    def handle_exec_chain(self, insn):
+        def conv_arg(arg):
+            if type(arg) == int:
+                return '#%d' % arg
+            return '"%s"' % arg
+        self._exec_helper(insn.label, insn.exec_type, map(conv_arg, insn.args))
+
+    def handle_exec_end(self, insn):
+        sel_fn = '%s_%s' % (self.func_name, insn.label.label)
+        self.writer.end_subroutine()
+        output = self.writer.get_output()
+        self.writer = self.temp_writers[sel_fn]
+        self.writer.write_after_subroutine(output)
+        del self.temp_writers[sel_fn]
+
     def handle_print(self, insn):
         print_args = []
         for arg in insn.args:
@@ -180,7 +218,7 @@ class Compiler(IRVisitor):
         if opcode is not None:
             left_ref, left_off = self.get_effective_location(insn.left)
             right = self.get_final_location(insn.right)
-            tmp_slot = IR.Slot(insn.left.type)
+            tmp_slot = mk_slot(insn.left.type)
             tmp_ref = self.get_final_location(tmp_slot)
             d_ref, d_off = self.get_effective_location(insn.dest)
             self._write_relative_move(left_ref, left_off, tmp_ref, None)
@@ -240,7 +278,7 @@ class Compiler(IRVisitor):
             assert False, "This is done in the tree visitor"
         elif insn.op is IR.UnaryOp.Not:
             base, off = self.get_effective_location(insn.val)
-            tmp_slot = IR.Slot(insn.dest.type)
+            tmp_slot = mk_slot(insn.dest.type)
             tmp_ref = self.get_final_location(tmp_slot)
             self._write_relative_move(base, off, tmp_ref, None)
             self.writer.write_instruction('NOT', tmp_ref)
@@ -291,7 +329,7 @@ class Compiler(IRVisitor):
         self.slot_to_loc = {}
 
     def allocate_on_stack(self, slot):
-        assert not isinstance(slot.type, DecoratedType) or not slot.type.static
+        assert not isinstance(slot.type, DecoratedType) or not slot.type.static, str(slot)
         unit = self.func_store.insert(slot.type)
         return 'csp', unit.offset
 
@@ -440,6 +478,12 @@ class EntityLocalStorage(Storage):
     def relative_base(self):
         return IR.EntityLocalBase
 
+def mk_slot(type):
+    # slots can't be static
+    while isinstance(type, DecoratedType) and type.static:
+        type = type.type
+    return IR.Slot(type)
+
 class ScopeManager:
 
     def __init__(self, compiler):
@@ -533,7 +577,7 @@ class CompilerVisitor(Visitor):
                 assert isinstance(slot.offset, IR.LiteralInt), str(slot)
                 return IR.GlobalSlot(base.offset + slot.offset.val, slot.type)
             offset = self.eliminate_offset(slot.offset)
-            final_offset = IR.Slot(offset.type)
+            final_offset = mk_slot(offset.type)
             self.emit_op(IR.Op.Add, base, offset, final_offset)
             return IR.Dereference(final_offset, slot.type)
         if isinstance(slot, IR.Dereference):
@@ -542,7 +586,7 @@ class CompilerVisitor(Visitor):
             if isinstance(addr, IR.Dereference):
                 assert isinstance(addr.type, Pointer), \
                        "Unwrapping a dereference to a non-pointer"
-                new_addr = IR.Slot(addr.type.type)
+                new_addr = mk_slot(addr.type.type)
                 self.emit(IR.Move(addr, new_addr))
                 return IR.Dereference(new_addr, new_addr.type)
             if addr != slot.addr:
@@ -579,6 +623,13 @@ class CompilerVisitor(Visitor):
         pragmas = {
             'event_handler': self.visit_pragma_event_handler,
             'event_condition': self.visit_pragma_event_condition,
+            'update_this_entity_data': self.visit_pragma_update_this_entity,
+            'select_entities': self.visit_pragma_select_entities,
+            'if_this_entity': self.visit_pragma_if_this_entity,
+            'at_this_entity': self.visit_pragma_at_this_entity,
+            'exec_align': self.visit_pragma_exec_align,
+            'position_at': self.visit_pragma_position_at,
+            'exec_anchor': self.visit_pragma_exec_anchor,
         }
         assert name in pragmas, "Unknown pragma '%s'" % name
         pragmas[name](args)
@@ -596,6 +647,184 @@ class CompilerVisitor(Visitor):
         key, operator, value = condition.split(' ', 2)
         assert operator == '=='
         self.pragmas['event_handler']['conditions'][key] = value
+
+    def visit_pragma_update_this_entity(self, data):
+        updates = {}
+        for entry in data.split(','):
+            key, value = entry.split('=', 1)
+            path, value = key.strip().replace(' ', ''), value.strip()
+            self.read_nbt_specification(updates, path, value)
+        nbt = self.stringify_nbt(updates)
+        self.emit(IR.Asm((
+            ('CMD data merge entity @s %s' % nbt, None, None)
+        ,)))
+
+    def _execute_chain_helper(self, exec_type, args):
+        label = self.unique_label('exec_' + exec_type.lower())
+        self.emit(IR.ExecChain(label, exec_type, args))
+        self.after_next_statement(lambda: self.emit(IR.ExecEnd(label)))
+
+    def visit_pragma_select_entities(self, selector):
+        assert 'select_entities' not in self.pragmas
+        selector, sel_inv = self.parse_selector_match(selector)
+        self.pragmas['select_entities'] = True
+        sel_dict = selector if selector else sel_inv
+        label = self.unique_label('exec_sel')
+        inv = 'N' if not selector else ''
+
+        self.emit(IR.ExecSel(label, 'AS' + inv, 'e', sel_dict.items()))
+        label_inv = None
+        if selector and sel_inv:
+            label_inv = self.unique_label('exec_sel_inv')
+            self.emit(IR.ExecSel(label_inv, 'ASN', 'e', sel_inv.items()))
+
+        def run_after():
+            del self.pragmas['select_entities']
+            if label_inv:
+                self.emit(IR.ExecEnd(label_inv))
+            self.emit(IR.ExecEnd(label))
+        self.after_next_statement(run_after)
+
+    def visit_pragma_if_this_entity(self, selector):
+        selector, sel_inv = self.parse_selector_match(selector)
+        assert not sel_inv, "TODO"
+        label = self.unique_label('exec_sel_if')
+        # Don't care about looping here because @s will only run once
+        self.emit(IR.ExecSel(label, 'AS', 's', selector.items()))
+        self.after_next_statement(lambda: self.emit(IR.ExecEnd(label)))
+
+    def visit_pragma_at_this_entity(self, unused):
+        assert not unused.strip()
+        label = self.unique_label('exec_at')
+        self.emit(IR.ExecSel(label, 'AT', 's', ()))
+        self.after_next_statement(lambda: self.emit(IR.ExecEnd(label)))
+
+    def visit_pragma_exec_align(self, axes):
+        self._execute_chain_helper('ALI', (axes.strip(),))
+
+    def visit_pragma_position_at(self, pos):
+        args = tuple(map(str.strip, pos.split(',', 3)))
+        self._execute_chain_helper('POS', args)
+
+    def visit_pragma_exec_anchor(self, anchor):
+        self._execute_chain_helper('ANC', (anchor.strip(),))
+
+    def parse_selector_match(self, matches):
+        selector_norm = {}
+        selector_inv = {}
+        for match in matches.split(','):
+            type_, value = match.strip().split(':', 1)
+            inverse = False
+            if type_[0] == '!':
+                inverse = True
+                type_ = type_[1:].strip()
+            selector = selector_inv if inverse else selector_norm
+            if type_ == 'match':
+                key, value = map(str.strip, value.split('=', 1))
+                selector[key] = value
+            elif type_ == 'match_nbt':
+                path, value = map(str.strip, value.split('=', 1))
+                path = path.replace(' ', '')
+                if 'nbt' not in selector:
+                    selector['nbt'] = {}
+                assert type(selector['nbt']) == dict
+                self.read_nbt_specification(selector['nbt'], path, value)
+            elif type_ == 'match_var':
+                var_name, op, val = map(str.strip, value.split(' ', 3))
+                assert op in ('<', '<=', '==', '>=', '>')
+                assert val.isdigit()
+                variable = self.scope.lookup(var_name)
+                assert variable is not None
+                assert variable.type is self.type('entity_local')
+                if 'scores' not in selector:
+                    selector['scores'] = {}
+                assert type(selector['scores']) == dict
+                if var_name not in selector['scores']:
+                    selector['scores'][var_name] = []
+                selector['scores'][var_name].append((op, int(val)))
+            else:
+                assert False, 'Unknown selector match type: %s' % type_
+        for selector in (selector_norm, selector_inv):
+            if 'nbt' in selector:
+                selector['nbt'] = self.stringify_nbt(selector['nbt'])
+            if 'scores' in selector and type(selector['scores']) == dict:
+                self.convert_score_selector(selector)
+        return (selector_norm, selector_inv)
+
+    def convert_score_selector(self, selector):
+        scores = selector['scores']
+        del selector['scores']
+        for key, values in scores.items():
+            min = None
+            max = None
+            for op, val in values:
+                if op == '<':
+                    max = val - 1
+                elif op == '<=':
+                    max = val
+                elif op == '==':
+                    min = max = val
+                elif op == '>=':
+                    min = val
+                elif op == '>':
+                    min = val + 1
+            range = ''
+            if min is not None:
+                range = '%d' % min
+            if max is not None and max != min:
+                range += '..%d' % max
+            elif max is None:
+                range += '..'
+            selector[('symbol', key)] = range
+
+    def stringify_nbt(self, node):
+        if type(node) == dict:
+            return '{%s}' % ','.join('%s:%s' % (k, self.stringify_nbt(v))
+                                     for k,v in node.items())
+        if type(node) == list:
+            return '[%s]' % ','.join(map(self.stringify_nbt, node))
+        if type(node) == str:
+            return '"%s"' % node
+        if type(node) == int:
+            return str(node)
+        if type(node) == float:
+            return '%ff' % node
+        assert False
+
+    def read_nbt_specification(self, parent, path, value):
+        path = path.split('.')
+        for i in range(len(path) - 1):
+            node = path[i]
+            if node.isdigit():
+                pos = int(node)
+                while len(parent) < pos + 1:
+                    parent.append({})
+                parent = parent[pos]
+                continue
+            if node not in parent:
+                parent[node] = {}
+            if len(path) > i + 1:
+                if path[i+1].isdigit():
+                    if not parent[node]:
+                        parent[node] = []
+                    else:
+                        assert type(parent[node]) == list
+            parent = parent[node]
+        if value.isdigit():
+            value = int(value)
+        elif value[0].isdigit():
+            # check for floating points
+            if value.count('.') == 1 and value.endswith('f'):
+                try:
+                    value = float(value[:-1])
+                except ValueError:
+                    pass
+        if path[-1].isdigit():
+            pos = int(path[-1])
+            while len(parent) < pos + 1:
+                parent.append({})
+            path[-1] = pos
+        parent[path[-1]] = value
 
     ### Declarations
 
@@ -849,7 +1078,7 @@ class CompilerVisitor(Visitor):
                 case_bodies.append((label, case.body))
 
             option = self.visit_expression(stmt.expr)
-            res = IR.Slot(self.type('int'))
+            res = mk_slot(self.type('int'))
             for choice, dest in case_map.items():
                 self.emit_op(IR.Op.Eq, option, self.int(choice), res)
                 self.emit(IR.JumpIf(dest, res))
@@ -912,7 +1141,7 @@ class CompilerVisitor(Visitor):
             assert isinstance(offset, IR.LiteralInt), str(offset)
             return IR.GlobalSlot(base.offset + offset.val, dest_type)
         if isinstance(base, IR.SlotOffset):
-            new_offset = IR.Slot(offset.type)
+            new_offset = mk_slot(offset.type)
             self.emit_op(IR.Op.Add, base.offset, offset, new_offset)
             base = base.base
             offset = new_offset
@@ -936,7 +1165,7 @@ class CompilerVisitor(Visitor):
     def visit_increment_expr(self, expr):
         val = self.visit_expression(expr.expr)
         op = IR.Op.Add if expr.dir == 1 else IR.Op.Sub
-        old = IR.Slot(val.type)
+        old = mk_slot(val.type)
         self.emit(IR.Move(val, old))
         self.emit_op(op, val, self.int(1), val)
         return old if expr.post else val
@@ -947,7 +1176,7 @@ class CompilerVisitor(Visitor):
         end = self.unique_label('cond_end')
         self.emit(IR.JumpIf(label_true, cond))
         val = self.visit_expression(expr.false)
-        res = IR.Slot(val.type)
+        res = mk_slot(val.type)
         self.emit(IR.Move(val, res))
         self.emit(IR.Jump(end))
         self.emit(label_true)
@@ -960,7 +1189,7 @@ class CompilerVisitor(Visitor):
         left = self.visit_expression(expr.left)
         right = self.visit_expression(expr.right)
         op = IR.Op.lookup(expr.op)
-        res = IR.Slot(left.type)
+        res = mk_slot(left.type)
         self.emit_op(op, left, right, res)
         return res
 
@@ -985,7 +1214,7 @@ class CompilerVisitor(Visitor):
             # Allow using GlobalSlot arrays by using a constant offset if possible
             idx_slot = self.int(index.val * arr_type.type.size)
         else:
-            idx_slot = IR.Slot(index.type)
+            idx_slot = mk_slot(index.type)
             self.emit_op(IR.Op.Mul, self.int(arr_type.type.size), index, idx_slot)
         return self.offset(array, idx_slot, arr_type.type)
 
@@ -995,7 +1224,7 @@ class CompilerVisitor(Visitor):
         if op is IR.UnaryOp.Deref:
             assert isinstance(val.type, Pointer), "Tried to dereference a non-pointer"
             return IR.Dereference(val, val.type.type)
-        res = IR.Slot(val.type)
+        res = mk_slot(val.type)
         self.emit(IR.UnaryOperation(op, val, res))
         return res
 
@@ -1019,7 +1248,7 @@ class CompilerVisitor(Visitor):
             ret_dest = IR.ReturnRegister
         else:
             # Allocate storage for the return value to be dropped in here
-            ret_dest = IR.Slot(func.type)
+            ret_dest = mk_slot(func.type)
             # actually copy a value into it so it gets allocated
             # TODO change this
             self.emit(IR.Move(self.int(0), ret_dest))
