@@ -625,6 +625,7 @@ class CompilerVisitor(Visitor):
             'event_condition': self.visit_pragma_event_condition,
             'update_this_entity_data': self.visit_pragma_update_this_entity,
             'select_entities': self.visit_pragma_select_entities,
+            'select_entities_not_matching': self.visit_pragma_select_not_match,
             'if_this_entity': self.visit_pragma_if_this_entity,
             'at_this_entity': self.visit_pragma_at_this_entity,
             'exec_align': self.visit_pragma_exec_align,
@@ -665,9 +666,7 @@ class CompilerVisitor(Visitor):
         self.after_next_statement(lambda: self.emit(IR.ExecEnd(label)))
 
     def visit_pragma_select_entities(self, selector):
-        assert 'select_entities' not in self.pragmas
         selector, sel_inv = self.parse_selector_match(selector)
-        self.pragmas['select_entities'] = True
         sel_dict = selector if selector else sel_inv
         label = self.unique_label('exec_sel')
         inv = 'N' if not selector else ''
@@ -679,11 +678,17 @@ class CompilerVisitor(Visitor):
             self.emit(IR.ExecSel(label_inv, 'ASN', 'e', sel_inv.items()))
 
         def run_after():
-            del self.pragmas['select_entities']
             if label_inv:
                 self.emit(IR.ExecEnd(label_inv))
             self.emit(IR.ExecEnd(label))
         self.after_next_statement(run_after)
+
+    def visit_pragma_select_not_match(self, selector):
+        selector, sel_inv = self.parse_selector_match(selector)
+        assert not sel_inv, "TODO"
+        label = self.unique_label('exec_sel_not')
+        self.emit(IR.ExecSel(label, 'ASN', 'e', selector.items()))
+        self.after_next_statement(lambda: self.emit(IR.ExecEnd(label)))
 
     def visit_pragma_if_this_entity(self, selector):
         selector, sel_inv = self.parse_selector_match(selector)
@@ -783,13 +788,14 @@ class CompilerVisitor(Visitor):
                                      for k,v in node.items())
         if type(node) == list:
             return '[%s]' % ','.join(map(self.stringify_nbt, node))
-        if type(node) == str:
-            return '"%s"' % node
-        if type(node) == int:
-            return str(node)
-        if type(node) == float:
-            return '%ff' % node
-        assert False
+        if type(node) == tuple:
+            val_type, value = node
+            if val_type == 'string':
+                return '"%s"' % value
+            if val_type in ['int', 'float', 'byte']:
+                return value
+            assert False, val_type
+        assert False, type(node)
 
     def read_nbt_specification(self, parent, path, value):
         path = path.split('.')
@@ -810,13 +816,26 @@ class CompilerVisitor(Visitor):
                     else:
                         assert type(parent[node]) == list
             parent = parent[node]
-        if value.isdigit():
-            value = int(value)
-        elif value[0].isdigit():
-            # check for floating points
-            if value.count('.') == 1 and value.endswith('f'):
+        val_type = 'string'
+        # check for numbers
+        looks_like_num = value[0].isdigit() or value[0] == '-'
+        if looks_like_num:
+            if value.endswith('b'):
                 try:
-                    value = float(value[:-1])
+                    int(value[:-1])
+                    val_type = 'byte'
+                except ValueError:
+                    pass
+            elif value.endswith('f'):
+                try:
+                    float(value[:-1])
+                    val_type = 'float'
+                except ValueError:
+                    pass
+            else:
+                try:
+                    int(value)
+                    val_type = 'int'
                 except ValueError:
                     pass
         if path[-1].isdigit():
@@ -824,7 +843,7 @@ class CompilerVisitor(Visitor):
             while len(parent) < pos + 1:
                 parent.append({})
             path[-1] = pos
-        parent[path[-1]] = value
+        parent[path[-1]] = (val_type, value)
 
     ### Declarations
 

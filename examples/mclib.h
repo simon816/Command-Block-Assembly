@@ -28,4 +28,8 @@
  */
 #define ASM_swap(a, b) __asm__("XCHG >?, >?", a, b)
 
+#define EVENT_CONDITION(cond) _Pragma("event_condition cond")
+
+#define EVENT(event, cond, name) _Pragma("event_handler event") cond void name()
+
 #endif /* __MCLIB_H */

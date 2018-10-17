@@ -189,14 +189,19 @@ class Session:
                 print()
 
     def add_event_handler(self, event_name, conditions, handler):
-        if event_name == 'minecraft:tick':
+        tag_events = {
+            'minecraft:tick': ('minecraft', 'tick'),
+            'minecraft:load': ('minecraft', 'load')
+        }
+        if event_name in tag_events:
             assert not conditions
-            self.writer.write_tag('functions', 'tick', [
+            namespace, tag_name = tag_events[event_name]
+            self.writer.write_tag('functions', tag_name, [
                 self.scope.function_name(handler)
-            ], namespace='minecraft')
+            ], namespace=namespace)
             if self.print_debug:
                 print('Tag')
-                print('Tick handler:', handler)
+                print('%s: %s' % (tag_name, handler))
                 print()
             return
         # TODO refactor

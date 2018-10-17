@@ -231,7 +231,7 @@ class ExecuteChain:
         return self.add('positioned', 'as', ensure_selector(select_arg))
 
     def align(self, axes):
-        assert [axis for axis in axes if axis in 'xyz']
+        assert ''.join(axis for axis in axes if axis in 'xyz') == axes
         return self.add('align', axes)
 
     def facing(self, pos):
@@ -340,7 +340,7 @@ class Tellraw(Command):
             return {'text': arg}
         if isinstance(arg, Ref):
             return {'score':
-                    {'name': EntityTag.resolve(scope),
+                    {'name': arg.selector(None).resolve(scope),
                      'objective': arg.resolve(scope)}}
         else:
             raise RuntimeError('Unknown argument type %r' % type(arg))

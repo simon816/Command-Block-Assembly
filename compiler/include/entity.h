@@ -10,6 +10,8 @@
 
 #define select_entities(...) _Pragma("select_entities __VA_ARGS__")
 
+#define select_entities_not_matching(...) _Pragma("select_entities_not_matching __VA_ARGS__")
+
 #define select_players(...) _Pragma("select_entities match:type=player, __VA_ARGS__")
 
 #define sel_match(key, value) match:key=value
@@ -34,5 +36,7 @@
 
 void add_tag_this_entity(const char *tag);
 void remove_tag_this_entity(const char *tag);
+
+void set_scoreboard_tracking(entity_local variable, const char *criterion);
 
 #endif /* __ENTITY_H */
