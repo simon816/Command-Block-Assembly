@@ -23,6 +23,7 @@ class Assembler:
         self.constants = {}
         self.function_subsequences = {}
         self.command_block_lines = []
+        self.event_handlers = []
         self.included_subroutines = set()
         self.enter_subroutine('__main__')
         self.jump_later = None
@@ -33,15 +34,20 @@ class Assembler:
         self.predef()
         self.init_instructions()
         self.enable_sync = False
-        self.reader = None
+        self.lineno = None
+        self.filename = None
 
     def predef(self):
         self.constants['sp'] = Var('stack_pointer')
         self.constants['sr'] = Var('stack_register')
 
     def parse(self, text, filename=''):
-        reader = self.reader = AsmReader(text, filename)
+        self.filename = filename or '<a.asm>'
+        self.consume_reader(AsmReader(text, self.filename))
+
+    def consume_reader(self, reader):
         for (token, arg) in reader:
+            self.lineno = reader.lineno
             if token == 'const':
                 name, ref = arg
                 self.define_const(name, self.resolve_ref(*ref))
@@ -60,12 +66,10 @@ class Assembler:
                 self.handle_directive(*arg)
             elif token == 'eof':
                 break
-        self.reader = None
 
     def warn(self, message):
         import warnings
-        r = self.reader
-        warnings.showwarning(message, UserWarning, r.filename, r.lineno)
+        warnings.showwarning(message, UserWarning, self.filename, self.lineno)
 
     def define_const(self, name, value):
         if name in self.constants:
@@ -195,28 +199,42 @@ class Assembler:
     def handle_directive(self, directive, value):
         if directive == 'include':
             import os
-            dir = os.path.dirname(self.reader.filename)
+            our_file = self.filename
+            dir = os.path.dirname(our_file)
             path = os.path.join(dir, value)
             with open(path, 'r') as f:
                 data = f.read()
-                old_reader = self.reader
-                self.parse(data, path)
-                self.reader = old_reader
+            self.parse(data, path)
+            self.filename = our_file
         elif directive == 'include_h':
             import os
-            dir = os.path.dirname(self.reader.filename)
+            our_file = self.filename
+            dir = os.path.dirname(our_file)
             path = os.path.join(dir, value)
             with open(path, 'r') as f:
                 data = f.read()
-                assembler = Assembler()
-                assembler.enable_sync = self.enable_sync
-                assembler.parse(data, path)
-                for sub in assembler.subroutines.keys():
-                    if sub.startswith('__'):
-                        continue
-                    self.included_subroutines.add(self.sub_to_func_name(sub))
-                self.constants.update(assembler.constants)
-                self.sync_func_ids.update(assembler.sync_func_ids)
+            assembler = Assembler()
+            assembler.enable_sync = self.enable_sync
+            assembler.parse(data, path)
+            for sub in assembler.subroutines.keys():
+                if sub.startswith('__'):
+                    continue
+                self.included_subroutines.add(self.sub_to_func_name(sub))
+            self.constants.update(assembler.constants)
+            self.sync_func_ids.update(assembler.sync_func_ids)
+        elif directive == 'event_handler':
+            handler, event, conditions = value.split(' ', 2)
+            conds = {}
+            if conditions:
+                for cond in conditions.split(';'):
+                    key, value = cond.split('=', 1)
+                    path = tuple(key.split('.'))
+                    conds[path] = value
+            self.event_handlers.append({
+                'event': event,
+                'conditions': conds,
+                'handler': self.sub_to_func_name(handler)
+            })
 
     def init_instructions(self):
         self.instructions = {
@@ -857,6 +875,7 @@ void OP(int src, int *dest) {
         for name, sequence in self.function_subsequences.items():
             session.add_subsequence(name, sequence)
         session.add_command_blocks(self.command_block_lines)
+        session.add_event_handlers(self.event_handlers)
 
     def get_sub_jump_command(self, sub_name):
         return Function(self.sub_to_func_name(sub_name))

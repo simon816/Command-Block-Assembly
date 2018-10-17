@@ -78,7 +78,7 @@ class Scope:
 class Session:
 
     def __init__(self, pos, writer, namespace, stack_size=16, args={},
-                 debug=False):
+                 setup_on_load=False, debug=False):
         self.placer = CommandPlacer(pos)
         self.writer = writer
         self.stack_size = stack_size
@@ -95,6 +95,7 @@ class Session:
         }, args)
         self.print_debug = debug
         self.setup_hook = None
+        self.setup_on_load = setup_on_load
         self.add_stack()
 
     def add_stack(self, one_function=False):
@@ -188,22 +189,36 @@ class Session:
                         print('branch >', cmd2)
                 print()
 
-    def add_event_handler(self, event_name, conditions, handler):
+    def add_event_handlers(self, event_handlers):
         tag_events = {
-            'minecraft:tick': ('minecraft', 'tick'),
-            'minecraft:load': ('minecraft', 'load')
+            'minecraft:tick': ('minecraft', 'tick', []),
+            'minecraft:load': ('minecraft', 'load', [])
         }
-        if event_name in tag_events:
-            assert not conditions
-            namespace, tag_name = tag_events[event_name]
-            self.writer.write_tag('functions', tag_name, [
-                self.scope.function_name(handler)
-            ], namespace=namespace)
-            if self.print_debug:
-                print('Tag')
-                print('%s: %s' % (tag_name, handler))
-                print()
-            return
+        if self.setup_on_load:
+            fn = 'setup_on_load_trampoline'
+            self.scope.add_function_names((fn,))
+            tag_events['minecraft:load'][2].append(
+                self.scope.function_name(fn))
+        for event_handler in event_handlers:
+            event_name, conditions, handler = (event_handler['event'],
+            event_handler['conditions'], event_handler['handler'])
+            if event_name in tag_events:
+                assert not conditions
+                namespace, tag_name, values = tag_events[event_name]
+                values.append(self.scope.function_name(handler))
+            else:
+                self.add_event_handler(event_name, conditions, handler)
+
+        for namespace, tag_name, values in tag_events.values():
+            if values:
+                self.writer.write_tag('functions', tag_name, values,
+                                      namespace=namespace)
+                if self.print_debug:
+                    print('Tag')
+                    print('%s: %s' % (tag_name, values))
+                    print()
+
+    def add_event_handler(self, event_name, conditions, handler):
         # TODO refactor
         trampoline = handler + '_trampoline'
         self.scope.add_function_names((trampoline,))
@@ -229,13 +244,15 @@ class Session:
     def extended_setup(self, up, down):
         pass
 
-    def create_up_down_functions(self, setup='setup', cleanup='cleanup'):
+    def create_up_down_functions(self, pos, setup='setup', cleanup='cleanup'):
         self.scope.add_function_names((setup, cleanup))
         item = '{id:"minecraft:stone",Count:1b,tag:{}}'
-        nbt = '{Tags:["%s"],ArmorItems:[%s]}' % (self.scope.entity_tag, item)
+        nbt = ('{Tags:["%s"],ArmorItems:[%s],NoAI:1b,Invisible:1b,' + \
+               'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
+               'NoBasePlate:1b}') % (self.scope.entity_tag, item)
         up = [
             'kill @e[tag=%s]' % self.scope.entity_tag,
-            'summon armor_stand ~ ~2 ~ ' + nbt
+            'summon armor_stand %s %s' % (pos, nbt)
         ]
         down = [
             'kill @e[tag=%s]' % self.scope.entity_tag
@@ -260,6 +277,10 @@ class Session:
                 up.append(cmd.resolve(self.scope))
         self.writer.write_function(setup, up)
         self.writer.write_function(cleanup, down)
+        if self.setup_on_load:
+            self.writer.write_function('setup_on_load_trampoline', [
+                Function(setup).resolve(self.scope)
+            ])
         if self.print_debug:
             print('Function', setup)
             for cmd in up:

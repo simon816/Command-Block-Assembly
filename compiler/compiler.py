@@ -9,20 +9,14 @@ from .ir import IR, IRVisitor, Optimizer
 Symbol = namedtuple('Symbol', 'name type storage')
 DataArray = namedtuple('DataArray', 'data type')
 
-class Compiler(IRVisitor):
+class Compiler:
 
-    def compile_program(self, program):
-        self.writer = AsmWriter()
-        self.temp_registers = ['a', 'b', 'c', 'd']
-        self.volatile_reg = ('v1', 'v2', 'v3', 'v4')
-        self.volatile_pos = 0
-        self.write_registers('csp', 'cbp', 'rr',
-                             *(self.temp_registers + list(self.volatile_reg)))
-        self.writer.write_instruction('MOV', '#0', '0')
-        self.writer.write_instruction('MOV', '#0', '1')
-        self.entity_locals = {}
-        self.optimizer = Optimizer(self)
-        visitor = CompilerVisitor(self.optimizer.handle_insn)
+    def __init__(self, asm_backend):
+        self.writer = AsmWriter(asm_backend)
+
+    def compile(self, program):
+        generator = CodeGenerator(self.writer)
+        visitor = CompilerVisitor(Optimizer(generator))
         self.load_libs(visitor)
         visitor.visit_program(program)
         return self.writer.get_output()
@@ -32,13 +26,42 @@ class Compiler(IRVisitor):
         for lib_name, exports in libs.items():
             visitor.import_py_lib(exports())
 
+class CodeGenerator(IRVisitor):
+
+    def __init__(self, writer):
+        super().__init__()
+        self.writer = writer
+        self.temp_registers = ['a', 'b', 'c', 'd']
+        self.volatile_reg = ('v1', 'v2', 'v3', 'v4')
+        self.volatile_pos = 0
+        self.entity_locals = {}
+        self.init()
+
+    def LIT(self, number):
+        return self.writer.ref_literal(number)
+
+    def ADDR(self, number):
+        return self.writer.ref_address(number)
+
+    def STR(self, string):
+        return self.writer.ref_string(string)
+
+    def SYM(self, symbol):
+        return self.writer.ref_symbol(symbol)
+
+    def RAW(self, text):
+        return self.writer.ref_raw(text)
+
+    def init(self):
+        self.write_registers('csp', 'cbp', 'rr',
+                             *(self.temp_registers + list(self.volatile_reg)))
+        self.writer.write_instruction('MOV', self.LIT(0), self.ADDR(0))
+        self.writer.write_instruction('MOV', self.LIT(0), self.ADDR(1))
+
     def write_registers(self, *regs):
         for i in range(len(regs)):
-            self.writer.write_constant(regs[i], i)
+            self.writer.write_constant(regs[i], self.ADDR(i))
         self.global_shift = len(regs)
-
-    def handle_insn(self, insn):
-        self.insn_func_map[type(insn)](insn)
 
     def handle_fn_begin(self, insn):
         if insn.pragma:
@@ -68,41 +91,42 @@ class Compiler(IRVisitor):
         self.writer.write_entity_local(insn.name)
 
     def handle_jump(self, insn):
-        self.writer.write_instruction('JMP',  self.label(insn.dest))
+        self.writer.write_instruction('JMP', self.label(insn.dest))
 
     def handle_jump_if(self, insn):
         cond = self.get_final_location(insn.cond)
-        self.writer.write_instruction('CMP', cond, '#0')
+        self.writer.write_instruction('CMP', cond, self.LIT(0))
         self.writer.write_instruction('JNE', self.label(insn.dest))
 
     def handle_jump_if_not(self, insn):
         cond = self.get_final_location(insn.cond)
-        self.writer.write_instruction('CMP', cond, '#0')
+        self.writer.write_instruction('CMP', cond, self.LIT(0))
         self.writer.write_instruction('JE', self.label(insn.dest))
 
     def handle_push(self, insn):
         ref, off = self.get_effective_location(insn.src)
-        self._write_relative_move(ref, off, 'sr', None)
+        self._write_relative_move(ref, off, self.SYM('sr'), None)
         self.writer.write_instruction('PUSH')
 
     def handle_pop(self, insn):
         self.writer.write_instruction('POP')
         ref, off = self.get_effective_location(insn.dest)
-        self._write_relative_move('sr', None, ref, off)
+        self._write_relative_move(self.SYM('sr'), None, ref, off)
 
     def handle_call(self, insn):
         saved = []
         for slot, (base, off) in self.slot_to_loc.items():
             if base != 'csp':
+                base = self.SYM(base)
                 saved.insert(0, base)
-                self._write_relative_move(base, None, 'sr', None)
+                self._write_relative_move(base, None, self.SYM('sr'), None)
                 self.writer.write_instruction('PUSH')
 
-        self.writer.write_instruction('CALL', insn.name)
+        self.writer.write_instruction('CALL', self.SYM(insn.name))
 
         for reg in saved:
             self.writer.write_instruction('POP')
-            self._write_relative_move('sr', None, reg, None)
+            self._write_relative_move(self.SYM('sr'), None, reg, None)
 
     def handle_move(self, insn):
         s_ref, s_off = self.get_effective_location(insn.src)
@@ -111,7 +135,7 @@ class Compiler(IRVisitor):
 
     def handle_return(self, insn):
         if self.func_name == 'main':
-            self.writer.write_instruction('JMP', '_main_end')
+            self.writer.write_instruction('JMP', self.SYM('_main_end'))
         else:
             self.writer.write_instruction('RET')
 
@@ -120,9 +144,9 @@ class Compiler(IRVisitor):
 
     def handle_test(self, insn):
         base, off = self.get_effective_location(insn.dest)
-        self._write_relative_move('#0', None, base, off)
-        self.writer.write_instruction('TEST', insn.cmd)
-        self._write_relative_move('#1', None, base, off)
+        self._write_relative_move(self.LIT(0), None, base, off)
+        self.writer.write_instruction('TEST', self.RAW(insn.cmd))
+        self._write_relative_move(self.LIT(1), None, base, off)
 
 
     def handle_asm(self, insn):
@@ -149,7 +173,7 @@ class Compiler(IRVisitor):
                     base = vbase
                 asm += base
 
-        self.writer.write_instruction(asm)
+        self.writer.write_raw_asm(asm)
 
         for (src, dest, dest_off) in put_back:
             if dest_off is False:
@@ -158,31 +182,29 @@ class Compiler(IRVisitor):
 
     def _exec_helper(self, label, exec_type, args):
         fn = '%s_%s' % (self.func_name, label.label)
-        self.writer.write_instruction('EXEC' + exec_type, fn, *args)
+        self.writer.write_instruction('EXEC' + exec_type, self.SYM(fn), *args)
         self.temp_writers[fn] = self.writer
-        self.writer = AsmWriter()
+        self.writer = self.writer.fork()
         self.writer.write_subroutine(fn)
 
     def handle_exec_sel(self, insn):
-        def quote(s):
-            return '"%s"' % s.replace('"', '\\"')
-        args = ['"%s"' % insn.sel_type]
+        args = [self.STR(insn.sel_type)]
         for k, v in insn.args:
             if type(k) == str:
-                args.append(quote(k))
+                args.append(self.STR(k))
             elif type(k) == tuple:
                 # allow special case for entity local
                 arg_type, arg = k
                 assert arg_type == 'symbol'
-                args.append(arg)
-            args.append(quote(v))
+                args.append(self.SYM(arg))
+            args.append(self.STR(v))
         self._exec_helper(insn.label, insn.exec_type, args)
 
     def handle_exec_chain(self, insn):
         def conv_arg(arg):
             if type(arg) == int:
-                return '#%d' % arg
-            return '"%s"' % arg
+                return self.LIT(arg)
+            return self.STR(arg)
         self._exec_helper(insn.label, insn.exec_type, map(conv_arg, insn.args))
 
     def handle_exec_end(self, insn):
@@ -197,7 +219,7 @@ class Compiler(IRVisitor):
         print_args = []
         for arg in insn.args:
             if type(arg) == str:
-                print_args.append(arg)
+                print_args.append(self.STR(arg))
             else:
                 print_args.append(self.get_final_location(arg))
         self.writer.write_instruction('PRINT', *print_args)
@@ -238,23 +260,23 @@ class Compiler(IRVisitor):
             left = self.get_final_location(insn.left)
             right = self.get_final_location(insn.right)
             dest, dest_off = self.get_effective_location(insn.dest)
-            self._write_relative_move('#1', None, dest, dest_off)
+            self._write_relative_move(self.LIT(1), None, dest, dest_off)
             self.writer.write_instruction('CMP', right, left)
             lbl = 'cmp_end_%d' % abs(hash(insn)) # TODO
-            self.writer.write_instruction(jmpcode, '_' + lbl)
-            self._write_relative_move('#0', None, dest, dest_off)
+            self.writer.write_instruction(jmpcode, self.SYM('_' + lbl))
+            self._write_relative_move(self.LIT(0), None, dest, dest_off)
             self.writer.write_local_sub(lbl)
         elif insn.op is IR.Op.LogAnd:
             left = self.get_final_location(insn.left)
             right = self.get_final_location(insn.right)
             dest, dest_off = self.get_effective_location(insn.dest)
-            self._write_relative_move('#0', None, dest, dest_off)
-            self.writer.write_instruction('CMP', left, '#0')
+            self._write_relative_move(self.LIT(0), None, dest, dest_off)
+            self.writer.write_instruction('CMP', left, self.LIT(0))
             lbl = 'and_end_%d' % abs(hash(insn)) # TODO
-            self.writer.write_instruction('JE', '_' + lbl)
-            self.writer.write_instruction('CMP', right, '#0')
-            self.writer.write_instruction('JE', '_' + lbl)
-            self._write_relative_move('#1', None, dest, dest_off)
+            self.writer.write_instruction('JE', self.SYM('_' + lbl))
+            self.writer.write_instruction('CMP', right, self.LIT(0))
+            self.writer.write_instruction('JE', self.SYM('_' + lbl))
+            self._write_relative_move(self.LIT(1), None, dest, dest_off)
             self.writer.write_local_sub(lbl)
         elif insn.op is IR.Op.LogOr:
             assert False, str(insn)
@@ -286,12 +308,12 @@ class Compiler(IRVisitor):
             self._write_relative_move(tmp_ref, None, base, off)
         elif insn.op is IR.UnaryOp.LogNot:
             base, off = self.get_effective_location(insn.dest)
-            self._write_relative_move('#1', None, base, off)
+            self._write_relative_move(self.LIT(1), None, base, off)
             val_ref = self.get_final_location(insn.val)
-            self.writer.write_instruction('CMP', val_ref, '#0')
+            self.writer.write_instruction('CMP', val_ref, self.LIT(0))
             lbl = 'invert_end_%d' % abs(hash(insn)) # TODO
-            self.writer.write_instruction('JE', '_' + lbl)
-            self._write_relative_move('#0', None, base, off)
+            self.writer.write_instruction('JE', self.SYM('_' + lbl))
+            self._write_relative_move(self.LIT(0), None, base, off)
             self.writer.write_local_sub(lbl)
         else:
             assert False, "Unknown operation " + insn.op
@@ -300,7 +322,7 @@ class Compiler(IRVisitor):
         self.free_slot(insn.slot)
 
     def label(self, label):
-        return '_%s' % label.label
+        return self.SYM('_%s' % label.label)
 
     def slot_reference(self, slot):
         if slot in self.slot_to_loc:
@@ -342,13 +364,15 @@ class Compiler(IRVisitor):
     def get_effective_location(self, ref):
         base, off = self.unpack(ref)
         if type(base) == int:
-            base = '#%d' % base
-        if base is None:
+            base = self.LIT(base)
+        elif base is None:
             if off is None:
-                base = str(self.global_shift)
+                base = self.ADDR(self.global_shift)
             else:
-                base = str(off + self.global_shift)
+                base = self.ADDR(off + self.global_shift)
             off = None
+        else:
+            base = self.SYM(base)
         return base, off
 
     def unpack(self, ref):
@@ -388,7 +412,7 @@ class Compiler(IRVisitor):
         ptr = self.volatile_pos
         reg = self.volatile_reg[ptr]
         self.volatile_pos = (ptr + 1) % len(self.volatile_reg)
-        return reg
+        return self.SYM(reg)
 
     def move_volatile(self, base, off):
         if off is None:
@@ -408,15 +432,15 @@ class Compiler(IRVisitor):
             if dest_off is None:
                 self.writer.write_instruction('MOV', src, dest)
             else:
-                self.writer.write_instruction('MOVINDD', src, dest, '#%d'
-                                              % dest_off, comment=comment)
+                self.writer.write_instruction('MOVINDD', src, dest,
+                                              self.LIT(dest_off), comment=comment)
         else:
             if dest_off is None:
-                self.writer.write_instruction('MOVINDS', src, '#%d' %
-                                          src_off, dest, comment=comment)
+                self.writer.write_instruction('MOVINDS', src,
+                                              self.LIT(src_off), dest, comment=comment)
             else:
-                self.writer.write_instruction('MOVIND', src, '#%d' % src_off,
-                                      dest, '#%d' % dest_off, comment=comment)
+                self.writer.write_instruction('MOVIND', src, self.LIT(src_off),
+                                      dest, self.LIT(dest_off), comment=comment)
 
 class SymbolTable:
 
@@ -549,9 +573,9 @@ class LoopAttacher:
 
 class CompilerVisitor(Visitor):
 
-    def __init__(self, on_instruction):
+    def __init__(self, ir_downstream):
         super().__init__()
-        self.on_instruction = on_instruction
+        self.downstream = ir_downstream
         self.types = Types()
         self.types.add_type('entity_local', DecoratedType(IntType(),
                     static=True, const=False))
@@ -605,7 +629,7 @@ class CompilerVisitor(Visitor):
         if replacements:
             insn = insn._replace(**replacements)
 
-        self.on_instruction(insn)
+        self.downstream.handle_insn(insn)
 
     def emit_op(self, op, left, right, dest):
         self.emit(IR.Operation(op, left, right, dest))

@@ -19,7 +19,7 @@ class AsmReader:
     def __init__(self, text='', filename=''):
         self.text = text
         self.lineno = 1
-        self.filename = filename or '<a.asm>'
+        self.filename = filename
 
     def feed(self, text):
         self.text += text

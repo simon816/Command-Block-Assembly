@@ -20,6 +20,11 @@ if __name__ == '__main__':
     parser.add_argument('--place-location', default="~1,~,~1",
                         help="Location to place command blocks")
     parser.add_argument('--enable-sync', help="Enable SYNC opcode", action='store_true')
+    parser.add_argument('--setup-on-load', action='store_true',
+                        help="Run setup on minecraft:load")
+    parser.add_argument('--spawn-location', default='~ ~2 ~',
+                        help="Location to spawn hidden armor stand")
+    parser.add_argument('--pack-description', help="Datapack description")
 
     args = parser.parse_args()
 
@@ -42,14 +47,16 @@ if __name__ == '__main__':
         writer = DataPackWriter(data_dir, args.namespace, args.as_zip)
         if args.rem_existing:
             writer.delete_existing()
+        if args.pack_description:
+            writer.set_description(args.pack_description)
     else:
         writer = DummyWriter()
     writer.open()
 
     session = Session((x, y, z), writer, args.namespace, stack_size=args.stack,
-                      args=sargs, debug=args.debug)
+                      args=sargs, setup_on_load=args.setup_on_load, debug=args.debug)
     assembler.write_to_session(session)
-    setup, cleanup = session.create_up_down_functions()
+    setup, cleanup = session.create_up_down_functions(args.spawn_location)
     writer.close()
     print('Generated', writer.command_count, 'commands in',
           writer.func_count, 'functions')

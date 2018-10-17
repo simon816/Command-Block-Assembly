@@ -10,9 +10,15 @@ from compiler.preprocessor import Preprocessor
 from compiler.lexer import Lexer
 from compiler.parser_ import Parser
 
+import time
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('file', help="C File", type=argparse.FileType('r'))
+    parser.add_argument('-E', action='store_true',
+                        help="Only run preprocessor. Outputs to stdout")
+    parser.add_argument('-S', action='store_true',
+                        help="Don't run assembler. Outputs ASM to stdout")
     parser.add_argument('--world-dir', help="World Directory")
     parser.add_argument('--as_zip', action='store_true', help="Write datapack as zip file")
     parser.add_argument('--namespace', help="Function namespace", default='c_generated')
@@ -25,23 +31,45 @@ if __name__ == '__main__':
                         help="Location to place command blocks")
     parser.add_argument('--enable-sync', help="Enable SYNC opcode", action='store_true')
     parser.add_argument('--page-size', type=int, default=64, help="Memory page size")
-    parser.add_argument('--dump-asm', action='store_true', help="Dump generated ASM")
+    parser.add_argument('--setup-on-load', action='store_true',
+                        help="Run setup on minecraft:load")
+    parser.add_argument('--spawn-location', default='~ ~2 ~',
+                        help="Location to spawn hidden armor stand")
+    parser.add_argument('--pack-description', help="Datapack description")
 
     args = parser.parse_args()
 
-    compiler = Compiler()
     with args.file as f:
         pre = Preprocessor(f.read(), f.name)
         code = pre.transform()
-        parser = Parser(Lexer(code))
-        assembly = compiler.compile_program(parser.parse_program())
 
-    if args.dump_asm:
-        print(assembly)
+    if args.E:
+        print(code)
+        exit(0)
+
+    parser = Parser(Lexer(code))
+    backend = 'token'
+    if args.S:
+        backend = 'string'
+    compiler = Compiler(backend)
+    compile_output = compiler.compile(parser.parse_program())
+
+    if args.S:
+        # output will be a string
+        print(compile_output)
+        exit(0)
+
+    class OutputReader:
+        def __init__(self, output):
+            self.output = output
+            self.lineno = 1
+
+        def __iter__(self):
+            return iter(self.output)
 
     assembler = ExtendedAssembler()
     assembler.enable_sync = args.enable_sync
-    assembler.parse(assembly)
+    assembler.consume_reader(OutputReader(compile_output))
 
     sargs = {}
     if args.arg:
@@ -57,14 +85,17 @@ if __name__ == '__main__':
         writer = DataPackWriter(data_dir, args.namespace, args.as_zip)
         if args.rem_existing:
             writer.delete_existing()
+        if args.pack_description:
+            writer.set_description(args.pack_description)
     else:
         writer = DummyWriter()
     writer.open()
 
     session = CompilerSession((x, y, z), writer, args.namespace, stack_size=args.stack,
-                      args=sargs, debug=args.debug, page_size=args.page_size)
+                      args=sargs, setup_on_load=args.setup_on_load, debug=args.debug,
+                      page_size=args.page_size)
     assembler.write_to_session(session)
-    setup, cleanup = session.create_up_down_functions()
+    setup, cleanup = session.create_up_down_functions(args.spawn_location)
     writer.close()
     print('Generated', writer.command_count, 'commands in',
           writer.func_count, 'functions')

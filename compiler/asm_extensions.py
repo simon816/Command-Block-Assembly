@@ -113,24 +113,6 @@ class ExtendedAssembler(Assembler):
             'MOVINDD': self.handle_mov_ind_d,
             'MOVINDS': self.handle_mov_ind_s
         })
-        self.event_handlers = []
-
-    def handle_directive(self, directive, value):
-        if directive == 'event_handler':
-            handler, event, conditions = value.split(' ', 2)
-            conds = {}
-            if conditions:
-                for cond in conditions.split(';'):
-                    key, value = cond.split('=', 1)
-                    path = tuple(key.split('.'))
-                    conds[path] = value
-            self.event_handlers.append({
-                'event': event,
-                'conditions': conds,
-                'handler': self.sub_to_func_name(handler)
-            })
-            return
-        super().handle_directive(directive, value)
 
     def handle_ret(self):
         if not self.enable_sync:
@@ -180,9 +162,3 @@ class ExtendedAssembler(Assembler):
         self.add_command(Function('mem_get'))
         self.add_command(OpAssign(dest, Var('memory_buffer')))
 
-    def write_to_session(self, session):
-        super().write_to_session(session)
-        for event_handler in self.event_handlers:
-            session.add_event_handler(event_handler['event'],
-                                      event_handler['conditions'],
-                                      event_handler['handler'])
