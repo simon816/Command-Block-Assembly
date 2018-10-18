@@ -30,9 +30,33 @@ def set_tracking(visitor, expr):
     visitor.emit(IR.Asm((('CMD ' + rem_old, None, None),)))
     visitor.emit(IR.Asm((('CMD ' + add_new, None, None),)))
 
+def set_rotation(visitor, expr):
+    assert len(expr.args) == 2
+    yaw, pitch = map(visitor.visit_expression, expr.args)
+    assert isinstance(yaw, IR.LiteralInt)
+    assert isinstance(pitch, IR.LiteralInt)
+    visitor.emit(IR.Asm((('CMD tp @s ~ ~ ~ %d %d'
+                          % (yaw.val, pitch.val), None, None),)))
+
+def summon_entity(visitor, expr):
+    assert len(expr.args) == 3
+    name, loc, nbt = map(visitor.visit_expression, expr.args)
+    assert isinstance(name, IR.LiteralString)
+    assert isinstance(loc, IR.LiteralString)
+    assert isinstance(nbt, IR.LiteralString)
+    visitor.emit(IR.Asm((('CMD summon %s %s %s'
+                          % (name.val, loc.val, nbt.val), None, None),)))
+
+def kill_this_entity(visitor, expr):
+    assert len(expr.args) == 0
+    visitor.emit(IR.Asm((('CMD kill @s', None, None),)))
+
 def exports():
     return {
         'add_tag_this_entity': add_tag,
         'remove_tag_this_entity': remove_tag,
         'set_scoreboard_tracking': set_tracking,
+        'set_this_entity_rotation': set_rotation,
+        'summon_entity': summon_entity,
+        'kill_this_entity': kill_this_entity,
     }

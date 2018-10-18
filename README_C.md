@@ -12,15 +12,15 @@ which is a 32 bit signed integer.
 
 The compiler is invoked by calling `compiler_main.py`.
 
-The parameters are similar to the assembler, with the addition of `--page-size` and `--dump-asm`.
-
-
 Command line parameters:
 ```
-usage: compiler_main.py [-h] [--world-dir WORLD_DIR] [--namespace NAMESPACE]
-                        [--rem-existing] [--debug] [--stack STACK] [--arg ARG]
+usage: compiler_main.py [-h] [-E] [-S] [--world-dir WORLD_DIR] [--as_zip]
+                        [--namespace NAMESPACE] [--rem-existing] [--debug]
+                        [--stack STACK] [--arg ARG]
                         [--place-location PLACE_LOCATION] [--enable-sync]
-                        [--page-size PAGE_SIZE] [--dump-asm]
+                        [--page-size PAGE_SIZE] [--setup-on-load]
+                        [--spawn-location SPAWN_LOCATION]
+                        [--pack-description PACK_DESCRIPTION]
                         file
 
 positional arguments:
@@ -28,8 +28,11 @@ positional arguments:
 
 optional arguments:
   -h, --help            show this help message and exit
+  -E                    Only run preprocessor. Outputs to stdout
+  -S                    Don't run assembler. Outputs ASM to stdout
   --world-dir WORLD_DIR
                         World Directory
+  --as_zip              Write datapack as zip file
   --namespace NAMESPACE
                         Function namespace
   --rem-existing        Remove existing functions in namespace
@@ -41,10 +44,14 @@ optional arguments:
   --enable-sync         Enable SYNC opcode
   --page-size PAGE_SIZE
                         Memory page size
-  --dump-asm            Dump generated ASM
+  --setup-on-load       Run setup on minecraft:load
+  --spawn-location SPAWN_LOCATION
+                        Location to spawn hidden armor stand
+  --pack-description PACK_DESCRIPTION
+                        Datapack description
 ```
 
 There are some examples in the [examples](https://github.com/simon816/Command-Block-Assembly/tree/master/examples) directory.
 
-The [mclib.h](https://github.com/simon816/Command-Block-Assembly/blob/master/examples/mclib.h) file
+The [mclib.h](https://github.com/simon816/Command-Block-Assembly/blob/master/compiler/include/mclib.h) file
 contains several useful macros and definitions.

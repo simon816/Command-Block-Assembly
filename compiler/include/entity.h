@@ -39,4 +39,10 @@ void remove_tag_this_entity(const char *tag);
 
 void set_scoreboard_tracking(entity_local variable, const char *criterion);
 
+void set_this_entity_rotation(int yaw, int pitch);
+
+void summon_entity(const char *entity_name, const char *location, const char *nbt);
+
+void kill_this_entity();
+
 #endif /* __ENTITY_H */

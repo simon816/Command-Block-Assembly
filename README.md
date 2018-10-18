@@ -16,6 +16,31 @@ keeps the usage of command blocks to a minimum.
 There is a C compiler that compiles to this assembly language,
 read more [here](https://github.com/simon816/Command-Block-Assembly/blob/master/README_C.md).
 
+As shown in the [fibonacci sequence example](https://github.com/simon816/Command-Block-Assembly/blob/master/examples/fib.c),
+it's just like writing normal C code.
+
+```c
+#include <stdio.h>
+
+int x;
+int y;
+int old_x;
+int counter;
+
+void main() {
+    x = 0;
+    y = 1;
+    counter = 1;
+    do {
+        printf("fib(%d) = %d", counter++, x);
+        sync;
+        old_x = x;
+        x = y;
+        y += old_x;
+    } while(x >= 0);
+}
+```
+
 # The Assembly Language
 
 It is a simple language with instructions similar to that of x86.
@@ -105,6 +130,17 @@ main:
 |PRINT|arg1, [...args]|Outputs arguments to chat for all players (`@a` selector)|
 |CMD|bare words|Runs the given command|
 |TEST|bare words|Runs the given command, skipping the next line if the command failed|
+|EXECAS|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute as` if the selector matches|
+|EXECASN|label, sel_type, sel_pairs|Same as EXECAS except runs if it does _not_ match the selector|
+|EXECAT|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute at` if the selector matches|
+|EXECATP|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute positioned as` if the selector matches|
+|EXECPOS|label, x, y, z|Runs the function defined in `label` using `/execute positioned`|
+|EXECALI|label, axes|Runs the function defined in `label` using `/execute align`|
+|EXECFACP|label, x, y, z|Runs the function defined in `label` using `/execute facing`|
+|EXECFAC|label, feature, sel_type, sel_pairs|Runs the function defined in `label` using `/execute facing entity`|
+|EXECROT|label, y, x|Runs the function defined in `label` using `/execute rotated`|
+|EXECROTE|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute rotated as`|
+|EXECANC|label, anchor|Runs the function defined in `label` using `/execute anchored`|
 |PUSH||Pushes stack register onto the stack, increments stack pointer|
 |POP||Pops stack into stack register, decrements stack pointer|
 |SYNC||Synchronises with the game tick. i.e. wait one tick before continuing|
@@ -161,6 +197,17 @@ into wherever the directive is.
 "Include headers". Does not load any code from the file, but pulls in the symbol table (subroutines, constants).  
 Useful for using library code already running in the game. (i.e. library was loaded sometime beforehand).
 
+#### `#event_handler label event_name condition1=value1;condition2=value2;...`
+
+Runs the subroutine with the given `label` whenever the named event is triggered and the conditions match.
+The following is an example where the function `on_placed_stone` will get invoked every time a player places
+a stone block.
+
+```
+#event_handler on_placed_stone minecraft:placed_block item.item=minecraft:stone
+on_placed_stone:
+    ...
+```
 
 ## Memory locations
 
@@ -183,9 +230,11 @@ The assembler is invoked by calling `main.py`.
 
 Command line parameters:
 ```
-usage: main.py [-h] [--world-dir WORLD_DIR] [--namespace NAMESPACE]
+usage: main.py [-h] [--world-dir WORLD_DIR] [--as_zip] [--namespace NAMESPACE]
                [--rem-existing] [--debug] [--stack STACK] [--arg ARG]
                [--jump JUMP] [--place-location PLACE_LOCATION] [--enable-sync]
+               [--setup-on-load] [--spawn-location SPAWN_LOCATION]
+               [--pack-description PACK_DESCRIPTION]
                file
 
 positional arguments:
@@ -195,6 +244,7 @@ optional arguments:
   -h, --help            show this help message and exit
   --world-dir WORLD_DIR
                         World Directory
+  --as_zip              Write datapack as zip file
   --namespace NAMESPACE
                         Function namespace
   --rem-existing        Remove existing functions in namespace
@@ -205,6 +255,11 @@ optional arguments:
   --place-location PLACE_LOCATION
                         Location to place command blocks
   --enable-sync         Enable SYNC opcode
+  --setup-on-load       Run setup on minecraft:load
+  --spawn-location SPAWN_LOCATION
+                        Location to spawn hidden armor stand
+  --pack-description PACK_DESCRIPTION
+                        Datapack description
 ```
 
 Notes:

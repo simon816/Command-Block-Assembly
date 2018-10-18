@@ -6,7 +6,7 @@
 
 
 #ifndef __MCLIB_H
-#define __MCLIB_H 1
+#define __MCLIB_H
 
 /**
  *  Stringify (add quotes to) the bare word argument

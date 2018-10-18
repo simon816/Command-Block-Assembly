@@ -3,7 +3,8 @@ def load():
     from . import \
          builtin, \
          stdio, \
-         entity
+         entity, \
+         block
 
     return locals()
 

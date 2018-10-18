@@ -787,9 +787,11 @@ void OP(int src, int *dest) {
         self._execute_chain_helper(lbl, ExecuteChain().facing(
             self._read_pos(x, y, z)))
 
-    def handle_execute_face_entity(self, lbl, sel_type, *pairs):
+    def handle_execute_face_entity(self, lbl, feature, sel_type, *pairs):
+        arg_type, feature = feature
+        assert arg_type == 'string'
         self._execute_chain_helper(lbl, ExecuteChain().facing_entity(
-            self._read_selector(sel_type, pairs)))
+            self._read_selector(sel_type, pairs), feature))
 
     def handle_execute_rotate(self, lbl, y, x):
         y, x = self.resolve_ref(*y), self.resolve_ref(*x)
