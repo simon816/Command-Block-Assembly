@@ -10,14 +10,11 @@ def printf(visitor, expr):
     visitor.emit(IR.Print(tuple(map(visitor.eliminate_offset, args))))
     return IR.ReturnRegister
 
-def quote(string):
-    return '"%s"' % string.replace('"', '\\"')
-
 def string_format(visitor, template, args):
     ret = []
     if template == '':
         assert not args
-        return ['""']
+        return ['']
     section = template
     ind = section.find('%')
     while ind != -1 and args:
@@ -30,15 +27,15 @@ def string_format(visitor, template, args):
         else:
             assert False
         if isinstance(arg, IR.LiteralString):
-            arg = quote(arg.val)
+            arg = arg.val
         before = section[:ind]
         if before:
-            ret.append(quote(before))
+            ret.append(before)
         ret.append(arg)
         section = section[ind+2:]
         ind = section.find('%')
     if ind == -1 and section:
-        ret.append(quote(section))
+        ret.append(section)
     assert ind == -1 and not args
     return ret
 

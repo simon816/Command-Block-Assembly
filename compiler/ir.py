@@ -149,10 +149,12 @@ class IRVisitor:
         self.downstream = downstream
 
     def emit(self, insn):
+        #print(self.__class__.__name__, "emits", insn)
         if self.downstream:
             self.downstream.handle_insn(insn)
 
     def handle_insn(self, insn):
+        #print(self.__class__.__name__, "receives", insn)
         self.insn_func_map[type(insn)](insn)
 
     def handle_fn_begin(self, insn):
@@ -257,82 +259,170 @@ def node_debug(node):
 
 class OptimizerLoop(IRVisitor):
 
-    def handle_insn(self, insn):
-        #print("DOWNSTREAM", node_debug(insn))
-        super().handle_insn(insn)
+    def __init__(self, upstream, downstream):
+        super().__init__(downstream)
+        self.upstream = upstream
+        self.buffer = []
+
+    def emit(self, insn):
+        self.buffer.append(insn)
+
+    def handle_fn_end(self, insn):
+        self.emit(insn)
+        if self._success:
+            for insn in self.buffer:
+                self.upstream.handle_insn(insn)
+        else:
+            for insn in self.buffer:
+                super().emit(insn)
+        self.buffer = []
+
+    def new_fn(self):
+        self.buffer = []
+        self._success = False
+
+    def report_success(self):
+        self._success = True
 
 class Optimizer(IRVisitor):
 
     def __init__(self, downstream):
-        optimizer = OptimizerLoop(downstream)
-        optimizer = ConstantElimination(optimizer)
-        optimizer = JumpElimination(optimizer)
+        loop = OptimizerLoop(self, downstream)
+        optimizer = loop
+        optimizer = ConstantElimination(loop, optimizer)
+        optimizer = JumpElimination(loop, optimizer)
+        optimizer = DeadCodeElimination(loop, optimizer)
         super().__init__(optimizer)
+        self.loop = loop
+
+    def handle_entity_local(self, insn):
+        # This appears before functions begin, pass straight through
+        self.loop.downstream.handle_insn(insn)
+
+    def handle_fn_begin(self, insn):
+        self.loop.new_fn()
+        self.emit(insn)
 
     def handle_insn(self, insn):
         #print("UPSTREAM", node_debug(insn))
         super().handle_insn(insn)
 
-class JumpElimination(IRVisitor):
+class OptimizerVisitor(IRVisitor):
 
-    def __init__(self, downstream):
+    def __init__(self, loop, downstream):
         super().__init__(downstream)
+        self.loop = loop
+        self.init()
+
+    def init(self):
+        pass
+
+    def success(self):
+        # print("SUCCESS from", self.__class__.__name__)
+        self.loop.report_success()
+
+class DeadCodeElimination(OptimizerVisitor):
+
+    def init(self):
+        self.dead = False
+
+    def emit(self, insn):
+        if not self.dead:
+            super().emit(insn)
+
+    def handle_entity_local(self, insn):
+        self.dead = False
+        self.emit(insn)
+
+    def handle_fn_begin(self, insn):
+        self.dead = False
+        self.emit(insn)
+
+    def handle_fn_end(self, insn):
+        self.dead = False
+        self.emit(insn)
+
+    def handle_jump(self, insn):
+        self.emit(insn)
+        self.dead = True
+
+    def handle_label(self, insn):
+        self.dead = False
+        self.emit(insn)
+
+class JumpElimination(OptimizerVisitor):
+
+    def init(self):
         self.buffer = []
         self.aliases = {}
         self.previous = None
+        self.label_used = {}
+        self.aliases_of = {}
 
     def emit(self, insn):
         self.buffer.append(insn)
         self.previous = insn
 
-    def handle_fn_begin(self, insn):
-        self.emit(insn)
-
-    def handle_fn_end(self, insn):
-        self.emit(insn)
-        for i in self.buffer:
-            if isinstance(i, (IR.Jump, IR.JumpIf, IR.JumpIfNot)):
-                aliases = self.aliases[i.dest]
-                if aliases:
-                    i = i._replace(dest=aliases[0])
-            super().emit(i)
-        self.buffer = []
-        self.aliases = {}
-        self.previous = None
-
-    def handle_label(self, label):
-        if not label in self.aliases:
-            self.aliases[label] = []
-        if isinstance(self.previous, IR.Label):
-            self.aliases[label].append(self.previous)
-            emit = False
-        else:
-            emit = True
-        for i in range(1, 3):
-            if len(self.buffer) < i:
-                continue
-            prev = self.buffer[-i]
-            if isinstance(prev, (IR.Jump, IR.JumpIf, IR.JumpIfNot)):
-                if prev.dest == label or \
-                   prev.dest in self.aliases[label]:
-                    self.buffer.pop(-i)
-                    break
-        if emit:
-            self.emit(label)
+    def is_jump(self, insn):
+        return isinstance(insn, (IR.Jump, IR.JumpIf, IR.JumpIfNot))
 
     def handle_jump(self, insn):
+        self.uses_label(insn.dest)
         self.emit(insn)
 
     def handle_jump_if(self, insn):
+        self.uses_label(insn.dest)
         self.emit(insn)
 
     def handle_jump_if_not(self, insn):
+        self.uses_label(insn.dest)
         self.emit(insn)
 
-class ConstantElimination(IRVisitor):
+    def uses_label(self, label):
+        self.label_used[label] = True
 
-    def __init__(self, downstream):
-        super().__init__(downstream)
+    def handle_fn_begin(self, insn):
+        self.init()
+        self.emit(insn)
+
+    def label_is_used(self, label):
+        if label in self.label_used:
+            return True
+        if label not in self.aliases_of:
+            return False
+        # Label is used if any of its aliases are used
+        return any(filter(self.label_is_used, self.aliases_of[label]))
+
+    def handle_fn_end(self, insn):
+        self.emit(insn)
+        for insn in self.buffer:
+            if self.is_jump(insn):
+                old_label = insn.dest
+                if old_label in self.aliases:
+                    self.success()
+                    insn = insn._replace(dest=self.aliases[old_label])
+            elif isinstance(insn, IR.Label):
+                if not self.label_is_used(insn):
+                    # Label not used, remove
+                    self.success()
+                    continue
+            super().emit(insn)
+
+    def handle_label(self, label):
+        if isinstance(self.previous, IR.Label):
+            # If the previous was a label, then we are simply an alias of it
+            self.aliases[label] = self.previous
+            self.aliases_of.setdefault(self.previous, []).append(label)
+            return
+        if isinstance(self.previous, IR.Jump):
+            # If the previous was a jump to this label, eliminate the jump
+            if self.previous.dest == label:
+                self.buffer.pop()
+        self.emit(label)
+
+class ConstantElimination(OptimizerVisitor):
+
+    def init(self):
         self.slot_value_map = {}
 
     def literal(self, ref):
@@ -359,11 +449,27 @@ class ConstantElimination(IRVisitor):
 
     def handle_jump_if(self, insn):
         self.slot_value_map = {}
-        self.emit(insn)
+        cond = self.literal(insn.cond)
+        if cond is not None:
+            self.success()
+            if cond != 0:
+                self.emit(IR.Jump(insn.dest))
+            else:
+                pass # just don't jump
+        else:
+            self.emit(insn)
 
     def handle_jump_if_not(self, insn):
         self.slot_value_map = {}
-        self.emit(insn)
+        cond = self.literal(insn.cond)
+        if cond is not None:
+            self.success()
+            if cond != 0:
+                pass # just don't jump
+            else:
+                self.emit(IR.Jump(insn.dest))
+        else:
+            self.emit(insn)
 
     def handle_call(self, insn):
         self.slot_value_map = {}
@@ -401,10 +507,13 @@ class ConstantElimination(IRVisitor):
             val = func(left, right)
             if type(val) == bool: # for boolean evaluations
                 val = 1 if val else 0
+            self.success()
             self.handle_insn(IR.Move(self.int(val), insn.dest))
         elif i_mode & 2 and left == ident:
+            self.success()
             self.handle_insn(IR.Move(insn.right, insn.dest))
         elif i_mode & 1 and right == ident:
+            self.success()
             self.handle_insn(IR.Move(insn.left, insn.dest))
         else:
             if insn.dest in self.slot_value_map:
