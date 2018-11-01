@@ -861,6 +861,7 @@ class CompilerVisitor(Visitor):
         self.current_function = None
         self.loop_attacher = LoopAttacher(None, None, self, None)
         self.python_functions = {}
+        self.temp_slots = set()
         self.pragmas = {}
 
     def import_py_lib(self, lib_exports):
@@ -917,6 +918,14 @@ class CompilerVisitor(Visitor):
             self.local_labels[label] = 0
         self.local_labels[label] += 1
         return IR.Label('%s_%d' %(label, self.local_labels[label]))
+
+    def consume_slot(self, slot):
+        if slot in self.temp_slots:
+            self.temp_slots.remove(slot)
+            self.emit(IR.Free(slot))
+
+    def virtual_slot(self, slot):
+        self.temp_slots.add(slot)
 
     ### Pragmas
 
@@ -1169,6 +1178,7 @@ class CompilerVisitor(Visitor):
         self.current_function = func_symbol
 
         self.local_labels = {}
+        self.temp_slots.clear()
 
         pragma = {}
         # check pragmas
@@ -1342,6 +1352,7 @@ class CompilerVisitor(Visitor):
             self.emit(begin)
             cond = self.visit_expression(stmt.cond)
             self.emit(IR.JumpIfNot(end, cond))
+            self.consume_slot(cond)
             self.visit_statement(stmt.body)
             self.emit(IR.Jump(begin))
             self.emit(end)
@@ -1355,21 +1366,23 @@ class CompilerVisitor(Visitor):
             self.emit(cond_label)
             cond = self.visit_expression(stmt.cond)
             self.emit(IR.JumpIf(begin, cond))
+            self.consume_slot(cond)
             self.emit(end)
 
     def visit_for_stmt(self, stmt):
         with self.loop(continue_='for_cont', break_='end_for') as (after_label, end):
             if stmt.init:
-                self.visit_expression(stmt.init)
+                self.consume_slot(self.visit_expression(stmt.init))
             cond_label = self.unique_label('for')
             self.emit(cond_label)
             if stmt.cond:
                 cond = self.visit_expression(stmt.cond)
                 self.emit(IR.JumpIfNot(end, cond))
+                self.consume_slot(cond)
             self.visit_statement(stmt.body)
             self.emit(after_label)
             if stmt.after:
-                self.visit_expression(stmt.after)
+                self.consume_slot(self.visit_expression(stmt.after))
             self.emit(IR.Jump(cond_label))
             self.emit(end)
 
@@ -1379,6 +1392,7 @@ class CompilerVisitor(Visitor):
 
         cond = self.visit_expression(stmt.cond)
         self.emit(IR.JumpIfNot(false_label, cond))
+        self.consume_slot(cond)
 
         if self.exists(stmt.true):
             self.visit_statement(stmt.true)
@@ -1415,6 +1429,7 @@ class CompilerVisitor(Visitor):
                 self.emit_op(IR.Op.Eq, option, self.int(choice), res)
                 self.emit(IR.JumpIf(dest, res))
             self.emit(IR.Jump(default_label))
+            self.consume_slot(option)
 
             for label, body in case_bodies:
                 self.emit(label)
@@ -1444,6 +1459,7 @@ class CompilerVisitor(Visitor):
                 # for the return value, so store it there
                 dest = self.offset(IR.StackPointer, -ret_type.size, ret_type)
                 self.emit(IR.Move(ret_val, dest))
+            self.consume_slot(ret_val)
         self.emit(IR.Return())
 
     def visit_goto_stmt(self, stmt):
@@ -1453,7 +1469,7 @@ class CompilerVisitor(Visitor):
         self.emit(IR.Sync())
 
     def visit_expr_stmt(self, stmt):
-        self.visit_expression(stmt.expr)
+        self.consume_slot(self.visit_expression(stmt.expr))
 
     ### Expressions
 
@@ -1523,6 +1539,7 @@ class CompilerVisitor(Visitor):
         op = IR.Op.lookup(expr.op)
         res = mk_slot(left.type)
         self.emit_op(op, left, right, res)
+        self.virtual_slot(res)
         return res
 
     def visit_member_access_expr(self, expr):

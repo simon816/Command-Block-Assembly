@@ -12,7 +12,8 @@ class CompilerSession(Session):
             'memory_buffer': 'mb',
             'memory_slot': ('ms_%d', range(self.page_size))
         })
-        self.add_page()
+        if page_size > 0:
+            self.add_page()
 
     def add_page(self):
         mbr = Var('memory_buffer')
@@ -113,6 +114,7 @@ class ExtendedAssembler(Assembler):
             'MOVINDD': self.handle_mov_ind_d,
             'MOVINDS': self.handle_mov_ind_s
         })
+        self.use_mem = False
 
     def handle_ret(self):
         if not self.enable_sync:
@@ -122,6 +124,7 @@ class ExtendedAssembler(Assembler):
 
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""
+        self.use_mem = True
         src, dest = self.get_src_dest(src, dest)
         s_off = self.resolve_ref(*s_off)
         d_off = self.resolve_ref(*d_off)
@@ -140,6 +143,7 @@ class ExtendedAssembler(Assembler):
 
     def handle_mov_ind_d(self, src, dest, d_off):
         """Move src to indirect dest"""
+        self.use_mem = True
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*d_off)
         assert type(offset) == int
@@ -152,6 +156,7 @@ class ExtendedAssembler(Assembler):
 
     def handle_mov_ind_s(self, src, s_off, dest):
         """Move indirect src to dest"""
+        self.use_mem = True
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*s_off)
         assert type(offset) == int

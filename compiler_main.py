@@ -91,9 +91,13 @@ if __name__ == '__main__':
         writer = DummyWriter()
     writer.open()
 
+    page_size = args.page_size
+    # don't bother with memory if not used
+    if not assembler.use_mem:
+        page_size = 0
     session = CompilerSession((x, y, z), writer, args.namespace, stack_size=args.stack,
                       args=sargs, setup_on_load=args.setup_on_load, debug=args.debug,
-                      page_size=args.page_size)
+                      page_size=page_size)
     assembler.write_to_session(session)
     setup, cleanup = session.create_up_down_functions(args.spawn_location)
     writer.close()

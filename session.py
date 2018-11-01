@@ -126,6 +126,10 @@ class Session:
         current_push_func = 'stack_push_0'
         current_pop_func = 'stack_pop_0'
         self.scope.add_function_names((current_push_func, current_pop_func))
+        stack_overflow = Execute.If(SelEquals(Var('success_tracker'), 0),
+                                    Tellraw(['Stack overflow error!'], 'a'))
+        stack_underflow = Execute.If(SelEquals(Var('success_tracker'), 0),
+                                     Tellraw(['Stack underflow error!'], 'a'))
         for i in range(self.stack_size):
             stack_dump.append(Var('stack_slot', i))
             if i != self.stack_size - 1:
@@ -152,12 +156,16 @@ class Session:
                     current_push_seq = Subsequence()
                     current_pop_seq = Subsequence()
                 else:
+                    current_push_seq.add_command(stack_overflow)
+                    current_pop_seq.add_command(stack_overflow)
                     self.add_subsequence(current_push_func, current_push_seq)
                     self.add_subsequence(current_pop_func, current_pop_seq)
                 current_push_func = next_push_func
                 current_pop_func = next_pop_func
 
         if one_function:
+            current_push_seq.add_command(stack_overflow)
+            current_pop_seq.add_command(stack_overflow)
             self.add_subsequence(current_push_func, push_stack)
             self.add_subsequence(current_pop_func, pop_stack)
 

@@ -337,6 +337,8 @@ class DeadCodeElimination(OptimizerVisitor):
     def emit(self, insn):
         if not self.dead:
             super().emit(insn)
+        else:
+            self.success()
 
     def handle_entity_local(self, insn):
         self.dead = False
@@ -351,6 +353,10 @@ class DeadCodeElimination(OptimizerVisitor):
         self.emit(insn)
 
     def handle_jump(self, insn):
+        self.emit(insn)
+        self.dead = True
+
+    def handle_return(self, insn):
         self.emit(insn)
         self.dead = True
 
@@ -432,6 +438,12 @@ class ConstantElimination(OptimizerVisitor):
 
     def init(self):
         self.slot_value_map = {}
+        self.slot_ref_map = {}
+        self.clear()
+
+    def clear(self):
+        self.slot_value_map = {}
+        self.slot_ref_map = {}
 
     def literal(self, ref):
         if isinstance(ref, IR.LiteralInt):
@@ -444,19 +456,19 @@ class ConstantElimination(OptimizerVisitor):
         return IR.LiteralInt(val, IntType())
 
     def handle_fn_begin(self, insn):
-        self.slot_value_map = {}
+        self.clear()
         self.emit(insn)
 
     def handle_label(self, insn):
-        self.slot_value_map = {}
+        self.clear()
         self.emit(insn)
 
     def handle_jump(self, insn):
-        self.slot_value_map = {}
+        self.clear()
         self.emit(insn)
 
     def handle_jump_if(self, insn):
-        self.slot_value_map = {}
+        self.clear()
         cond = self.literal(insn.cond)
         if cond is not None:
             self.success()
@@ -468,7 +480,7 @@ class ConstantElimination(OptimizerVisitor):
             self.emit(insn)
 
     def handle_jump_if_not(self, insn):
-        self.slot_value_map = {}
+        self.clear()
         cond = self.literal(insn.cond)
         if cond is not None:
             self.success()
@@ -480,13 +492,27 @@ class ConstantElimination(OptimizerVisitor):
             self.emit(insn)
 
     def handle_call(self, insn):
-        self.slot_value_map = {}
+        self.clear()
         self.emit(insn)
 
     def handle_move(self, insn):
         val = self.literal(insn.src)
         if val is not None:
             self.slot_value_map[insn.dest] = val
+        if insn.src == insn.dest: # useless move
+            self.success()
+            return
+        if insn.dest in self.slot_ref_map:
+            prev_val = self.slot_ref_map[insn.dest]
+            if insn.src == prev_val: # useless move
+                self.success()
+                return
+        if insn.src in self.slot_ref_map:
+            src_ref = self.slot_ref_map[insn.src]
+            if src_ref == insn.dest: # useless move
+                self.success()
+                return
+        self.slot_ref_map[insn.dest] = insn.src
         self.emit(insn)
 
     def handle_operation(self, insn):
@@ -529,5 +555,5 @@ class ConstantElimination(OptimizerVisitor):
             self.emit(insn)
 
     def handle_unary_operation(self, insn):
-        self.slot_value_map = {}
+        self.clear()
         self.emit(insn)
