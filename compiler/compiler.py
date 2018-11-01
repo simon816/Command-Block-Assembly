@@ -16,7 +16,8 @@ class Compiler:
 
     def compile(self, program):
         generator = CodeGenerator(self.writer)
-        visitor = CompilerVisitor(Optimizer(generator))
+        optimizer = IR2Optimizer(generator)
+        visitor = CompilerVisitor(Optimizer(IRLevel2Generator(optimizer)))
         self.load_libs(visitor)
         visitor.visit_program(program)
         return self.writer.get_output()
@@ -26,16 +27,184 @@ class Compiler:
         for lib_name, exports in libs.items():
             visitor.import_py_lib(exports())
 
-class CodeGenerator(IRVisitor):
+class I2:
 
-    def __init__(self, writer):
-        super().__init__()
-        self.writer = writer
-        self.temp_registers = ['a', 'b', 'c', 'd']
-        self.volatile_reg = ('v1', 'v2', 'v3', 'v4')
-        self.volatile_pos = 0
-        self.entity_locals = {}
+    Addr = namedtuple('Addr', 'val')
+    Lit = namedtuple('Lit', 'val')
+    Const = namedtuple('Const', 'name')
+    Str = namedtuple('Str', 'val')
+
+    DefineConst = namedtuple('DefineConst', 'name val')
+    EntityLocal = namedtuple('EntityLocal', 'name specific')
+    EventHandler = namedtuple('EventHandler', 'func event_name conditions')
+    BeginFunc = namedtuple('BeginFunc', 'name')
+    EndFunc = namedtuple('EndFunc', '')
+    Label = namedtuple('Label', 'name')
+
+    Jump = namedtuple('Jump', 'dest')
+    CmpAndJump = namedtuple('CmpAndJump', 'left right cmp dest')
+    Call = namedtuple('Call', 'name')
+
+    RelMove = namedtuple('RelMove', 'src src_off dest dest_off')
+    Operation = namedtuple('Operation', 'op src dest')
+    Not = namedtuple('Not', 'dest')
+    Push = namedtuple('Push', '')
+    Pop = namedtuple('Pop', '')
+    Ret = namedtuple('Ret', '')
+    Print = namedtuple('Print', 'args')
+    Sync = namedtuple('Sync', '')
+    Asm = namedtuple('Asm', 'asm')
+    Test = namedtuple('Test', 'cmd')
+    Exec = namedtuple('Exec', 'type func args')
+
+class IR2Visitor:
+
+    def __init__(self, downstream=None):
+        self.insn_handler_map = {
+            I2.DefineConst: self.handle_define_const,
+            I2.EntityLocal: self.handle_entity_local,
+            I2.EventHandler: self.handle_event_handler,
+            I2.BeginFunc: self.handle_begin_func,
+            I2.EndFunc: self.handle_end_func,
+            I2.Label: self.handle_label,
+            I2.Jump: self.handle_jump,
+            I2.CmpAndJump: self.handle_cmp_jump,
+            I2.Call: self.handle_call,
+            I2.RelMove: self.handle_rel_move,
+            I2.Operation: self.handle_operation,
+            I2.Not: self.handle_not,
+            I2.Push: self.handle_push,
+            I2.Pop: self.handle_pop,
+            I2.Ret: self.handle_ret,
+            I2.Print: self.handle_print,
+            I2.Sync: self.handle_sync,
+            I2.Asm: self.handle_asm,
+            I2.Test: self.handle_test,
+            I2.Exec: self.handle_exec,
+        }
+        self.downstream = downstream
         self.init()
+
+    def init(self):
+        pass
+
+    def emit(self, insn):
+        if self.downstream:
+            self.downstream.handle_insn(insn)
+
+    def handle_insn(self, insn):
+        self.insn_handler_map[type(insn)](insn)
+
+    def handle_define_const(self, insn):
+        self.emit(insn)
+
+    def handle_entity_local(self, insn):
+        self.emit(insn)
+
+    def handle_event_handler(self, insn):
+        self.emit(insn)
+
+    def handle_begin_func(self, insn):
+        self.emit(insn)
+
+    def handle_end_func(self, insn):
+        self.emit(insn)
+
+    def handle_label(self, insn):
+        self.emit(insn)
+
+    def handle_jump(self, insn):
+        self.emit(insn)
+
+    def handle_cmp_jump(self, insn):
+        self.emit(insn)
+
+    def handle_call(self, insn):
+        self.emit(insn)
+
+    def handle_rel_move(self, insn):
+        self.emit(insn)
+
+    def handle_operation(self, insn):
+        self.emit(insn)
+
+    def handle_not(self, insn):
+        self.emit(insn)
+
+    def handle_push(self, insn):
+        self.emit(insn)
+
+    def handle_pop(self, insn):
+        self.emit(insn)
+
+    def handle_ret(self, insn):
+        self.emit(insn)
+
+    def handle_print(self, insn):
+        self.emit(insn)
+
+    def handle_sync(self, insn):
+        self.emit(insn)
+
+    def handle_asm(self, insn):
+        self.emit(insn)
+
+    def handle_test(self, insn):
+        self.emit(insn)
+
+    def handle_exec(self, insn):
+        self.emit(insn)
+
+class IR2Optimizer(IR2Visitor):
+
+    def init(self):
+        self.buffering = False
+        self.buffer = []
+        self.store = {}
+        self.next_is_conditional = False
+
+    def emit(self, insn):
+        if self.buffering:
+            self.buffer.append(insn)
+        else:
+            super().emit(insn)
+        self.next_is_conditional = False
+
+    def handle_begin_func(self, insn):
+        self.flush_buffer()
+        self.buffering = True
+        self.emit(insn)
+
+    def handle_end_func(self, insn):
+        self.flush_buffer()
+        self.emit(insn)
+
+    def flush_buffer(self):
+        self.buffering = False
+        for insn in self.buffer:
+            self.emit(insn)
+        self.buffer = []
+
+    def handle_rel_move(self, insn):
+        k, v = (insn.dest, insn.dest_off), (insn.src, insn.src_off)
+        if self.next_is_conditional:
+            if k in self.store:
+                cond = self.buffer[-1]
+                # print("%s is %s when %s else %s" % (k, v, cond, self.store[k]))
+        self.store[k] = v
+        self.emit(insn)
+
+    def handle_label(self, insn):
+        self.store = {}
+        self.emit(insn)
+
+    def handle_cmp_jump(self, insn):
+        if isinstance(self.buffer[-1], I2.RelMove):
+            pass
+        self.emit(insn)
+        self.next_is_conditional = True
+
+class CodeGenerator(IR2Visitor):
 
     def LIT(self, number):
         return self.writer.ref_literal(number)
@@ -52,16 +221,147 @@ class CodeGenerator(IRVisitor):
     def RAW(self, text):
         return self.writer.ref_raw(text)
 
-    def init(self):
-        self.write_registers('csp', 'cbp', 'rr',
-                             *(self.temp_registers + list(self.volatile_reg)))
-        self.writer.write_instruction('MOV', self.LIT(0), self.ADDR(0))
-        self.writer.write_instruction('MOV', self.LIT(0), self.ADDR(1))
+    def __init__(self, writer):
+        super().__init__()
+        self.writer = writer
 
-    def write_registers(self, *regs):
+    def ref(self, val):
+        return {
+            I2.Lit: lambda l: self.LIT(l.val),
+            I2.Addr: lambda a: self.ADDR(a.val),
+            I2.Const: lambda c: self.SYM(c.name),
+            I2.Str: lambda s: self.STR(s.val),
+            type(None): lambda n: None
+        }[type(val)](val)
+
+    def handle_define_const(self, insn):
+        self.writer.write_constant(insn.name, self.ref(insn.val))
+
+    def handle_entity_local(self, insn):
+        self.writer.write_entity_local(insn.name, insn.specific)
+
+    def handle_event_handler(self, insn):
+        self.writer.write_directive('event_handler', '%s %s %s' % (
+            insn.func, insn.event_name, insn.conditions))
+
+    def handle_begin_func(self, insn):
+        self.writer.write_subroutine(insn.name)
+
+    def handle_end_func(self, insn):
+        self.writer.end_subroutine()
+
+    def handle_label(self, insn):
+        self.writer.write_local_sub(insn.name)
+
+    def handle_jump(self, insn):
+        self.writer.write_instruction('JMP', self.SYM('_' + insn.dest))
+
+    def handle_cmp_jump(self, insn):
+        self.writer.write_instruction('CMP', self.ref(insn.left), self.ref(insn.right))
+        self.writer.write_instruction(insn.cmp, self.SYM('_' + insn.dest))
+
+    def handle_call(self, insn):
+        self.writer.write_instruction('CALL', self.SYM(insn.name))
+
+    def handle_rel_move(self, insn):
+        s_off = self.LIT(insn.src_off) if insn.src_off is not None else None
+        d_off = self.LIT(insn.dest_off) if insn.dest_off is not None else None
+        self._do_rel_move(self.ref(insn.src), s_off, self.ref(insn.dest), d_off)
+
+    def handle_operation(self, insn):
+        self.writer.write_instruction(insn.op, self.ref(insn.src), self.ref(insn.dest))
+
+    def handle_not(self, insn):
+        self.writer.write_instruction('NOT', self.ref(insn.dest))
+
+    def handle_push(self, insn):
+        self.writer.write_instruction('PUSH')
+
+    def handle_pop(self, insn):
+        self.writer.write_instruction('POP')
+
+    def handle_ret(self, insn):
+        self.writer.write_instruction('RET')
+
+    def handle_print(self, insn):
+        self.writer.write_instruction('PRINT', *map(self.ref, insn.args))
+
+    def handle_sync(self, insn):
+        self.writer.write_instruction('SYNC')
+
+    def handle_asm(self, insn):
+        self.writer.write_raw_asm(insn.asm)
+
+    def handle_test(self, insn):
+        self.writer.write_instruction('TEST', self.RAW(insn.cmd))
+
+    def handle_exec(self, insn):
+        self.writer.write_instruction('EXEC' + insn.type, self.SYM(insn.func), *map(self.ref, insn.args))
+
+    def _do_rel_move(self, src, src_off, dest, dest_off):
+        def as_str(base, offset):
+            if type(offset) == tuple:
+                offset = offset[1]
+            elif type(offset) == str:
+                offset = int(offset[1:])
+            off = ('+0x%x' % offset if offset >= 0 else '-0x%x' % abs(offset)) \
+                  if offset is not None else ''
+            return base if offset is None else '[%s%s]' % (base, off)
+        comment = '\tMOV %s, %s' % (as_str(src, src_off), as_str(dest, dest_off))
+        if src_off is None:
+            if dest_off is None:
+                self.writer.write_instruction('MOV', src, dest)
+            else:
+                self.writer.write_instruction('MOVINDD', src, dest, dest_off, comment=comment)
+        else:
+            if dest_off is None:
+                self.writer.write_instruction('MOVINDS', src, src_off, dest, comment=comment)
+            else:
+                self.writer.write_instruction('MOVIND', src, src_off,
+                                      dest, dest_off, comment=comment)
+
+class IRLevel2Generator(IRVisitor):
+
+    def __init__(self, i2downstream):
+        super().__init__()
+        self.i2downstream = i2downstream
+        self.temp_registers = ['a', 'b', 'c', 'd']
+        self.volatile_reg = ('v1', 'v2', 'v3', 'v4')
+        self.volatile_pos = 0
+        self.entity_locals = {}
+        self.buffers = []
+        self.after_func = []
+        self.func_store = None
+        self.func_name = None
+        self.slot_to_loc = {}
+        self.init()
+
+    def emit(self, i2insn):
+        if self.buffers:
+            self.buffers[-1].append(i2insn)
+        else:
+            self.i2downstream.handle_insn(i2insn)
+
+    def begin_buffered(self):
+        self.buffers.append([])
+
+    def end_buffered(self):
+        return self.buffers.pop()
+
+    def write_after_func(self, block):
+        self.after_func.append(block)
+
+    def init(self):
+        self.emit_registers('csp', 'cbp', 'rr',
+                             *(self.temp_registers + list(self.volatile_reg)))
+        self.emit_relative_move(I2.Lit(0), None, I2.Const('csp'), None)
+        self.emit_relative_move(I2.Lit(0), None, I2.Const('cbp'), None)
+
+    def emit_registers(self, *regs):
         for i in range(len(regs)):
-            self.writer.write_constant(regs[i], self.ADDR(i))
+            self.emit(I2.DefineConst(regs[i], I2.Addr(i)))
         self.global_shift = len(regs)
+
 
     def handle_fn_begin(self, insn):
         if insn.pragma:
@@ -69,85 +369,89 @@ class CodeGenerator(IRVisitor):
                 handler = insn.pragma['event_handler']
                 conds = ';'.join(map(
                     lambda i: '%s=%s' % i, handler['conditions'].items()))
-                self.writer.write_directive('event_handler', '%s %s %s' % (
-                    insn.name, handler['event_name'], conds))
-        self.writer.write_subroutine(insn.name)
+                self.emit(I2.EventHandler(insn.name, handler['event_name'], conds))
+        self.emit(I2.BeginFunc(insn.name))
         self.func_name = insn.name
         self.func_store = insn.storage
         self.slot_to_loc = {}
-        self.temp_writers = {}
 
     def handle_fn_end(self, insn):
         if self.func_name == 'main':
-            self.writer.write_local_sub('main_end')
-        self.writer.end_subroutine()
+            self.emit(I2.Label('main_end'))
+        self.emit(I2.EndFunc())
         self.free_all_slots()
+        self.func_store = None
+        self.func_name = None
+        for block in self.after_func:
+            if self.buffers:
+                # shortcut
+                self.buffers[-1].extend(block)
+            else:
+                for insn in block:
+                    self.emit(insn)
+        self.after_func = []
 
     def handle_label(self, insn):
-        self.writer.write_local_sub(insn.label)
+        self.emit(I2.Label(insn.label))
 
     def handle_entity_local(self, insn):
-        self.entity_locals[insn.offset] = insn.name
-        self.writer.write_entity_local(insn.name)
+        self.entity_locals[insn.offset] = I2.Const(insn.name)
+        self.emit(I2.EntityLocal(insn.name, insn.specific))
 
     def handle_jump(self, insn):
-        self.writer.write_instruction('JMP', self.label(insn.dest))
+        self.emit(I2.Jump(self.label(insn.dest)))
 
     def handle_jump_if(self, insn):
         cond = self.get_final_location(insn.cond)
-        self.writer.write_instruction('CMP', cond, self.LIT(0))
-        self.writer.write_instruction('JNE', self.label(insn.dest))
+        self.emit(I2.CmpAndJump(cond, I2.Lit(0), 'JNE', self.label(insn.dest)))
 
     def handle_jump_if_not(self, insn):
         cond = self.get_final_location(insn.cond)
-        self.writer.write_instruction('CMP', cond, self.LIT(0))
-        self.writer.write_instruction('JE', self.label(insn.dest))
+        self.emit(I2.CmpAndJump(cond, I2.Lit(0), 'JE', self.label(insn.dest)))
 
     def handle_push(self, insn):
         ref, off = self.get_effective_location(insn.src)
-        self._write_relative_move(ref, off, self.SYM('sr'), None)
-        self.writer.write_instruction('PUSH')
+        self.emit_relative_move(ref, off, I2.Const('sr'), None)
+        self.emit(I2.Push())
 
     def handle_pop(self, insn):
-        self.writer.write_instruction('POP')
+        self.emit(I2.Pop())
         ref, off = self.get_effective_location(insn.dest)
-        self._write_relative_move(self.SYM('sr'), None, ref, off)
+        self.emit_relative_move(I2.Const('sr'), None, ref, off)
 
     def handle_call(self, insn):
         saved = []
         for slot, (base, off) in self.slot_to_loc.items():
-            if base != 'csp':
-                base = self.SYM(base)
+            if base.name != 'csp':
                 saved.insert(0, base)
-                self._write_relative_move(base, None, self.SYM('sr'), None)
-                self.writer.write_instruction('PUSH')
+                self.emit_relative_move(base, None, I2.Const('sr'), None)
+                self.emit(I2.Push())
 
-        self.writer.write_instruction('CALL', self.SYM(insn.name))
+        self.emit(I2.Call(insn.name))
 
         for reg in saved:
-            self.writer.write_instruction('POP')
-            self._write_relative_move(self.SYM('sr'), None, reg, None)
+            self.emit(I2.Pop())
+            self.emit_relative_move(I2.Const('sr'), None, reg, None)
 
     def handle_move(self, insn):
         s_ref, s_off = self.get_effective_location(insn.src)
         d_ref, d_off = self.get_effective_location(insn.dest)
-        self._write_relative_move(s_ref, s_off, d_ref, d_off)
+        self.emit_relative_move(s_ref, s_off, d_ref, d_off)
 
     def handle_return(self, insn):
         if self.func_name == 'main':
-            self.writer.write_instruction('JMP', self.SYM('_main_end'))
+            self.emit(I2.Jump('main_end'))
         else:
-            self.writer.write_instruction('RET')
+            self.emit(I2.Ret())
 
     def handle_sync(self, insn):
-        self.writer.write_instruction('SYNC')
+        self.emit(I2.Sync())
 
     def handle_test(self, insn):
         base, off = self.get_effective_location(insn.dest)
-        self._write_relative_move(self.LIT(0), None, base, off)
-        self.writer.write_instruction('TEST', self.RAW(insn.cmd))
-        self._write_relative_move(self.LIT(1), None, base, off)
-
+        self.emit_relative_move(I2.Lit(0), None, base, off)
+        self.emit(I2.Test(insn.cmd))
+        self.emit_relative_move(I2.Lit(1), None, base, off)
 
     def handle_asm(self, insn):
         asm = ''
@@ -173,56 +477,56 @@ class CodeGenerator(IRVisitor):
                     base = vbase
                 asm += base
 
-        self.writer.write_raw_asm(asm)
+        self.emit(I2.Asm(asm))
 
         for (src, dest, dest_off) in put_back:
             if dest_off is False:
                 dest, dest_off = self.get_effective_location(dest)
-            self._write_relative_move(src, None, dest, dest_off)
+            self.emit_relative_move(src, None, dest, dest_off)
 
     def _exec_helper(self, label, exec_type, args):
         fn = '%s_%s' % (self.func_name, label.label)
-        self.writer.write_instruction('EXEC' + exec_type, self.SYM(fn), *args)
-        self.temp_writers[fn] = self.writer
-        self.writer = self.writer.fork()
-        self.writer.write_subroutine(fn)
+        self.emit(I2.Exec(exec_type, fn, args))
+        self.begin_buffered()
+        self.emit(I2.BeginFunc(fn))
 
     def handle_exec_sel(self, insn):
-        args = [self.STR(insn.sel_type)]
+        args = [I2.Str(insn.sel_type)]
         for k, v in insn.args:
             if type(k) == str:
-                args.append(self.STR(k))
+                args.append(I2.Str(k))
             elif type(k) == tuple:
                 # allow special case for entity local
                 arg_type, arg = k
                 assert arg_type == 'symbol'
-                args.append(self.SYM(arg))
-            args.append(self.STR(v))
+                args.append(I2.Const(arg))
+            args.append(I2.Str(v))
         self._exec_helper(insn.label, insn.exec_type, args)
 
     def handle_exec_chain(self, insn):
         def conv_arg(arg):
             if type(arg) == int:
-                return self.LIT(arg)
-            return self.STR(arg)
+                return I2.Lit(arg)
+            if type(arg) == tuple:
+                arg_type, arg = arg
+                assert arg_type == 'symbol'
+                return I2.Const(arg)
+            return I2.Str(arg)
         self._exec_helper(insn.label, insn.exec_type, map(conv_arg, insn.args))
 
     def handle_exec_end(self, insn):
-        sel_fn = '%s_%s' % (self.func_name, insn.label.label)
-        self.writer.end_subroutine()
-        output = self.writer.get_output()
-        self.writer = self.temp_writers[sel_fn]
-        self.writer.write_after_subroutine(output)
-        del self.temp_writers[sel_fn]
+        self.emit(I2.EndFunc())
+        buffer = self.end_buffered()
+        self.write_after_func(buffer)
 
     def handle_print(self, insn):
         print_args = []
         for arg in insn.args:
             if type(arg) == str:
-                print_args.append(self.STR(arg))
+                print_args.append(I2.Str(arg))
             else:
                 print_args.append(self.get_final_location(arg))
-        self.writer.write_instruction('PRINT', *print_args)
+        self.emit(I2.Print(print_args))
 
     def handle_operation(self, insn):
         opcode = {
@@ -243,9 +547,9 @@ class CodeGenerator(IRVisitor):
             tmp_slot = mk_slot(insn.left.type)
             tmp_ref = self.get_final_location(tmp_slot)
             d_ref, d_off = self.get_effective_location(insn.dest)
-            self._write_relative_move(left_ref, left_off, tmp_ref, None)
-            self.writer.write_instruction(opcode, right, tmp_ref)
-            self._write_relative_move(tmp_ref, None, d_ref, d_off)
+            self.emit_relative_move(left_ref, left_off, tmp_ref, None)
+            self.emit(I2.Operation(opcode, right, tmp_ref))
+            self.emit_relative_move(tmp_ref, None, d_ref, d_off)
             self.free_slot(tmp_slot)
         elif insn.op.__class__ in map(lambda o:o.__class__, [IR.Op.Eq,
                     IR.Op.Neq, IR.Op.Lt, IR.Op.Gt, IR.Op.LtEq, IR.Op.GtEq]):
@@ -260,24 +564,21 @@ class CodeGenerator(IRVisitor):
             left = self.get_final_location(insn.left)
             right = self.get_final_location(insn.right)
             dest, dest_off = self.get_effective_location(insn.dest)
-            self._write_relative_move(self.LIT(1), None, dest, dest_off)
-            self.writer.write_instruction('CMP', right, left)
+            self.emit_relative_move(I2.Lit(1), None, dest, dest_off)
             lbl = 'cmp_end_%d' % abs(hash(insn)) # TODO
-            self.writer.write_instruction(jmpcode, self.SYM('_' + lbl))
-            self._write_relative_move(self.LIT(0), None, dest, dest_off)
-            self.writer.write_local_sub(lbl)
+            self.emit(I2.CmpAndJump(right, left, jmpcode, lbl))
+            self.emit_relative_move(I2.Lit(0), None, dest, dest_off)
+            self.emit(I2.Label(lbl))
         elif insn.op is IR.Op.LogAnd:
             left = self.get_final_location(insn.left)
             right = self.get_final_location(insn.right)
             dest, dest_off = self.get_effective_location(insn.dest)
-            self._write_relative_move(self.LIT(0), None, dest, dest_off)
-            self.writer.write_instruction('CMP', left, self.LIT(0))
+            self.emit_relative_move(I2.Lit(0), None, dest, dest_off)
             lbl = 'and_end_%d' % abs(hash(insn)) # TODO
-            self.writer.write_instruction('JE', self.SYM('_' + lbl))
-            self.writer.write_instruction('CMP', right, self.LIT(0))
-            self.writer.write_instruction('JE', self.SYM('_' + lbl))
-            self._write_relative_move(self.LIT(1), None, dest, dest_off)
-            self.writer.write_local_sub(lbl)
+            self.emit(I2.CmpAndJump(left, I2.Lit(0), 'JE', lbl))
+            self.emit(I2.CmpAndJump(right, I2.Lit(0), 'JE', lbl))
+            self.emit_relative_move(I2.Lit(1), None, dest, dest_off)
+            self.emit(I2.Label(lbl))
         elif insn.op is IR.Op.LogOr:
             assert False, str(insn)
         else:
@@ -293,7 +594,7 @@ class CodeGenerator(IRVisitor):
             if isinstance(insn.val, IR.Dereference):
                 base, off = self.get_effective_location(insn.val.addr)
                 d_base, d_off = self.get_effective_location(insn.dest)
-                self._write_relative_move(base, off, d_base, d_off)
+                self.emit_relative_move(base, off, d_base, d_off)
             else:
                 assert False, "Don't know how to get address of " + str(insn.val)
         elif insn.op is IR.UnaryOp.Deref:
@@ -302,19 +603,18 @@ class CodeGenerator(IRVisitor):
             base, off = self.get_effective_location(insn.val)
             tmp_slot = mk_slot(insn.dest.type)
             tmp_ref = self.get_final_location(tmp_slot)
-            self._write_relative_move(base, off, tmp_ref, None)
-            self.writer.write_instruction('NOT', tmp_ref)
+            self.emit_relative_move(base, off, tmp_ref, None)
+            self.emit(I2.Not(tmp_ref))
             base, off = self.get_effective_location(insn.dest)
-            self._write_relative_move(tmp_ref, None, base, off)
+            self.emit_relative_move(tmp_ref, None, base, off)
         elif insn.op is IR.UnaryOp.LogNot:
             base, off = self.get_effective_location(insn.dest)
-            self._write_relative_move(self.LIT(1), None, base, off)
+            self.emit_relative_move(I2.Lit(1), None, base, off)
             val_ref = self.get_final_location(insn.val)
-            self.writer.write_instruction('CMP', val_ref, self.LIT(0))
             lbl = 'invert_end_%d' % abs(hash(insn)) # TODO
-            self.writer.write_instruction('JE', self.SYM('_' + lbl))
-            self._write_relative_move(self.LIT(0), None, base, off)
-            self.writer.write_local_sub(lbl)
+            self.emit(I2.CmpAndJump(val_ref, I2.Lit(0), 'JE', lbl))
+            self.emit_relative_move(I2.Lit(0), None, base, off)
+            self.emit(I2.Label(lbl))
         else:
             assert False, "Unknown operation " + insn.op
 
@@ -322,13 +622,13 @@ class CodeGenerator(IRVisitor):
         self.free_slot(insn.slot)
 
     def label(self, label):
-        return self.SYM('_%s' % label.label)
+        return label.label
 
     def slot_reference(self, slot):
         if slot in self.slot_to_loc:
             return self.slot_to_loc[slot]
         if slot.type.size == 1 and len(self.temp_registers):
-            loc = self.temp_registers.pop(0), None
+            loc = I2.Const(self.temp_registers.pop(0)), None
         else:
             loc = self.allocate_on_stack(slot)
         self.slot_to_loc[slot] = loc
@@ -336,24 +636,25 @@ class CodeGenerator(IRVisitor):
 
     def free_slot(self, slot):
         base, off = self.slot_to_loc[slot]
-        if base == 'csp':
+        if base.name == 'csp':
             pass # Can't do anything if on the stack
         else:
-            self.temp_registers.append(base)
+            self.temp_registers.append(base.name)
         del self.slot_to_loc[slot]
 
     def free_all_slots(self):
         for slot, (base, off) in self.slot_to_loc.items():
-            if base == 'csp':
+            if base.name == 'csp':
                 pass # Can't do anything if on the stack
             else:
-                self.temp_registers.append(base)
+                self.temp_registers.append(base.name)
         self.slot_to_loc = {}
 
     def allocate_on_stack(self, slot):
+        assert self.func_store is not None, "Cannot allocate on stack, not in a function!"
         assert not isinstance(slot.type, DecoratedType) or not slot.type.static, str(slot)
         unit = self.func_store.insert(slot.type)
-        return 'csp', unit.offset
+        return I2.Const('csp'), unit.offset
 
     def get_final_location(self, ref):
         base, off = self.get_effective_location(ref)
@@ -363,30 +664,26 @@ class CodeGenerator(IRVisitor):
 
     def get_effective_location(self, ref):
         base, off = self.unpack(ref)
-        if type(base) == int:
-            base = self.LIT(base)
-        elif base is None:
+        if base is None:
             if off is None:
-                base = self.ADDR(self.global_shift)
+                base = I2.Addr(self.global_shift)
             else:
-                base = self.ADDR(off + self.global_shift)
+                base = I2.Addr(off + self.global_shift)
             off = None
-        else:
-            base = self.SYM(base)
         return base, off
 
     def unpack(self, ref):
         if ref is IR.StackPointer:
-            return 'csp', None
+            return I2.Const('csp'), None
         if ref is IR.BasePointer:
-            return 'cbp', None
+            return I2.Const('cbp'), None
         if ref is IR.ReturnRegister:
-            return 'rr', None
+            return I2.Const('rr'), None
         if ref is IR.GlobalIndex:
             return None, None
         if isinstance(ref, IR.LiteralInt):
             # TODO check type
-            return ref.val, None
+            return I2.Lit(ref.val), None
         if isinstance(ref, IR.Slot):
             return self.slot_reference(ref)
         if isinstance(ref, IR.Dereference):
@@ -412,35 +709,17 @@ class CodeGenerator(IRVisitor):
         ptr = self.volatile_pos
         reg = self.volatile_reg[ptr]
         self.volatile_pos = (ptr + 1) % len(self.volatile_reg)
-        return self.SYM(reg)
+        return I2.Const(reg)
 
     def move_volatile(self, base, off):
         if off is None:
             return base, off
         vol = self.__next_volatile()
-        self._write_relative_move(base, off, vol, None)
+        self.emit_relative_move(base, off, vol, None)
         return vol, None
 
-    def _write_relative_move(self, src, src_off, dest, dest_off):
-        def as_str(base, offset):
-            off = ('+0x%x' % offset if offset >= 0 else '-0x%x' % abs(offset)) \
-                    if offset is not None else ''
-            return base if offset is None else '[%s%s]' % (base, off)
-
-        comment = '\tMOV %s, %s' % (as_str(src, src_off), as_str(dest, dest_off))
-        if src_off is None:
-            if dest_off is None:
-                self.writer.write_instruction('MOV', src, dest)
-            else:
-                self.writer.write_instruction('MOVINDD', src, dest,
-                                              self.LIT(dest_off), comment=comment)
-        else:
-            if dest_off is None:
-                self.writer.write_instruction('MOVINDS', src,
-                                              self.LIT(src_off), dest, comment=comment)
-            else:
-                self.writer.write_instruction('MOVIND', src, self.LIT(src_off),
-                                      dest, self.LIT(dest_off), comment=comment)
+    def emit_relative_move(self, src, src_off, dest, dest_off):
+        self.emit(I2.RelMove(src, src_off, dest, dest_off))
 
 class SymbolTable:
 
