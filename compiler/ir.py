@@ -10,7 +10,7 @@ class IR:
     FunctionEnd = namedtuple('FunctionEnd', '')
 
     Label = namedtuple('Label', 'label')
-    EntityLocalVar = namedtuple('EntityLocalVar', 'name offset')
+    EntityLocalVar = namedtuple('EntityLocalVar', 'name offset specific')
 
     Jump = namedtuple('Jump', 'dest')
     JumpIf = namedtuple('JumpIf', 'dest cond')
@@ -294,18 +294,26 @@ class Optimizer(IRVisitor):
         optimizer = DeadCodeElimination(loop, optimizer)
         super().__init__(optimizer)
         self.loop = loop
-
-    def handle_entity_local(self, insn):
-        # This appears before functions begin, pass straight through
-        self.loop.downstream.handle_insn(insn)
+        self.outside_fn = True
 
     def handle_fn_begin(self, insn):
         self.loop.new_fn()
+        self.outside_fn = False
         self.emit(insn)
+
+    def handle_fn_end(self, insn):
+        self.emit(insn)
+        self.outside_fn = True
 
     def handle_insn(self, insn):
         #print("UPSTREAM", node_debug(insn))
         super().handle_insn(insn)
+
+    def emit(self, insn):
+        if self.outside_fn:
+            self.loop.downstream.handle_insn(insn)
+        else:
+            super().emit(insn)
 
 class OptimizerVisitor(IRVisitor):
 

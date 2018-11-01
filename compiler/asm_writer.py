@@ -15,15 +15,15 @@ class AsmStringBackend:
     def write_directive(self, name, value):
         self.write_line('#%s %s' % (name, value))
 
-    def write_entity_local(self, name):
-        self.write_line('@%s' % name)
+    def write_entity_local(self, name, specific):
+        self.write_line('@%s%s' % (name, ' ' + specific if specific else ''))
 
     def write_local_label(self, label):
         self.write_line('_%s:' % label)
 
     def write_label(self, label):
         self.indent = 0
-        self.write_line('%s:' % label)
+        self.write_line('\n%s:' % label)
         self.indent = 4
 
     def write_instruction(self, insn, operands, comment=None):
@@ -75,8 +75,8 @@ class AsmTokenBackend:
     def write_directive(self, name, value):
         self.add('directive', (name, value))
 
-    def write_entity_local(self, name):
-        self.add('entity_local', name)
+    def write_entity_local(self, name, specific):
+        self.add('entity_local', (name, specific))
 
     def write_local_label(self, label):
         self.add('local_label', label)
@@ -146,8 +146,8 @@ class AsmWriter:
     def write_directive(self, name, value):
         self.backend.write_directive(name, value)
 
-    def write_entity_local(self, name):
-        self.backend.write_entity_local(name)
+    def write_entity_local(self, name, specific):
+        self.backend.write_entity_local(name, specific)
 
     def write_subroutine(self, name):
         if name == '__setup__':

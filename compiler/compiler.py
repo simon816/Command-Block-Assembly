@@ -818,10 +818,9 @@ class ScopeManager:
         return self.current_table.lookup(name)
 
     def declare_symbol(self, name, type, can_redeclare=False):
-        if type is self.compiler.types.types['entity_local']:
+        if type is self.compiler.type('entity_local'):
             # hijack entity_local
             unit = self.entity_local_storage.insert(type)
-            self.compiler.emit(IR.EntityLocalVar(name, unit.offset))
         else:
             unit = self.store(type)
         return self.current_table.declare(name, type, unit,
@@ -1206,6 +1205,7 @@ class CompilerVisitor(Visitor):
             return
         for init in decl.init:
             symbol = self.declare_from_node(decl.type, init.decl)
+            is_entity_local = symbol.type is self.type('entity_local')
             if init.val is not None:
                 if type(init.val) == list:
                     data = self.visit_list_init_data(symbol.type, init.val)
@@ -1213,8 +1213,18 @@ class CompilerVisitor(Visitor):
                                       symbol.storage.offset, symbol.type)
                     self.move_data_array(data, loc)
                 else:
+                    if is_entity_local:
+                        # hijack entity local
+                        val = self.visit_expression(init.val)
+                        assert isinstance(val, IR.LiteralString)
+                        local_name = val.val
+                        self.emit(IR.EntityLocalVar(symbol.name, symbol.storage.offset, local_name))
+                        return
                     self.visit_expression(AssignmentExpr(
                         left=init.decl.name_spec, right=init.val))
+            else:
+                if is_entity_local:
+                        self.emit(IR.EntityLocalVar(symbol.name, symbol.storage.offset, ''))
         else:
             # structs get defined in these functions, make sure it is created
             if isinstance(decl.type, DeclarationSpecifier):

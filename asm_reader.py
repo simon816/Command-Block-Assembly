@@ -113,7 +113,11 @@ class AsmReader:
 
     def next_entity_local(self):
         name = self.read_symbol()
-        return ('entity_local', name)
+        specific = ''
+        if self.head == ' ':
+            self.read_whitespace()
+            specific = self.read_at_least_once(lambda c: c != '\n', 'non-newline')
+        return ('entity_local', (name, specific))
 
     def next_local_label(self):
         return ('local_label', self.read_label())

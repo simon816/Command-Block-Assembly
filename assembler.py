@@ -48,24 +48,27 @@ class Assembler:
     def consume_reader(self, reader):
         for (token, arg) in reader:
             self.lineno = reader.lineno
-            if token == 'const':
-                name, ref = arg
-                self.define_const(name, self.resolve_ref(*ref))
-            elif token == 'entity_local':
-                self.define_entity_local(arg)
-            elif token == 'label':
-                self.handle_label(arg)
-            elif token == 'instruction':
-                if self.curr_func == '__unreachable__':
-                    self.warn("Unreachable code")
-                    continue
-                self.handle_insn(*arg)
-            elif token == 'local_label':
-                self.handle_local_label(arg)
-            elif token == 'directive':
-                self.handle_directive(*arg)
-            elif token == 'eof':
+            if token == 'eof':
                 break
+            self.handle_token(token, arg)
+
+    def handle_token(self, token, arg):
+        if token == 'const':
+            name, ref = arg
+            self.define_const(name, self.resolve_ref(*ref))
+        elif token == 'entity_local':
+            self.define_entity_local(*arg)
+        elif token == 'label':
+            self.handle_label(arg)
+        elif token == 'instruction':
+            if self.curr_func == '__unreachable__':
+                self.warn("Unreachable code")
+                return
+            self.handle_insn(*arg)
+        elif token == 'local_label':
+            self.handle_local_label(arg)
+        elif token == 'directive':
+            self.handle_directive(*arg)
 
     def warn(self, message):
         import warnings
@@ -76,8 +79,8 @@ class Assembler:
             raise RuntimeError('Constant %r already defined' % name)
         self.constants[name] = value
 
-    def define_entity_local(self, name):
-        self.define_const(name, EntityLocal(name))
+    def define_entity_local(self, name, specific):
+        self.define_const(name, EntityLocal(name, specific))
 
     def get_const(self, name):
         return self.constants[name]

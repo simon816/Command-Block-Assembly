@@ -53,6 +53,10 @@ class Ref(Resolvable):
     def selector(self, where):
         return ETagSelector(where)
 
+    @property
+    def supports_where(self):
+        return True
+
 class Var(Ref):
     def __init__(self, nameref, *args):
         self.name = nameref
@@ -69,13 +73,23 @@ class Mem(Ref):
         return scope.memory(self.loc)
 
 class EntityLocal(Ref):
-    def __init__(self, name):
+    def __init__(self, name, specific=None):
         self.name = name
+        self.specific = specific
 
     def resolve(self, scope):
         return scope.entity_local(self.name)
 
+    @property
+    def supports_where(self):
+        return not self.specific
+
     def selector(self, where):
+        if self.specific:
+            assert where is None, "Cannot apply selector args to specific " \
+                   + "entity local (%s is specific to %s), tried selector: %s" % (
+                       self.name, self.specific, where)
+            return SimpleResolve(self.specific)
         return Selector('s', where)
 
 class SimpleResolve(Resolvable):
@@ -355,6 +369,8 @@ class Scoreboard(Command):
         assert self.allows_negative or value >= 0
         self.var = varref
         self.value = value
+        if where is not None and not varref.supports_where:
+            assert False, "TODO"
         self.selector = varref.selector(where)
 
     def resolve(self, scope):
@@ -396,8 +412,16 @@ class Operation(Command):
         assert isinstance(right, Ref)
         self.left = left
         self.right = right
-        self.left_sel = left.selector(where)
-        self.right_sel = right.selector(where)
+        where_l = where_r = where
+        if where is not None:
+            if not left.supports_where:
+                where_l = None
+            if not right.supports_where:
+                where_r = None
+            if where_l is None and where_r is None:
+                assert False, "TODO"
+        self.left_sel = left.selector(where_l)
+        self.right_sel = right.selector(where_r)
 
     def resolve(self, scope):
         return 'scoreboard players operation %s %s %s %s %s' % (
@@ -431,6 +455,7 @@ class SelRange(SelectorArgs):
     def __init__(self, varref, min=None, max=None):
         assert min is not None or max is not None
         assert isinstance(varref, Ref)
+        assert varref.supports_where, "TODO"
         self.var = varref
         self.min = min
         self.max = max
