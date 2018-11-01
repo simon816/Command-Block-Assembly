@@ -1,3 +1,21 @@
+/*
+    Compile example:
+    python compiler_main.py examples/blingedit_test.c 
+        --as-zip
+        --world-dir out
+        --namespace blingedit_test
+        --setup-on-load
+        --extern plugin_can_run
+        --extern disp_plugins
+        --extern box_xmin
+        --extern box_ymin
+        --extern box_zmin
+        --extern box_xmax
+        --extern box_ymax
+        --extern box_zmax
+    
+    Note: need to specify extern for all blingedit entity_locals used (or just specify all of them from blingedit.h).
+*/
 #include <stdio.h>
 
 #define PLUGIN_NAME Test Plugin
