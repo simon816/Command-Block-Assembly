@@ -72,6 +72,8 @@ class Scope:
             return self.args[val]
         elif param == 'entity_local':
             return self.entity_local(val)
+        elif param == 'func':
+            return self.function_name('sub_' + val)
         else:
             raise KeyError('unknown command argument %s' % param)
 

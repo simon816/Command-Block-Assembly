@@ -4,7 +4,8 @@ def load():
          builtin, \
          stdio, \
          entity, \
-         block
+         block, \
+         text
 
     return locals()
 
