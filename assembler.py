@@ -124,7 +124,7 @@ class Assembler:
         self.jump_later = dest
 
     def local_to_func_name(self, local_name):
-        return self.sub_to_func_name(self.curr_sub) + '_local_' + local_name
+        return self.sub_to_func_name(self.curr_sub) + '/' + local_name
 
     def sub_to_func_name(self, sub_name):
         return 'sub_' + sub_name
@@ -145,10 +145,10 @@ class Assembler:
             return self.sub_to_func_name(symbol)
 
     def unique_func(self, hint):
-        name = self.curr_func + '_' + hint
+        name = self.curr_func + '/' + hint
         i = 1
         while name in self.function_subsequences:
-            name = '%s_%s_%d' % (self.curr_func, hint, i)
+            name = '%s/%s_%d' % (self.curr_func, hint, i)
             i += 1
         return name
 

@@ -9,7 +9,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('file', help="ASM File", type=argparse.FileType('r'))
     parser.add_argument('--world-dir', help="World Directory")
-    parser.add_argument('--as_zip', action='store_true', help="Write datapack as zip file")
+    parser.add_argument('--as-zip', action='store_true', help="Write datapack as zip file")
     parser.add_argument('--namespace', help="Function namespace", default='asm_generated')
     parser.add_argument('--rem-existing', help="Remove existing functions in namespace",
                         action='store_true')
@@ -25,6 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('--spawn-location', default='~ ~2 ~',
                         help="Location to spawn hidden armor stand")
     parser.add_argument('--pack-description', help="Datapack description")
+    parser.add_argument('--extern', action='append', help="Specify external symbol")
 
     args = parser.parse_args()
 
@@ -54,7 +55,8 @@ if __name__ == '__main__':
     writer.open()
 
     session = Session((x, y, z), writer, args.namespace, stack_size=args.stack,
-                      args=sargs, setup_on_load=args.setup_on_load, debug=args.debug)
+                      args=sargs, setup_on_load=args.setup_on_load, debug=args.debug,
+                      extern=args.extern)
     assembler.write_to_session(session)
     setup, cleanup = session.create_up_down_functions(args.spawn_location)
     writer.close()

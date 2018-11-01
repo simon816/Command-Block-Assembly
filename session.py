@@ -4,7 +4,7 @@ from datapack import Advancement
 from placer import CommandPlacer
 
 class Scope:
-    def __init__(self, namespace, tag_name, variables, args={}):
+    def __init__(self, namespace, tag_name, variables, args={}, extern=[]):
         self.entity_tag = namespace + '_' + tag_name
         self.namespace = namespace
         self.variables = variables
@@ -12,6 +12,7 @@ class Scope:
         self.tags = {}
         self.args = args
         self.func_names = set()
+        self.extern = set(extern or [])
 
     def variable(self, name, args=()):
         var = self.variables[name]
@@ -20,6 +21,8 @@ class Scope:
         return self.trim(self.namespace + '_' + var % args)
 
     def entity_local(self, name):
+        if name in self.extern:
+            return name
         name = 'el_%s' % name
         self.variables[name] = name
         return self.variable(name)
@@ -80,7 +83,7 @@ class Scope:
 class Session:
 
     def __init__(self, pos, writer, namespace, stack_size=16, args={},
-                 setup_on_load=False, debug=False):
+                 setup_on_load=False, debug=False, extern=[]):
         self.placer = CommandPlacer(pos)
         self.writer = writer
         self.stack_size = stack_size
@@ -94,7 +97,7 @@ class Session:
             'success_tracker': 'st',
             'sync_trigger': 'sy',
             'lookup_pointer': 'lk'
-        }, args)
+        }, args, extern)
         self.print_debug = debug
         self.setup_hook = None
         self.setup_on_load = setup_on_load
