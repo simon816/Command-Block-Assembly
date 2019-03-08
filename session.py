@@ -160,7 +160,7 @@ class Session:
                     current_pop_seq = Subsequence()
                 else:
                     current_push_seq.add_command(stack_overflow)
-                    current_pop_seq.add_command(stack_overflow)
+                    current_pop_seq.add_command(stack_underflow)
                     self.add_subsequence(current_push_func, current_push_seq)
                     self.add_subsequence(current_pop_func, current_pop_seq)
                 current_push_func = next_push_func
@@ -168,7 +168,7 @@ class Session:
 
         if one_function:
             current_push_seq.add_command(stack_overflow)
-            current_pop_seq.add_command(stack_overflow)
+            current_pop_seq.add_command(stack_underflow)
             self.add_subsequence(current_push_func, push_stack)
             self.add_subsequence(current_pop_func, pop_stack)
 
