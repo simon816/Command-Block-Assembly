@@ -58,7 +58,7 @@ class I2:
     Ret = namedtuple('Ret', '')
     Print = namedtuple('Print', 'args')
     Sync = namedtuple('Sync', '')
-    Asm = namedtuple('Asm', 'asm')
+    Asm = namedtuple('Asm', 'fragments')
     Test = namedtuple('Test', 'cmd')
     Exec = namedtuple('Exec', 'type func args')
 
@@ -295,7 +295,17 @@ class CodeGenerator(IR2Visitor):
         self.writer.write_instruction('SYNC')
 
     def handle_asm(self, insn):
-        self.writer.write_raw_asm(insn.asm)
+        parts = []
+        old_writer = self.writer
+        # Temporary switch to string writer
+        self.writer = AsmWriter('string')
+        for frag in insn.fragments:
+            if type(frag) != str:
+                parts.append(self.ref(frag))
+            else:
+                parts.append(frag)
+        self.writer = old_writer
+        self.writer.write_raw_asm(''.join(parts))
 
     def handle_test(self, insn):
         self.writer.write_instruction('TEST', self.RAW(insn.cmd))
@@ -459,12 +469,12 @@ class IRLevel2Generator(IRVisitor):
         self.emit_relative_move(I2.Lit(1), None, base, off)
 
     def handle_asm(self, insn):
-        asm = ''
+        asm = []
         put_back = []
         for (val, write_only, is_dest) in insn.args:
             if write_only is None or is_dest is None:
                 # This is a raw string component, just append
-                asm += val
+                asm.append(val)
             else:
                 base = None
                 if write_only:
@@ -480,7 +490,7 @@ class IRLevel2Generator(IRVisitor):
                     if is_dest:
                         put_back.append((vbase, base, off))
                     base = vbase
-                asm += base
+                asm.append(base)
 
         self.emit(I2.Asm(asm))
 
