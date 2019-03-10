@@ -7,7 +7,6 @@ from placer import Rel
 from compiler.asm_extensions import CompilerSession, ExtendedAssembler
 from compiler.compiler import Compiler
 from compiler.preprocessor import Preprocessor
-from compiler.lexer import Lexer
 from compiler.parser_ import Parser
 
 import time
@@ -48,12 +47,12 @@ if __name__ == '__main__':
         print(code)
         exit(0)
 
-    parser = Parser(Lexer(code))
     backend = 'token'
     if args.S:
         backend = 'string'
     compiler = Compiler(backend)
-    compile_output = compiler.compile(parser.parse_program())
+    parser = Parser(compiler.get_type_names())
+    compile_output = compiler.compile(parser.parse_program(code))
 
     if args.S:
         # output will be a string

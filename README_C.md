@@ -14,13 +14,14 @@ The compiler is invoked by calling `compiler_main.py`.
 
 Command line parameters:
 ```
-usage: compiler_main.py [-h] [-E] [-S] [--world-dir WORLD_DIR] [--as_zip]
+usage: compiler_main.py [-h] [-E] [-S] [--world-dir WORLD_DIR] [--as-zip]
                         [--namespace NAMESPACE] [--rem-existing] [--debug]
                         [--stack STACK] [--arg ARG]
                         [--place-location PLACE_LOCATION] [--enable-sync]
                         [--page-size PAGE_SIZE] [--setup-on-load]
                         [--spawn-location SPAWN_LOCATION]
                         [--pack-description PACK_DESCRIPTION]
+                        [--extern EXTERN]
                         file
 
 positional arguments:
@@ -32,7 +33,7 @@ optional arguments:
   -S                    Don't run assembler. Outputs ASM to stdout
   --world-dir WORLD_DIR
                         World Directory
-  --as_zip              Write datapack as zip file
+  --as-zip              Write datapack as zip file
   --namespace NAMESPACE
                         Function namespace
   --rem-existing        Remove existing functions in namespace
@@ -49,7 +50,12 @@ optional arguments:
                         Location to spawn hidden armor stand
   --pack-description PACK_DESCRIPTION
                         Datapack description
+  --extern EXTERN       Specify external symbol
 ```
+
+You will need to generate the standalone parser (from [Lark](https://github.com/lark-parser/lark)) using the `./compiler/rebuild-grammar.sh` script.  
+The Lark python package needs to be installed, `pip` can be used on the `requirements.txt` file. It is recommended to use `virtualenv`.  
+Example: `virtualenv env --python=python3 && source env/bin/activate && pip install -r requirements.txt`
 
 There are some examples in the [examples](https://github.com/simon816/Command-Block-Assembly/tree/master/examples) directory.
 

@@ -179,7 +179,7 @@ class Preprocessor:
 
     def handle_else(self, arg):
         parent = self.block.parent
-        output = self.block.output and not self.block.skip_to_end and parent.output
+        output = not self.block.output and not self.block.skip_to_end and parent.output
         self.block = ConditionalBlock(parent, 'else', output, True)
 
     def handle_elif(self, arg):
@@ -232,11 +232,10 @@ class Preprocessor:
             return tuple()
 
     def evaluate(self, expr):
-        from .lexer import Lexer
         from .parser_ import Parser
         # Convert "defined var" into "__defined__(__no_def_var__)"
         expr = re.sub('defined\s+(\w+)', r'__defined__(__no_def_\1__)', expr)
-        expr = Parser(Lexer(self.substitute(expr))).parse_constant_expr()
+        expr = Parser().parse_const_expr(self.substitute(expr))
         return bool(self.visit_expr(expr))
 
     def visit_expr(self, expr):

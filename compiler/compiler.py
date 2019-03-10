@@ -22,6 +22,11 @@ class Compiler:
         visitor.visit_program(program)
         return self.writer.get_output()
 
+    def get_type_names(self):
+        # bit hacky
+        tmp = CompilerVisitor(None)
+        return tmp.types.types.keys()
+
     def load_libs(self, visitor):
         from .lib import libs
         for lib_name, exports in libs.items():
