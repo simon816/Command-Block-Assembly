@@ -1,6 +1,7 @@
 from session import Session
 from assembler import Assembler
 from commands import *
+from cmd_ir.instructions import *
 
 class CompilerSession(Session):
 
@@ -105,6 +106,14 @@ class CompilerSession(Session):
             slot = Var('memory_slot', i)
             up.append(SetConst(slot, 0).resolve(self.scope))
 
+class FunctionRef(CmdFunction):
+
+    def __init__(self, name):
+        self.name = name
+
+    def as_cmd(self):
+        return Function(self.name)
+
 class ExtendedAssembler(Assembler):
 
     def __init__(self):
@@ -115,12 +124,18 @@ class ExtendedAssembler(Assembler):
             'MOVINDS': self.handle_mov_ind_s
         })
         self.use_mem = False
+        self.mem_get = self.top.generate_name('mem_get', FunctionRef('mem_get'))
+        self.mem_set = self.top.generate_name('mem_set', FunctionRef('mem_set'))
 
-    def handle_ret(self):
-        if not self.enable_sync:
-            # No need to warn here, the compiler is safe with CALL/RET
-            return
-        super().handle_ret()
+    def mem_addr(self):
+        a = self.func.create_var('mem_addr')
+        a.set_register(Var('memory_address'))
+        return a
+
+    def mem_buffer(self):
+        a = self.func.create_var('mem_buf')
+        a.set_register(Var('memory_buffer'))
+        return a
 
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""
@@ -130,16 +145,17 @@ class ExtendedAssembler(Assembler):
         d_off = self.resolve_ref(*d_off)
         assert type(s_off) == int
         assert type(d_off) == int
-        self.add_command(OpAssign(Var('memory_address'), src))
+        addr = self.mem_addr()
+        self.block.add(SetScore(addr, src))
         if s_off != 0:
-            AddFn = AddConst if s_off > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(s_off)))
-        self.add_command(Function('mem_get'))
-        self.add_command(OpAssign(Var('memory_address'), dest))
+            AddFn = AddScore if s_off > 0 else SubScore
+            self.block.add(AddFn(addr, abs(s_off)))
+        self.block.add(RunFunction(self.mem_get))
+        self.block.add(SetScore(addr, dest))
         if d_off != 0:
-            AddFn = AddConst if d_off > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(d_off)))
-        self.add_command(Function('mem_set'))
+            AddFn = AddScore if d_off > 0 else SubScore
+            self.block.add(AddFn(addr, abs(d_off)))
+        self.block.add(RunFunction(self.mem_set))
 
     def handle_mov_ind_d(self, src, dest, d_off):
         """Move src to indirect dest"""
@@ -147,12 +163,14 @@ class ExtendedAssembler(Assembler):
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*d_off)
         assert type(offset) == int
-        self.add_command(self.assign_op(Var('memory_buffer'), src))
-        self.add_command(OpAssign(Var('memory_address'), dest))
+        addr = self.mem_addr()
+        buffer = self.mem_buffer()
+        self.block.add(SetScore(buffer, src))
+        self.block.add(SetScore(addr, dest))
         if offset != 0:
-            AddFn = AddConst if offset > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(offset)))
-        self.add_command(Function('mem_set'))
+            AddFn = AddScore if offset > 0 else SubScore
+            self.block.add(AddFn(addr, abs(offset)))
+        self.block.add(RunFunction(self.mem_set))
 
     def handle_mov_ind_s(self, src, s_off, dest):
         """Move indirect src to dest"""
@@ -160,10 +178,12 @@ class ExtendedAssembler(Assembler):
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*s_off)
         assert type(offset) == int
-        self.add_command(self.assign_op(Var('memory_address'), src))
+        addr = self.mem_addr()
+        buffer = self.mem_buffer()
+        self.block.add(SetScore(addr, src))
         if offset != 0:
-            AddFn = AddConst if offset > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(offset)))
-        self.add_command(Function('mem_get'))
-        self.add_command(OpAssign(dest, Var('memory_buffer')))
+            AddFn = AddScore if offset > 0 else SubScore
+            self.block.add(AddFn(addr, abs(offset)))
+        self.block.add(RunFunction(self.mem_get))
+        self.block.add(SetScore(dest, buffer))
 

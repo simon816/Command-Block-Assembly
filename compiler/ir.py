@@ -289,9 +289,9 @@ class Optimizer(IRVisitor):
     def __init__(self, downstream):
         loop = OptimizerLoop(self, downstream)
         optimizer = loop
-        optimizer = ConstantElimination(loop, optimizer)
-        optimizer = JumpElimination(loop, optimizer)
-        optimizer = DeadCodeElimination(loop, optimizer)
+        #optimizer = ConstantElimination(loop, optimizer)
+        #optimizer = JumpElimination(loop, optimizer)
+        #optimizer = DeadCodeElimination(loop, optimizer)
         super().__init__(optimizer)
         self.loop = loop
         self.outside_fn = True

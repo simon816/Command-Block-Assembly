@@ -72,25 +72,24 @@ class Mem(Ref):
     def resolve(self, scope):
         return scope.memory(self.loc)
 
-class EntityLocal(Ref):
-    def __init__(self, name, specific=None):
+class EntityLocalRef(Ref):
+
+    def __init__(self, name, target):
         self.name = name
-        self.specific = specific
+        self.target = target
 
     def resolve(self, scope):
         return scope.entity_local(self.name)
 
-    @property
-    def supports_where(self):
-        return not self.specific
-
     def selector(self, where):
-        if self.specific:
+        if isinstance(self.target, Selector):
+            return Selector(self.target.type,
+                            ComboSelectorArgs(self.target.where, where))
+        if isinstance(self.target, NameRef):
             assert where is None, "Cannot apply selector args to specific " \
                    + "entity local (%s is specific to %s), tried selector: %s" % (
-                       self.name, self.specific, where)
-            return SimpleResolve(self.specific)
-        return Selector('s', where)
+                       self.name, self.target.name, where)
+            return self.target
 
 class SimpleResolve(Resolvable):
 
@@ -102,10 +101,11 @@ class SimpleResolve(Resolvable):
                              if isinstance(el, Resolvable) \
                              else el, self.args))
 
-class Pos(SimpleResolve):
-    def __init__(self, x, y, z):
-        super().__init__(*map(str, (x, y, z)))
+class NameRef(SimpleResolve):
 
+    def __init__(self, name):
+        super().__init__(name)
+        self.name = name
 
 class Command(Resolvable):
     pass
@@ -151,13 +151,29 @@ class ETagSelector(Selector):
 
 EntityTag = ETagSelector(None)
 
+class NbtPath(Resolvable):
+
+    def __init__(self, path):
+        self.path = path
+
+    def resolve(self, scope):
+        return self.path
+
 class Path(Resolvable):
 
     def __init__(self, path):
         self.path = path
 
     def resolve(self, scope):
-        return scope.nbt_path(self.path)
+        return scope.custom_nbt_path(self.path)
+
+class StackPath(Path):
+
+    def __init__(self, index=None, key=None):
+        sub = '[%d]' % index if index is not None else ''
+        assert key is None or index is not None
+        sub += '.%s' % key if key else ''
+        super().__init__('stack%s' % sub)
 
 class Cmd(Command):
     def __init__(self, cmd):
@@ -304,19 +320,123 @@ class ExecuteChain:
         def score(self, name, objective):
             return self.add('score', ensure_selector(name), objective)
 
-        def entity(self, target, data_type):
+        def entity(self, target, path, data_type, scale=1):
             return self.add('entity', ensure_selector(target), \
-                            Path(data_type), data_type, 1)
+                            path, data_type, scale)
+
+class BlockOrEntityRef(Resolvable):
+    pass
+
+class EntityReference(BlockOrEntityRef):
+
+    def __init__(self, target):
+        self.target = target
+
+    def resolve(self, scope):
+        return 'entity %s' % self.target.resolve(scope)
+
+class BlockPos(Resolvable):
+    pass
+
+class BlockReference(BlockOrEntityRef):
+
+    def __init__(self, pos):
+        assert isinstance(pos, BlockPos)
+        self.pos = pos
+
+    def resolve(self, scope):
+        return 'block %s' % self.pos.resolve(scope)
+
+class UtilBlockPos(BlockPos):
+
+    def __init__(self):
+        pass
+
+    def resolve(self, scope):
+        return scope.get_util_block()
+UtilBlockPos = UtilBlockPos()
 
 class DataGet(Command):
 
     def __init__(self, target, path):
         self.target = target
-        self.path = Path(path)
+        self.path = path
 
     def resolve(self, scope):
         return 'data get entity %s %s' % (self.target.resolve(scope),
                                           self.path.resolve(scope))
+
+class DataGetStack(DataGet):
+
+    def __init__(self, index, key=None):
+        super().__init__(EntityTag, StackPath(index, key))
+
+
+class DataMerge(Command):
+
+    def __init__(self, ref, nbt):
+        assert isinstance(ref, BlockOrEntityRef)
+        self.ref = ref
+        self.nbt = nbt
+
+    def resolve(self, scope):
+        return 'data merge %s %s' % (self.ref.resolve(scope),
+                                     self.nbt.resolve(scope))
+
+class DataModify(Command):
+
+    def __init__(self, ref, path, action, *rest):
+        assert isinstance(ref, BlockOrEntityRef)
+        self.ref = ref
+        self.path = path
+        self.action = action
+        self.init(*rest)
+
+    def resolve(self, scope):
+        return 'data modify %s %s %s' % (
+            self.ref.resolve(scope), self.path.resolve(scope), self.action)
+
+class DataModifyValue(DataModify):
+
+    def init(self, val):
+        self.val = val
+
+    def resolve(self, scope):
+        return '%s value %s' % (super().resolve(scope), self.val.resolve(scope))
+
+class DataModifyFrom(DataModify):
+
+    def init(self, ref, path):
+        assert isinstance(ref, BlockOrEntityRef)
+        self.fromref = ref
+        self.frompath = path
+
+    def resolve(self, scope):
+        return '%s from %s %s' % (super().resolve(scope),
+                  self.fromref.resolve(scope), self.frompath.resolve(scope))
+
+class DataModifyStack(DataModifyValue):
+
+    def __init__(self, index, key, action, value):
+        super().__init__(EntityReference(EntityTag), StackPath(index, key), action,
+                         value)
+
+class DataModifyFromStack(DataModifyFrom):
+
+    def __init__(self, index1, action, index2):
+        super().__init__(EntityReference(EntityTag), StackPath(index1), action,
+                         EntityReference(EntityTag), StackPath(index2))
+
+class DataRemove(Command):
+
+    def __init__(self, ref, path):
+        assert isinstance(ref, BlockOrEntityRef)
+        self.ref = ref
+        self.path = path
+
+    def resolve(self, scope):
+        return 'data remove %s %s' % (self.ref.resolve(scope),
+                                      self.path.resolve(scope))
 
 class Function(Command):
 
@@ -328,13 +448,12 @@ class Function(Command):
 
 class Tellraw(Command):
 
-    def __init__(self, args, sel_type, sel_args={}):
+    def __init__(self, args, target):
         self.args = args
-        self.sel = sel_type
-        self.sel_args = sel_args
+        self.target = target
 
     def resolve(self, scope):
-        return 'tellraw %s %s' % (make_selector(self.sel, **self.sel_args),
+        return 'tellraw %s %s' % (self.target.resolve(scope),
                                   self.to_json(scope))
 
     def to_json(self, scope):
@@ -356,6 +475,9 @@ class Tellraw(Command):
             return {'score':
                     {'name': arg.selector(None).resolve(scope),
                      'objective': arg.resolve(scope)}}
+        if isinstance(arg, StackPath):
+            return {'nbt': arg.resolve(scope),
+                    'entity': EntityTag.resolve(scope)}
         else:
             raise RuntimeError('Unknown argument type %r' % type(arg))
 

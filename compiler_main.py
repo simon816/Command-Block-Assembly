@@ -24,11 +24,10 @@ if __name__ == '__main__':
     parser.add_argument('--rem-existing', help="Remove existing functions in namespace",
                         action='store_true')
     parser.add_argument('--debug', action='store_true', help="Enable debug output")
-    parser.add_argument('--stack', help="Stack size", type=int, default=8)
+    parser.add_argument('--dump-ir', action='store_true', help="Dump CMD IR output")
     parser.add_argument('--arg', help="ASM file arguments", action='append')
     parser.add_argument('--place-location', default="~1,~,~1",
                         help="Location to place command blocks")
-    parser.add_argument('--enable-sync', help="Enable SYNC opcode", action='store_true')
     parser.add_argument('--page-size', type=int, default=64, help="Memory page size")
     parser.add_argument('--setup-on-load', action='store_true',
                         help="Run setup on minecraft:load")
@@ -68,7 +67,6 @@ if __name__ == '__main__':
             return iter(self.output)
 
     assembler = ExtendedAssembler()
-    assembler.enable_sync = args.enable_sync
     assembler.consume_reader(OutputReader(compile_output))
 
     sargs = {}
@@ -95,10 +93,12 @@ if __name__ == '__main__':
     # don't bother with memory if not used
     if not assembler.use_mem:
         page_size = 0
-    session = CompilerSession((x, y, z), writer, args.namespace, stack_size=args.stack,
+    session = CompilerSession((x, y, z), writer, args.namespace,
                       args=sargs, setup_on_load=args.setup_on_load, debug=args.debug,
                       page_size=page_size, extern=args.extern)
     assembler.write_to_session(session)
+    if args.dump_ir:
+        print(assembler.top.serialize())
     setup, cleanup = session.create_up_down_functions(args.spawn_location)
     writer.close()
     print('Generated', writer.command_count, 'commands in',
@@ -107,7 +107,7 @@ if __name__ == '__main__':
     print ('/' + setup)
     print('== Cleanup command ==')
     print('/' + cleanup)
-    if 'main' in assembler.subroutines:
+    if assembler.top.lookup_func('sub_main') is not None:
         print('== Run main() ==')
         print('/' + assembler.get_sub_jump_command('main').resolve(session.scope))
     else:

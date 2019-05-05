@@ -14,12 +14,11 @@ if __name__ == '__main__':
     parser.add_argument('--rem-existing', help="Remove existing functions in namespace",
                         action='store_true')
     parser.add_argument('--debug', action='store_true', help="Enable debug output")
-    parser.add_argument('--stack', help="Stack size", type=int, default=8)
+    parser.add_argument('--dump-ir', action='store_true', help="Dump CMD IR output")
     parser.add_argument('--arg', help="ASM file arguments", action='append')
     parser.add_argument('--jump', help='Output subroutine jump instruction')
     parser.add_argument('--place-location', default="~1,~,~1",
                         help="Location to place command blocks")
-    parser.add_argument('--enable-sync', help="Enable SYNC opcode", action='store_true')
     parser.add_argument('--setup-on-load', action='store_true',
                         help="Run setup on minecraft:load")
     parser.add_argument('--spawn-location', default='~ ~2 ~',
@@ -30,7 +29,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     assembler = Assembler()
-    assembler.enable_sync = args.enable_sync
     with args.file as f:
         assembler.parse(f.read(), f.name)
 
@@ -54,10 +52,12 @@ if __name__ == '__main__':
         writer = DummyWriter()
     writer.open()
 
-    session = Session((x, y, z), writer, args.namespace, stack_size=args.stack,
+    session = Session((x, y, z), writer, args.namespace,
                       args=sargs, setup_on_load=args.setup_on_load, debug=args.debug,
                       extern=args.extern)
     assembler.write_to_session(session)
+    if args.dump_ir:
+        print(assembler.top.serialize())
     setup, cleanup = session.create_up_down_functions(args.spawn_location)
     writer.close()
     print('Generated', writer.command_count, 'commands in',

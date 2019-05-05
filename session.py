@@ -4,7 +4,7 @@ from datapack import Advancement
 from placer import CommandPlacer
 
 class Scope:
-    def __init__(self, namespace, tag_name, variables, args={}, extern=[]):
+    def __init__(self, namespace, tag_name, variables, block_pos, args={}, extern=[]):
         self.entity_tag = namespace + '_' + tag_name
         self.namespace = namespace
         self.variables = variables
@@ -13,6 +13,9 @@ class Scope:
         self.args = args
         self.func_names = set()
         self.extern = set(extern or [])
+        assert all(type(c) == int for c in block_pos), \
+        "Block position must be absolute (for now). Use --place-location"
+        self.util_pos = '%d %d %d' % block_pos
 
     def variable(self, name, args=()):
         var = self.variables[name]
@@ -27,6 +30,9 @@ class Scope:
         self.variables[name] = name
         return self.variable(name)
 
+    def get_util_block(self):
+        return self.util_pos
+
     def memory(self, orig):
         self.mem_locs[orig] = True
         return self.trim('%s_x%x' % (self.namespace, orig))
@@ -35,7 +41,7 @@ class Scope:
         # Objective name length must be <= 16
         return obj_name[-16:]
 
-    def nbt_path(self, path):
+    def custom_nbt_path(self, path):
         return 'ArmorItems[0].tag.' + path
 
     def get_objectives(self):
@@ -82,99 +88,29 @@ class Scope:
 
 class Session:
 
-    def __init__(self, pos, writer, namespace, stack_size=16, args={},
+    def __init__(self, pos, writer, namespace, args={},
                  setup_on_load=False, debug=False, extern=[]):
         self.placer = CommandPlacer(pos)
         self.writer = writer
-        self.stack_size = stack_size
         self.scope = Scope(namespace, 'etag', {
             'stack_register': 'sr',
-            'stack_slot': ('ss_%d', range(stack_size)),
-            'stack_pointer': 'sp',
             'working_reg': 'a',
             'working_reg_2': 'b',
             'working_reg_3': 'c',
             'success_tracker': 'st',
-            'sync_trigger': 'sy',
-            'lookup_pointer': 'lk'
-        }, args, extern)
+        }, pos, args, extern)
         self.print_debug = debug
         self.setup_hook = None
         self.setup_on_load = setup_on_load
-        self.add_stack()
+        self.add_util_command_block()
 
-    def add_stack(self, one_function=False):
-        if self.stack_size < 1:
-            return
+    def add_util_command_block(self):
+        seq = CommandSequence()
+        seq.add_block(CommandBlock(Cmd(''), conditional=False, mode='REPEAT'))
+        self.add_command_blocks([seq])
 
         dump = Subsequence()
-        stack_dump = ["Stack{", Var('stack_pointer') ,"}: ["]
-
-        push_stack = Subsequence()
-        push_stack.add_command(AddConst(Var('stack_pointer'), 1))
-
-        pop_stack = Subsequence()
-        pop_stack.add_command(RemConst(Var('stack_pointer'), 1))
-
-        # workaround MC-125058
-        track_bug = SetConst(Var('success_tracker'), 0)
-        # See add_tracked_command in Assembler
-        def Tracked(command):
-            return ExecuteChain() \
-               .store('success').score(EntityTag, Var('success_tracker')) \
-               .run(command)
-
-        current_push_seq = push_stack
-        current_pop_seq = pop_stack
-        current_push_func = 'stack_push_0'
-        current_pop_func = 'stack_pop_0'
-        self.scope.add_function_names((current_push_func, current_pop_func))
-        stack_overflow = Execute.If(SelEquals(Var('success_tracker'), 0),
-                                    Tellraw(['Stack overflow error!'], 'a'))
-        stack_underflow = Execute.If(SelEquals(Var('success_tracker'), 0),
-                                     Tellraw(['Stack underflow error!'], 'a'))
-        for i in range(self.stack_size):
-            stack_dump.append(Var('stack_slot', i))
-            if i != self.stack_size - 1:
-                stack_dump.append(",")
-            next_push_func = 'stack/stack_push_%d' % (i+1)
-            next_pop_func = 'stack/stack_pop_%d' % (i+1)
-            current_push_seq.add_command(track_bug)
-            current_push_seq.add_command(Tracked(OpAssign(Var('stack_slot', i), Var('stack_register'),
-                                          where=SelEquals(Var('stack_pointer'), i))))
-            top = self.stack_size - i - 1
-            current_pop_seq.add_command(track_bug)
-            current_pop_seq.add_command(Tracked(OpAssign(Var('stack_register'), Var('stack_slot', i),
-                                        where=SelEquals(Var('stack_pointer'), i - 1))))
-            if not one_function:
-                self.scope.add_function_names((next_push_func, next_pop_func))
-                is_last = i == self.stack_size - 1
-                if not is_last:
-                    current_push_seq.add_command(Execute.If(SelEquals(Var('success_tracker'), 0),
-                                                    Function(next_push_func)))
-                    current_pop_seq.add_command(Execute.If(SelEquals(Var('success_tracker'), 0),
-                                                   Function(next_pop_func)))
-                    self.add_subsequence(current_push_func, current_push_seq)
-                    self.add_subsequence(current_pop_func, current_pop_seq)
-                    current_push_seq = Subsequence()
-                    current_pop_seq = Subsequence()
-                else:
-                    current_push_seq.add_command(stack_overflow)
-                    current_pop_seq.add_command(stack_underflow)
-                    self.add_subsequence(current_push_func, current_push_seq)
-                    self.add_subsequence(current_pop_func, current_pop_seq)
-                current_push_func = next_push_func
-                current_pop_func = next_pop_func
-
-        if one_function:
-            current_push_seq.add_command(stack_overflow)
-            current_pop_seq.add_command(stack_underflow)
-            self.add_subsequence(current_push_func, push_stack)
-            self.add_subsequence(current_pop_func, pop_stack)
-
-        stack_dump.append("]")
-        dump.add_command(Tellraw(stack_dump, 'a'))
-        self.scope.add_function_names(('stack_dump',))
+        dump.add_command(Tellraw([StackPath(None)], Selector('a', None)))
         self.add_subsequence('stack_dump', dump)
 
     def load_subroutine_table(self, known_functions):
@@ -259,7 +195,7 @@ class Session:
 
     def create_up_down_functions(self, pos, setup='setup', cleanup='cleanup'):
         self.scope.add_function_names((setup, cleanup))
-        item = '{id:"minecraft:stone",Count:1b,tag:{}}'
+        item = '{id:"minecraft:stone",Count:1b,tag:{stack:[],globals:[],working:{int:0}}}'
         nbt = ('{Tags:["%s"],ArmorItems:[%s],NoAI:1b,Invisible:1b,' + \
                'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
                'NoBasePlate:1b}') % (self.scope.entity_tag, item)
@@ -276,10 +212,8 @@ class Session:
         for loc in self.scope.get_mem_locs():
             up.append(SetConst(Mem(loc), 0).resolve(self.scope))
         for var, val in {
-                'stack_pointer': -1,
                 'working_reg': 0,
                 'success_tracker': 0,
-                'sync_trigger': -1
             }.items():
             up.append(SetConst(Var(var), val).resolve(self.scope))
         up.extend(self.placer.output())

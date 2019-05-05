@@ -1,5 +1,6 @@
-from commands import *
 from asm_reader import AsmReader
+from cmd_ir.core import *
+from cmd_ir.instructions import *
 
 def type_aware(fn):
     def wrap(*args):
@@ -19,27 +20,26 @@ def type_aware(fn):
 class Assembler:
 
     def __init__(self):
-        self.subroutines = {}
+        self.top = TopLevel()
         self.constants = {}
-        self.function_subsequences = {}
-        self.command_block_lines = []
-        self.event_handlers = []
-        self.included_subroutines = set()
-        self.enter_subroutine('__main__')
+        self.func = None
+        self.new_function('__main__')
         self.jump_later = None
-        self.has_created_sync = False
-        self.sync_func_ids = {}
         self.comparison_args = None
-        self.on_sub = {} # Temp
-        self.predef()
         self.init_instructions()
-        self.enable_sync = False
+        self._predef_const('sr', 'stack_register')
         self.lineno = None
         self.filename = None
 
-    def predef(self):
-        self.constants['sp'] = Var('stack_pointer')
-        self.constants['sr'] = Var('stack_register')
+    def new_function(self, name):
+        if self.func is not None:
+            self.func.end()
+        self.func = self.top.get_or_create_func('sub_' + name)
+        self.block = self.func.create_block('entry')
+
+    def _predef_const(self, name, varname):
+        var = self.constants[name] = self.top.create_global(name)
+        var.set_register(Var(varname))
 
     def parse(self, text, filename=''):
         self.filename = filename or '<a.asm>'
@@ -61,18 +61,11 @@ class Assembler:
         elif token == 'label':
             self.handle_label(arg)
         elif token == 'instruction':
-            if self.curr_func == '__unreachable__':
-                self.warn("Unreachable code")
-                return
             self.handle_insn(*arg)
         elif token == 'local_label':
             self.handle_local_label(arg)
         elif token == 'directive':
             self.handle_directive(*arg)
-
-    def warn(self, message):
-        import warnings
-        warnings.showwarning(message, UserWarning, self.filename, self.lineno)
 
     def define_const(self, name, value):
         if name in self.constants:
@@ -80,124 +73,39 @@ class Assembler:
         self.constants[name] = value
 
     def define_entity_local(self, name, specific):
-        self.define_const(name, EntityLocal(name, specific))
+        local = self.top.preamble.define(CreateEntityLocal(name))
+        if specific:
+            sel = self.top.preamble.define(CreatePlayerRef(specific))
+        else:
+            sel = self.top.preamble.define(CreateSelector(SelectorType.SENDER))
+        var = self.top.preamble.define(CreateEntityLocalAccess(local, sel))
+        self.define_const(name, var)
 
     def get_const(self, name):
         return self.constants[name]
 
-    def new_command_block_line(self, line):
-        self.command_block_lines.append(line)
-
-    def enter_subroutine(self, name):
-        if name in self.subroutines:
-            raise RuntimeError('Subroutine %r already exists' % name)
-        self.curr_func = self.sub_to_func_name(name)
-        self.curr_sub = name
-        self.subroutines[name] = self.function_subsequences[self.curr_func] = Subsequence()
-
-    def enter_subsequence(self, func_name):
-        self.create_subsequence(func_name)
-        self.curr_func = func_name
-
-    def create_subsequence(self, func_name):
-        if func_name in self.function_subsequences:
-            raise RuntimeError('subsequence %r already defined' % func_name)
-        seq = self.function_subsequences[func_name] = Subsequence()
-        if func_name in self.on_sub:
-            for cb in self.on_sub[func_name]:
-                cb(seq)
-            del self.on_sub[func_name]
-        return seq
-
-    def split_to_subsequence(self, name, cond_chain=None):
-        # Create a jump on the current subsequence
-        # don't jump if we're currently unreachable
-        if self.curr_func != '__unreachable__':
-            if cond_chain is not None:
-                self.add_command(cond_chain.run(Function(name)))
-            else:
-                self.add_command(Function(name))
-        # Change assembler state to new subsequence
-        self.enter_subsequence(name)
-
     def jump_after_next(self, dest):
         self.jump_later = dest
-
-    def local_to_func_name(self, local_name):
-        return self.sub_to_func_name(self.curr_sub) + '/' + local_name
-
-    def sub_to_func_name(self, sub_name):
-        return 'sub_' + sub_name
 
     def handle_local_label(self, name):
         if name.startswith('_'):
             if name not in ['_setup__']:
                 raise RuntimeError('Unknown special function name: %r' % name)
-            self.enter_subroutine('_' + name)
+            self.new_function('_' + name)
             return
-        func_name = self.local_to_func_name(name)
-        self.split_to_subsequence(func_name)
+        new_block = self.func.get_or_create_block(name)
+        new_block.defined = True
+        self.block.add(Call(new_block))
+        self.block = new_block
 
-    def symbol_to_func(self, symbol):
+    def lookup_symbol(self, symbol):
         if symbol[0] == '_':
-            return self.local_to_func_name(symbol[1:])
+            return self.func.get_or_create_block(symbol[1:])
         else:
-            return self.sub_to_func_name(symbol)
-
-    def unique_func(self, hint):
-        name = self.curr_func + '/' + hint
-        i = 1
-        while name in self.function_subsequences:
-            name = '%s/%s_%d' % (self.curr_func, hint, i)
-            i += 1
-        return name
-
-    def function_id(self, func_name):
-        if func_name in self.sync_func_ids:
-            return self.sync_func_ids[func_name]
-        import zlib
-        id = zlib.crc32(func_name.encode('utf8')) & 0x7FFFFFFF
-        return self.sync_func_ids.setdefault(func_name, id)
+            return self.top.get_or_create_func('sub_' + symbol)
 
     def handle_label(self, label):
-        self.enter_subroutine(label)
-
-    def add_command(self, command):
-        self.function_subsequences[self.curr_func].add_command(command)
-
-    def make_tracked_command(self, command):
-        return ExecuteChain() \
-               .store('success').score(EntityTag, Var('success_tracker')) \
-               .run(command)
-
-    def add_tracked_command(self, command):
-        # Bug where success_tracker isn't set if the command fails
-        # So need to force to 0. See MC-125058
-        self.add_command(SetConst(Var('success_tracker'), 0))
-        self.add_command(self.make_tracked_command(command))
-
-    def add_cast(self, type, cmd, dest):
-        # Short-circuit for 32 bit since scoreboards already are 32 bits
-        if type == 'L':
-            if cmd is not None:
-                self.add_command(cmd)
-            return
-        if cmd is None:
-            cmd = GetValue(dest)
-        data_type = {
-            'B': 'byte',
-            'W': 'short',
-            'L': 'int',
-            'Q': 'long'
-        }[type]
-        # store result of cmd into nbt of the specified type
-        self.add_command(ExecuteChain() \
-                         .store('result').entity(EntityTag, data_type).run(cmd))
-        # move nbt value back out to scoreboard
-        self.add_command(ExecuteChain() \
-                         .store('result').score(EntityTag, dest) \
-                         .run(DataGet(EntityTag, data_type)))
-
+        self.new_function(label)
 
     def handle_directive(self, directive, value):
         if directive == 'include':
@@ -216,38 +124,31 @@ class Assembler:
             path = os.path.join(dir, value)
             with open(path, 'r') as f:
                 data = f.read()
-            assembler = Assembler()
-            assembler.enable_sync = self.enable_sync
+            assembler = self.__class__()
             assembler.parse(data, path)
-            for sub in assembler.subroutines.keys():
-                if sub.startswith('__'):
-                    continue
-                self.included_subroutines.add(self.sub_to_func_name(sub))
+            self.top.include_from(assembler.top)
+            for name, val in assembler.constants.items():
+                if isinstance(val, Variable) and val.owner:
+                    val.owner = self.top
             self.constants.update(assembler.constants)
-            self.sync_func_ids.update(assembler.sync_func_ids)
         elif directive == 'event_handler':
             handler, event, conditions = value.split(' ', 2)
-            conds = {}
+            event = self.top.preamble.define(CreateEvent(event))
             if conditions:
                 for cond in conditions.split(';'):
                     key, value = cond.split('=', 1)
-                    path = tuple(key.split('.'))
-                    conds[path] = value
-            self.event_handlers.append({
-                'event': event,
-                'conditions': conds,
-                'handler': self.sub_to_func_name(handler)
-            })
+                    self.top.preamble.add(AddEventCondition(event, key, VirtualString(value)))
+            self.top.preamble.add(EventHandler(self.lookup_symbol(handler), event))
 
     def init_instructions(self):
         self.instructions = {
-            'ADD': (self.handle_op, AddConst, OpAdd),
-            'SUB': (self.handle_op, RemConst, OpSub),
-            'MUL': (self.handle_op, None, OpMul),
-            'DIV': (self.handle_op, None, OpDiv),
-            'MOD': (self.handle_op, None, OpMod),
-            'MOVLT': (self.handle_op, None, OpIfLt),
-            'MOVGT': (self.handle_op, None, OpIfGt),
+            'ADD': self.handle_add,
+            'SUB': self.handle_sub,
+            'MUL': self.handle_mul,
+            'DIV': self.handle_div,
+            'MOD': self.handle_mod,
+            'MOVLT': self.handle_movlt,
+            'MOVGT': self.handle_movgt,
 
             'XCHG': self.handle_xchg,
             'MOV': self.handle_move,
@@ -304,27 +205,14 @@ class Assembler:
 
         insn, *type_mod = insn.split('.', 2)
 
-        def unwrap(handler):
+        if insn in self.instructions:
+            handler = self.instructions[insn]
+            real_func = handler
             t_aware = hasattr(handler, 'type_aware')
             assert not type_mod or t_aware, insn + " does not support types"
             if t_aware:
                 d_type = type_mod[0] if type_mod else 'L'
-                old_handler = handler
-                handler = lambda *args: old_handler(d_type, *args)
-            return t_aware, handler
-
-
-        if insn in self.instructions:
-            handler = self.instructions[insn]
-            real_func = handler
-
-            if type(handler) == tuple:
-                real_func, *h_args = handler
-                t_aware, _handler = unwrap(real_func)
-                handler = lambda *args: _handler(*(tuple(h_args) + args))
-            else:
-                t_aware, handler = unwrap(handler)
-
+                handler = lambda *args: real_func(d_type, *args)
             try:
                 handler(*args)
             except TypeError as e:
@@ -334,9 +222,6 @@ class Assembler:
                 # type aware functions have one extra arg
                 if t_aware:
                     expect_args = expect_args[:-1]
-                # Special case where handle_op has two more args
-                if real_func == self.handle_op:
-                    expect_args = expect_args[:-2]
                 expect_count = len(expect_args) - 1 # remove self
                 found = len(args)
                 if expect_count == found:
@@ -348,73 +233,85 @@ class Assembler:
 
         if self.jump_later:
             if old_jump_later is not None:
-                # Only jump if haven't unconditionally jumped elsewhere
-                if self.curr_func != '__unreachable__':
-                    self.add_command(Function(old_jump_later))
-                self.curr_func = old_jump_later
+                self.block.add(Call(old_jump_later))
+                self.block = old_jump_later
                 if self.jump_later == old_jump_later:
                     self.jump_later = None
+
 
     def resolve_ref(self, type, value):
         if type == 'literal':
             return value
         elif type == 'address':
-            return Mem(value)
+            var = self.top.get_or_create_global('mem_%d' % value)
+            # initialize
+            if not var.register:
+                var.set_register(Mem(value))
+            return var
         elif type == 'symbol':
             return self.get_const(value)
 
     def get_src_dest(self, src, dest):
         src, dest = self.resolve_ref(*src), self.resolve_ref(*dest)
-        assert isinstance(dest, Ref) # dest must be a reference
+        assert isinstance(dest, Variable) # dest must be a variable
         return src, dest
 
-    def assign_op(self, dest, src):
-        return (OpAssign if isinstance(src, Ref) else SetConst)(dest, src)
+    def get_working(self, n=0):
+        w = self.func.create_var('tmp')
+        suf = '' if n == 0 else ('_%d' % (n + 1))
+        w.set_register(Var('working_reg%s' % suf))
+        return w
 
-    @type_aware
-    def handle_op(self, ConstCmd, DynCmd, src, dest):
+    def handle_op(self, src, dest, Op, can_use_const=False):
         src, dest = self.get_src_dest(src, dest)
-        if isinstance(src, Ref):
-            cmd = DynCmd(dest, src)
+        if can_use_const or isinstance(src, Variable):
+            self.block.add(Op(dest, src))
         else:
-            if ConstCmd is None:
-                cmd = SetConst(Var('working_reg'), src)
-                self.add_command(cmd)
-                cmd = DynCmd(dest, Var('working_reg'))
-            else:
-                cmd = ConstCmd(dest, src)
-        return cmd, dest
+            tmp = self.get_working()
+            self.block.add(SetScore(tmp, src))
+            self.block.add(Op(dest, tmp))
+
+    def handle_add(self, src, dest):
+        self.handle_op(src, dest, AddScore, True)
+
+    def handle_sub(self, src, dest):
+        self.handle_op(src, dest, SubScore, True)
+
+    def handle_mul(self, src, dest):
+        self.handle_op(src, dest, MulScore)
+
+    def handle_div(self, src, dest):
+        self.handle_op(src, dest, DivScore)
+
+    def handle_mod(self, src, dest):
+        self.handle_op(src, dest, ModScore)
+
+    def handle_movlt(self, src, dest):
+        self.handle_op(src, dest, MovLtScore)
+
+    def handle_movgt(self, src, dest):
+        self.handle_op(src, dest, MovGtScore)
 
     def handle_xchg(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
-        assert isinstance(src, Ref)
-        self.add_command(OpSwap(dest, src))
+        assert isinstance(src, Variable)
+        self.block.add(SwapScore(dest, src))
 
-    @type_aware
     def handle_move(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
-        return self.assign_op(dest, src), dest
+        self.block.add(SetScore(dest, src))
 
-    @type_aware
     def handle_and(self, src, dest):
-        return self.bitwise_op('and', src, dest, 0, 1, OpSub)
+        self.bitwise_op('and', src, dest, 0, 1, SubScore)
 
-    @type_aware
+    # See also: https://stackoverflow.com/q/2982729
+    # and https://bisqwit.iki.fi/story/howto/bitmath/
+
     def handle_or(self, src, dest):
-        return self.bitwise_op('or', src, dest, 1, 0, OpAdd)
+        return self.bitwise_op('or', src, dest, 1, 0, AddScore)
 
-    @type_aware
     def handle_xor(self, src, dest):
-        return self.bitwise_op('xor', src, dest, 1, 0, OpAdd, OpSub)
-
-    @type_aware
-    def handle_not(self, ref):
-        ref = self.resolve_ref(*ref)
-        assert isinstance(ref, Ref)
-        work = Var('working_reg')
-        self.add_command(SetConst(work, -1))
-        self.add_command(OpSub(work, ref))
-        return OpAssign(ref, work), ref
+        return self.bitwise_op('xor', src, dest, 1, 0, AddScore, SubScore)
 
     def bitwise_op(self, name, src, dest, cmp_1, cmp_2, Op, Op2=None):
         """Constructs code like the following:
@@ -433,50 +330,52 @@ void OP(int src, int *dest) {
 }
 """
         src, dest = self.get_src_dest(src, dest)
-        order = Var('working_reg')
-        two = Var('working_reg_2')
-        work = Var('working_reg_3')
+        order = self.get_working()
+        two = self.get_working(1)
+        work = self.get_working(2)
+        self.block.add(SetScore(order, 1))
+        self.block.add(SetScore(two, 2))
 
-        self.add_command(SetConst(order, 1))
-        self.add_command(SetConst(two, 2))
-        op_fn = self.unique_func(name)
-        old_func = self.curr_func
-        self.split_to_subsequence(op_fn)
-        self.add_command(self.assign_op(work, src))
-        self.add_command(OpDiv(work, order))
-        self.add_command(OpMod(work, two))
-        cmp_fn = self.unique_func('cmp')
-        self.add_command(Execute.If(SelEquals(work, cmp_1), Function(cmp_fn)))
-        self.add_command(OpAdd(order, order))
-        self.add_command(Execute.If(SelRange(order, min=1), Function(op_fn)))
+        op_fn = self.func.create_block(name)
+        cmp_fn = self.func.create_block(name + '_src_bit_test')
+
+        self.block.add(Call(op_fn))
+
+        op_fn.add(SetScore(work, src))
+        op_fn.add(DivScore(work, order))
+        op_fn.add(ModScore(work, two))
+        op_fn.add(RangeBr(work, cmp_1, cmp_1, cmp_fn, None))
+        op_fn.add(AddScore(order, order))
+        op_fn.add(RangeBr(order, 1, None, op_fn, None))
 
         # Function to run if work%2==cmp_1
-        seq = self.create_subsequence(cmp_fn)
-        seq.add_command(OpAssign(work, dest))
-        seq.add_command(OpDiv(work, order))
-        seq.add_command(OpMod(work, two))
-        op_cmd = Op(dest, order, where=SelEquals(work, cmp_2))
-        if Op2 is None:
-            seq.add_command(op_cmd)
-        else:
-            # See add_tracked_command and MC-125058
-            seq.add_command(SetConst(Var('success_tracker'), 0))
-            seq.add_command(self.make_tracked_command(op_cmd))
+        cmp_fn.add(SetScore(work, dest))
+        cmp_fn.add(DivScore(work, order))
+        cmp_fn.add(ModScore(work, two))
+
+        eq_cmp_2 = self.func.create_block(name + '_dest_bit_test')
+        eq_cmp_2.add(Op(dest, order))
+        not_eq_cmp_2 = None
         if Op2 is not None:
-            seq.add_command(Op2(dest, order, where=SelEquals(Var('success_tracker'), 0)))
+            not_eq_cmp_2 = self.func.create_block(name + '_dest_bit_test_failed')
+            not_eq_cmp_2.add(Op2(dest, order))
 
-        self.curr_func = old_func
-        return dest
+        cmp_fn.add(RangeBr(work, cmp_2, cmp_2, eq_cmp_2, not_eq_cmp_2))
 
-    @type_aware
+    def handle_not(self, ref):
+        ref = self.resolve_ref(*ref)
+        assert isinstance(ref, Variable)
+        w = self.get_working()
+        self.block.add(SetScore(w, -1))
+        self.block.add(SubScore(w, ref))
+        self.block.add(SetScore(ref, work))
+
     def handle_shl(self, src, dest):
-        return self.shift_op('shl', src, dest, True)
+        self.shift_op('shl', src, dest, True)
 
-    @type_aware
     def handle_shr(self, src, dest):
-        return self.shift_op('shr', src, dest, False)
+        self.shift_op('shr', src, dest, False)
 
-    @type_aware
     def handle_sar(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
         raise NotImplementedError() # TODO
@@ -484,254 +383,188 @@ void OP(int src, int *dest) {
     def shift_op(self, name, src, dest, left):
         # TODO handle 2's complement properly
         src, dest = self.get_src_dest(src, dest)
-        count = Var('working_reg')
-        self.add_command(self.assign_op(count, src))
-        if not left:
-            self.add_command(SetConst(Var('working_reg_2'), 2))
-        old_func = self.curr_func
-        loop = self.unique_func(name)
-        self.split_to_subsequence(loop, ExecuteChain.unless_where(SelEquals(count, 0)))
-        if left:
-            self.add_command(OpAdd(dest, dest))
-        else:
-            self.add_command(OpDiv(dest, Var('working_reg_2')))
-        self.add_command(RemConst(count, 1))
-        self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
-        self.curr_func = old_func
-        return dest
+        count = self.get_working()
+        self.block.add(SetScore(count, src))
 
-    @type_aware
+        loop = self.func.create_block(name)
+        if left:
+            loop.add(AddScore(dest, dest))
+        else:
+            two = self.get_working(1)
+            self.block.add(SetScore(two, 2))
+            loop.add(DivScore(dest, two))
+        loop.add(SubScore(count, 1))
+        loop.add(RangeBr(count, 0, 0, None, loop))
+
+        self.block.add(RangeBr(count, 0, 0, None, loop))
+
     def handle_rol(self, src, dest):
         src, dest = self.get_src_dest(src, dest)
-        count = Var('working_reg')
-        was_neg = Var('working_reg_2')
-        self.add_command(self.assign_op(count, src))
-        old_func = self.curr_func
-        loop = self.unique_func('rol')
-        self.split_to_subsequence(loop, ExecuteChain.unless_where(SelEquals(count, 0)))
-        self.add_command(SetConst(was_neg, 0))
-        self.add_command(SetConst(was_neg, 1, where=SelRange(dest, max=-1)))
-        self.add_command(OpAdd(dest, dest))
-        self.add_command(AddConst(dest, 1, where=SelEquals(was_neg, 1)))
-        self.add_command(RemConst(count, 1))
-        self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
-        self.curr_func = old_func
-        return dest
+        count = self.get_working()
+        was_neg = self.get_working(1)
+        self.block.add(SetScore(count, src))
 
-    @type_aware
+        loop = self.func.create_block('rol')
+        loop.add(SetScore(was_neg, 0))
+        set_neg = self.func.create_block('rol_set_neg')
+        set_neg.add(SetScore(was_neg, 1))
+        loop.add(RangeBr(dest, None, -1, set_neg, None))
+        loop.add(AddScore(dest, dest))
+        add_if_neg = self.func.create_block('rol_if_neg')
+        add_if_neg.add(AddScore(dest, 1))
+        loop.add(RangeBr(was_neg, 1, 1, add_if_neg, None))
+        loop.add(SubScore(count, 1))
+        loop.add(RangeBr(count, 0, 0, None, loop))
+
+        self.block.add(RangeBr(count, 0, 0, None, loop))
+
     def handle_ror(self, src, dest):
         # TODO handle 2's complement properly
         src, dest = self.get_src_dest(src, dest)
-        count = Var('working_reg')
-        was_lsb = Var('working_reg_2')
-        two = Var('working_reg_3')
-        self.add_command(self.assign_op(count, src))
-        self.add_command(SetConst(two, 2))
-        old_func = self.curr_func
-        loop = self.unique_func('ror')
-        self.split_to_subsequence(loop, ExecuteChain.unless_where(SelEquals(count, 0)))
-        self.add_command(OpAssign(was_lsb, dest))
-        self.add_command(OpMod(was_lsb, two))
-        self.add_command(OpDiv(dest, two))
+        count = self.get_working()
+        was_lsb = self.get_working(1)
+        two = self.get_working(2)
+        self.block.add(SetScore(count, src))
+        self.block.add(SetScore(two, 2))
+
+        loop = self.func.create_block('ror')
+        loop.add(SetScore(was_lsb, dest))
+        loop.add(ModScore(was_lsb, two))
+        loop.add(DivScore(dest, two))
+        sub = self.func.create_block('ror_sub')
         # Assumption of 32 bit
         # Remove 1 less than max negative because RemConst doesn't support negatives
-        self.add_command(RemConst(dest, (1<<31) - 1, where=SelEquals(was_lsb, 1)))
+        sub.add(SubScore(dest, (1 << 31) - 1))
         # Remove remaining 1 thas wasn't removed from above
-        self.add_command(RemConst(dest, 1, where=SelEquals(was_lsb, 1)))
-        self.add_command(RemConst(count, 1))
-        self.add_command(Execute.Unless(SelEquals(count, 0), Function(loop)))
-        self.curr_func = old_func
-        return dest
+        sub.add(SubScore(dest, 1))
+        loop.add(RangeBr(was_lsb, 1, 1, sub, None))
+        loop.add(SubScore(count, 1))
+        loop.add(RangeBr(count, 0, 0, None, loop))
+
+        self.block.add(RangeBr(count, 0, 0, None, loop))
 
     def handle_cmp(self, left, right):
-        """Subtract left from right i.e right - left"""
         left, right = self.resolve_ref(*left), self.resolve_ref(*right)
-        commands = []
-        SubFn = OpSub if isinstance(left, Ref) else RemConst
-        commands.append(self.assign_op(Var('working_reg'), right))
-        commands.append(SubFn(Var('working_reg'), left))
-        self.comparison_args = (commands, left, right)
+        self.comparison_args = (left, right)
 
-    def do_equality_jump(self, dest_arg, is_truth):
+    def do_comparison_jump(self, dest_arg, const_cmp, invert, bound_min,
+                           bound_max):
         arg_type, symbol = dest_arg
         assert arg_type == 'symbol'
-        if not self.comparison_args:
-            raise RuntimeError('No corresponding comparison for jump')
-        commands, left, right = self.comparison_args
-        if isinstance(left, Ref) and isinstance(right, Ref):
-            for command in commands:
-                self.add_command(command)
-            truth_test = SelEquals(Var('working_reg'), 0)
+        left, right = self.comparison_args
+        true_branch = self.lookup_symbol(symbol)
+        false_branch = self.func.create_block('else')
+        if invert:
+            false_branch, true_branch = true_branch, false_branch
+        if isinstance(left, Variable):
+            var = left
+            other = right
+            # var is left, so flip the check
+            bound_min, bound_max = bound_max, bound_min
         else:
-            # we can optimize here because equality can be tested in the selector
-            ref, const = (left, right) if isinstance(left, Ref) else \
-                         (right, left) if isinstance(right, Ref) else (None, None)
-            if ref is None:
-                if (is_truth and left == right) or (not is_truth and left != right):
-                    self.jump_unconditional(symbol)
-                return
+            var = right
+            other = left
+        if not isinstance(var, Variable):
+            if const_cmp(right, left):
+                self.block.add(Call(true_branch))
             else:
-                truth_test = SelEquals(ref, const)
-        jump_fn = self.jump_if_cond if is_truth else self.jump_unless_cond
-        jump_fn(self.symbol_to_func(symbol), truth_test)
+                self.block.add(Call(false_branch))
+        else:
+            if isinstance(other, Variable):
+                tmp = self.get_working()
+                self.block.add(SetScore(tmp, right))
+                self.block.add(SubScore(tmp, left))
+                var = tmp
+                other = 0
+            minval = other if bound_min else None
+            maxval = other if bound_max else None
+            self.block.add(RangeBr(var, minval, maxval, true_branch,
+                                   false_branch))
+        self.block = true_branch if invert else false_branch
 
     def handle_jump_eq(self, dest_arg):
-        self.do_equality_jump(dest_arg, True)
+        self.do_comparison_jump(dest_arg, int.__eq__, False, True, True)
 
     def handle_jump_neq(self, dest_arg):
-        self.do_equality_jump(dest_arg, False)
+        self.do_comparison_jump(dest_arg, int.__eq__, True, True, True)
 
     def handle_jump_lt(self, dest_arg):
-        truth_test = SelRange(Var('working_reg'), max=-1)
-        self.handle_conditional_jump(dest_arg, truth_test, int.__lt__)
+        self.do_comparison_jump(dest_arg, int.__ge__, True, True, False)
 
     def handle_jump_gt(self, dest_arg):
-        truth_test = SelRange(Var('working_reg'), min=1)
-        self.handle_conditional_jump(dest_arg, truth_test, int.__gt__)
+        self.do_comparison_jump(dest_arg, int.__le__, True, False, True)
 
     def handle_jump_lte(self, dest_arg):
-        truth_test = SelRange(Var('working_reg'), max=0)
-        self.handle_conditional_jump(dest_arg, truth_test, int.__le__)
+        self.do_comparison_jump(dest_arg, int.__le__, False, False, True)
 
     def handle_jump_gte(self, dest_arg):
-        truth_test = SelRange(Var('working_reg'), min=0)
-        self.handle_conditional_jump(dest_arg, truth_test, int.__ge__)
+        self.do_comparison_jump(dest_arg, int.__ge__, False, True, False)
 
     def handle_jump(self, dest_arg):
-        ref_type, sub_name = dest_arg
-        assert ref_type == 'symbol'
-        self.jump_unconditional(sub_name)
-
-    def handle_conditional_jump(self, dest_arg, truth_test, expr):
         arg_type, symbol = dest_arg
         assert arg_type == 'symbol'
-        if not self.comparison_args:
-            raise RuntimeError('No corresponding comparison for jump')
-        commands, left, right = self.comparison_args
-        if not isinstance(left, Ref) and not isinstance(right, Ref):
-            # constant expression
-            if expr(right, left):
-                self.jump_unconditional(symbol)
-            return
-        for command in commands:
-            self.add_command(command)
-        self.jump_if_cond(self.symbol_to_func(symbol), truth_test)
-
-    def jump_unless_cond(self, dest_if_fail, false_test):
-        self.jump_conditional(dest_if_fail, ExecuteChain.unless_where(false_test))
-
-    def jump_if_cond(self, dest_if_success, truth_test):
-        self.jump_conditional(dest_if_success, ExecuteChain.if_where(truth_test))
-
-    def jump_conditional(self, dest, cond_chain):
-        cont_name = self.unique_func('cont')
-        # Sent to dest if condition passes
-        # dont use add_tracked_command, MC-125145
-        #self.add_tracked_command(cond_chain.run(Function(dest)))
-        # Set success_tracker, MC-125145
-        self.add_command(SetConst(Var('success_tracker'), 0))
-        self.add_command(cond_chain.run(Function(dest)))
-        # create new subsequence to continue execution
-        self.split_to_subsequence(cont_name, ExecuteChain.if_where(
-                                    SelEquals(Var('success_tracker'), 0)))
-        # Work around MC-125145
-        self.on_subsequence_exists(dest,
-                                   lambda seq: seq.add_post_command(
-                                       SetConst(Var('success_tracker'), 1)))
-
-    def on_subsequence_exists(self, name, cb):
-        if name in self.function_subsequences:
-            cb(self.function_subsequences[name])
-        else:
-            self.on_sub.setdefault(name, []).append(cb)
-
-    def jump_unconditional(self, sub_name):
-        self.add_command(Function(self.symbol_to_func(sub_name)))
-        self.curr_func = '__unreachable__'
+        self.block.add(Call(self.lookup_symbol(symbol)))
+        self.block = self.func.create_block('dead_after_jump')
 
     def handle_call(self, sub_arg):
         ref_type, sub_name = sub_arg
         assert ref_type == 'symbol'
-        if not self.enable_sync:
-            self.add_command(Function(self.symbol_to_func(sub_name)))
-        else:
-            ret_name = self.unique_func('ret')
-            id = self.function_id(ret_name)
-            self.add_command(SetConst(Var('stack_register'), id))
-            self.handle_push()
-            self.add_command(Function(self.symbol_to_func(sub_name)))
-            self.enter_subsequence(ret_name)
-            # MC-125145
-            self.function_subsequences[ret_name].add_post_command(
-                SetConst(Var('success_tracker'), 1))
+        self.block.add(Call(self.lookup_symbol(sub_name)))
 
     def handle_ret(self):
-        if not self.enable_sync:
-            self.warn("RET used without SYNC enabled. This could have unexpected consequences")
-            return
-        # Pop stack into the lookup pointer
-        self.handle_pop()
-        self.add_command(OpAssign(Var('lookup_pointer'), Var('stack_register')))
-        self.add_command(Function('func_lookup_table'))
-        self.curr_func = '__unreachable__'
+        self.block = self.func.create_block('dead_after_ret')
 
     def handle_test_cmd(self, cmd):
-        # Work around execute store bug
-        # use working_reg instead of success_tracker because jump_if_cond resets success_tracker
-        # Temp: store result because success doesn't work properly
-        self.add_command(SetConst(Var('working_reg'), 0))
-        self.add_command(ExecuteChain() \
-               .store('result').score(EntityTag, Var('working_reg')) \
-               .run(Cmd(cmd)))
-        after = self.unique_func('test_after')
-        self.create_subsequence(after) # In preparation for the jump
-        # If command failed, jump to after
-        # use working_reg instead of success_tracker
-        self.jump_if_cond(after, SelEquals(Var('working_reg'), 0))
-        # Otherwise, the new subsequence we're on will jump to 'after' after next insn
-        self.jump_after_next(after)
+        cmd = self.block.define(CreateCommand(VirtualString(cmd)))
+        res = self.get_working()
+        spec = self.block.define(ExecStoreVar(res))
+        ex = self.block.define(CreateExec())
+        self.block.add(ExecStore(ex, 'result', spec))
+        self.block.add(ExecRun(ex, cmd))
+        failed_branch = self.func.create_block('test_after')
+        success_branch = self.func.create_block('test_success')
+        self.block.add(RangeBr(res, 0, 0, failed_branch, success_branch))
+        self.block = success_branch
+        self.jump_after_next(failed_branch)
 
     def handle_print(self, arg1, *args):
         args = [arg1] + list(args)
-        cmd_args = []
+        text = self.block.define(CreateText())
         for arg_type, arg in args:
             if arg_type == 'string':
-                cmd_args.append(arg)
+                arg = VirtualString(arg)
             else:
                 arg = self.resolve_ref(arg_type, arg)
                 if arg is None:
                     raise RuntimeError('Bad argument type %r' % arg_type)
-                if type(arg) == int:
-                    arg = str(arg)
-                cmd_args.append(arg)
-        self.add_command(Tellraw(cmd_args, 'a'))
+            self.block.add(TextAppend(text, arg))
+        selector = self.block.define(CreateSelector(SelectorType.ALL_PLAYERS))
+        self.block.add(TextSend(text, selector))
 
     def handle_cmd(self, cmd):
-        self.add_command(Cmd(cmd))
+        cmd = self.block.define(CreateCommand(VirtualString(cmd)))
+        self.block.add(RunFunction(cmd))
 
     def _read_selector(self, sel_type, pairs):
         assert sel_type[0] == 'string'
         assert len(pairs) % 2 == 0
-        simple = {}
-        sel_args = None
+        sel = self.block.define(CreateSelector(SelectorType.lookup(sel_type[1])))
         for i in range(0, len(pairs), 2):
             key_type, key = pairs[i]
             val_type, val = pairs[i + 1]
             assert val_type == 'string'
             if key_type == 'string':
-                simple[key] = val
+                self.block.add(SetSelector(sel, key, val))
             elif key_type == 'symbol':
                 # Special case where an entity local can be queried
                 var = self.get_const(key)
-                assert isinstance(var, EntityLocal)
+                assert isinstance(var, EntityLocalAccess)
                 min, max = map(lambda v: int(v) if v else None, val.split('..')) \
                            if '..' in val else [int(val)]*2
-                sel_args = ComboSelectorArgs(sel_args, SelRange(var, min, max))
+                self.block.add(SelectVarRange(sel, var, min, max))
             else:
-                assert False, "Bad key type: " + pairs[i]
-        if simple:
-            sel_args = ComboSelectorArgs(sel_args, SimpleSelectorArgs(simple))
-        return Selector(sel_type[1], sel_args)
+                assert False, "Bad key type: " + str(pairs[i])
+        return sel
 
     def _read_pos(self, x, y, z):
         coords = []
@@ -740,147 +573,144 @@ void OP(int src, int *dest) {
             if type_ == 'string':
                 assert val, "Empty string"
                 assert val[0] in '~^', "Invalid pos string '%s'" % val
+                CreateVal = CreateRelPos if val[0] == '~' else CreateAncPos
+                fval = 0.0
                 if len(val) > 1:
-                    # check it can parse as a float
-                    float(val[1:])
+                    fval = float(val[1:])
+                val = self.block.define(CreateVal(fval))
             else:
                 ref = self.resolve_ref(type_, val)
                 assert type(ref) == int, "Unknown type %s %s" % (type(ref), ref)
                 val = ref
             coords.append(val)
-        return Pos(*coords)
+        return self.block.define(CreatePosition(*coords))
 
-    def _execute_chain_helper(self, lbl, chain):
+    def _execute_helper(self, lbl):
         arg_type, symbol = lbl
         assert arg_type == 'symbol'
-        exec_func = self.symbol_to_func(symbol)
-        self.add_command(chain.run(Function(exec_func)))
+        exec = self.block.define(CreateExec())
+        exec_func = self.lookup_symbol(symbol)
+        return exec, ExecRun(exec, exec_func)
 
-    def do_execute_as(self, lbl, sel_type, pairs, inverse):
-        chain = ExecuteChain()
-        if inverse:
-            chain = chain.cond('unless')
+    def _execute_select_helper(self, lbl, sel_type, pairs):
+        exec, run = self._execute_helper(lbl)
         selector = self._read_selector(sel_type, pairs)
-        self._execute_chain_helper(lbl, chain.where(selector))
+        return exec, selector, run
 
     def handle_execute_as(self, lbl, sel_type, *pairs):
-        self.do_execute_as(lbl, sel_type, pairs, False)
+        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
+        self.block.add(ExecAsEntity(exec, selector))
+        self.block.add(run)
 
     def handle_execute_as_not(self, lbl, sel_type, *pairs):
-        self.do_execute_as(lbl, sel_type, pairs, True)
+        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
+        self.block.add(ExecUnlessEntity(exec, selector))
+        self.block.add(run)
 
     def handle_execute_at(self, lbl, sel_type, *pairs):
-        self._execute_chain_helper(lbl, ExecuteChain().at(
-            self._read_selector(sel_type, pairs)))
+        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
+        self.block.add(ExecAtEntity(exec, selector))
+        self.block.add(run)
 
     def handle_execute_at_position(self, lbl, sel_type, *pairs):
-        self._execute_chain_helper(lbl, ExecuteChain().at_entity_pos(
-            self._read_selector(sel_type, pairs)))
+        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
+        self.block.add(ExecAtEntityPos(exec, selector))
+        self.block.add(run)
 
     def handle_execute_position(self, lbl, x, y, z):
-        self._execute_chain_helper(lbl, ExecuteChain().at_pos(
-            self._read_pos(x, y, z)))
+        exec, run = self._execute_helper(lbl)
+        self.block.add(ExecuteAtPos(exec, self._read_pos(x, y, z)))
+        self.block.add(run)
 
     def handle_execute_align(self, lbl, axes):
         arg_type, axes = axes
         assert arg_type == 'string'
-        self._execute_chain_helper(lbl, ExecuteChain().align(axes))
+        exec, run = self._execute_helper(lbl)
+        self.block.add(ExecAlign(exec, axes))
+        self.block.add(run)
 
     def handle_execute_face_pos(self, lbl, x, y, z):
-        self._execute_chain_helper(lbl, ExecuteChain().facing(
-            self._read_pos(x, y, z)))
+        exec, run = self._execute_helper(lbl)
+        self.block.add(ExecFacePos(exec, self._read_pos(x, y, z)))
+        self.block.add(run)
 
     def handle_execute_face_entity(self, lbl, feature, sel_type, *pairs):
         arg_type, feature = feature
         assert arg_type == 'string'
-        self._execute_chain_helper(lbl, ExecuteChain().facing_entity(
-            self._read_selector(sel_type, pairs), feature))
+        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
+        self.block.add(ExecFaceEntity(exec, selector, feature))
+        self.block.add(run)
 
     def handle_execute_rotate(self, lbl, y, x):
         y, x = self.resolve_ref(*y), self.resolve_ref(*x)
         assert type(y) == int
         assert type(x) == int
-        self._execute_chain_helper(lbl, ExecuteChain().rotated(y, x))
+        exec, run = self._execute_helper(lbl)
+        self.block.add(ExecRotate(exec, y, x))
+        self.block.add(run)
 
     def handle_execute_rotate_entity(self, lbl, sel_type, *pairs):
-        self._execute_chain_helper(lbl, ExecuteChain().rotated_as_entity(
-            self._read_selector(sel_type, pairs)))
+        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
+        self.block.add(ExecRotatedAsEntity(exec, selector))
+        self.block.add(run)
 
     def handle_execute_anchor(self, lbl, anchor):
         arg_type, anchor = anchor
         assert arg_type == 'string'
-        self._execute_chain_helper(lbl, ExecuteChain().anchored(anchor))
+        exec, run = self._execute_helper(lbl)
+        self.block.add(ExecAnchor(exec, anchor))
+        self.block.add(run)
 
     def handle_push(self):
-        self.add_command(Function('stack_push_0'))
+        self.block.add(PushStack(self.constants['sr']))
 
     def handle_pop(self):
-        self.add_command(Function('stack_pop_0'))
+        self.block.add(GetStackHead(self.constants['sr']))
+        self.block.add(PopStack())
 
     def handle_sync(self):
-        if not self.enable_sync:
-            raise RuntimeError("SYNC is not enabled. Enable with --enable-sync")
-
-        if not self.has_created_sync:
-            seq = CommandSequence()
-            cmd = Execute.where(SelEquals(Var('sync_trigger'), 1), Function('func_lookup_table'))
-            seq.add_block(CommandBlock(cmd, conditional=False, mode='REPEAT', auto=True))
-            self.new_command_block_line(seq)
-            self.has_created_sync = True
-
-        func = self.unique_func('sync')
-        func_id = self.function_id(func)
-
-        # Set lookup pointer to the destination function and trigger a sync
-        self.add_command(SetConst(Var('lookup_pointer'), func_id))
-        self.add_command(SetConst(Var('sync_trigger'), 1))
-
-        # Set assembler to destination function, immediately turn off sync trigger
-        self.enter_subsequence(func)
-        self.add_command(SetConst(Var('sync_trigger'), 0))
-        # MC-125145 workaround
-        self.function_subsequences[func].add_post_command(
-            SetConst(Var('success_tracker'), 1))
-
-    def add_lookup_table(self, session):
-        i = 0
-        prev = None
-        table = Subsequence()
-        for func, id in self.sync_func_ids.items():
-            table_name = 'func_lookup_table' + ('_%d' % i if i > 0 else '')
-            if prev: # Attach chain onto prev table
-                table.add_command(Execute.If(SelEquals(Var('success_tracker'), 0),
-                                             Function(table_name)))
-                # MC-125145 workaround
-                table.add_command(SetConst(Var('success_tracker'), 1))
-                session.load_subroutine_table((prev, table_name))
-                session.add_subsequence(prev, table)
-                table = Subsequence()
-            # See add_tracked_command for why this is needed
-            table.add_command(SetConst(Var('success_tracker'), 0))
-            # was make_tracked_command, but not for MC-125145 workaround
-            table.add_command(
-                Execute.If(SelEquals(Var('lookup_pointer'), id), Function(func)))
-            prev = table_name
-            i += 1
-        # MC-125145 workaround
-        table.add_command(SetConst(Var('success_tracker'), 1))
-        if prev is not None:
-            session.load_subroutine_table((prev,))
-            session.add_subsequence(prev, table)
+        callback = self.func.create_block('sync_cb')
+        make_yield_tick(self.block, self.func, callback)
+        self.block = callback
 
     def write_to_session(self, session):
-        setup = self.subroutines.get('__setup__')
-        if setup is not None:
-            session.set_setup_hook(setup)
-        session.load_subroutine_table(self.function_subsequences.keys())
-        session.load_subroutine_table(self.included_subroutines)
-        if self.enable_sync:
-            self.add_lookup_table(session)
-        for name, sequence in self.function_subsequences.items():
-            session.add_subsequence(name, sequence)
-        session.add_command_blocks(self.command_block_lines)
-        session.add_event_handlers(self.event_handlers)
+        self.func.end()
+        self.top.end()
+        writer = SessionWriter(session, self.top)
+        self.top.writeout(writer)
+        writer.finish()
 
     def get_sub_jump_command(self, sub_name):
-        return Function(self.sub_to_func_name(sub_name))
+        from commands import Function
+        func = self.top.lookup_func('sub_' + sub_name)
+        assert func is not None, "Cannot find function " + sub_name
+        return Function(func.global_name)
+
+class SessionWriter:
+
+    def __init__(self, session, top):
+        self.sess = session
+        setup = top.lookup_func('__setup__')
+        self.setup_func = setup.global_name if setup is not None else None
+        self.event_handlers = []
+
+    def write_func_table(self, table):
+        self.sess.load_subroutine_table(table)
+
+    def write_function(self, name, insns):
+        sub = Subsequence()
+        sub.commands = insns
+        if name == self.setup_func:
+            self.sess.set_setup_hook(sub)
+        else:
+            self.sess.add_subsequence(name, sub)
+
+    def write_event_handler(self, handler, event):
+        self.event_handlers.append({
+                'event': event.name,
+                'conditions': event.conditions,
+                'handler': handler.global_name
+            })
+
+    def finish(self):
+        self.sess.add_event_handlers(self.event_handlers)
