@@ -1,6 +1,7 @@
 from asm_reader import AsmReader
 from cmd_ir.core import *
 from cmd_ir.instructions import *
+from cmd_ir.variables import GlobalScoreVariable, VarType
 
 def type_aware(fn):
     def wrap(*args):
@@ -22,6 +23,7 @@ class Assembler:
     def __init__(self):
         self.top = TopLevel()
         self.constants = {}
+        self.global_mapping = {}
         self.func = None
         self.new_function('__main__')
         self.jump_later = None
@@ -38,8 +40,16 @@ class Assembler:
         self.block = self.func.create_block('entry')
 
     def _predef_const(self, name, varname):
-        var = self.constants[name] = self.top.create_global(name)
-        var.set_register(Var(varname))
+        self.constants[name] = self.get_global(Var(varname), name)
+
+    def get_global(self, ref, name):
+        var = self.global_mapping.get(name)
+        if var is None:
+            var = GlobalScoreVariable(VarType.i32, ref)
+            self.top.finalize_global(self.top.create_global(name, VarType.i32),
+                                     var)
+            self.global_mapping[name] = var
+        return var
 
     def parse(self, text, filename=''):
         self.filename = filename or '<a.asm>'
@@ -125,12 +135,14 @@ class Assembler:
             with open(path, 'r') as f:
                 data = f.read()
             assembler = self.__class__()
+            assembler.global_mapping.update(self.global_mapping)
             assembler.parse(data, path)
             self.top.include_from(assembler.top)
             for name, val in assembler.constants.items():
                 if isinstance(val, Variable) and val.owner:
                     val.owner = self.top
             self.constants.update(assembler.constants)
+            self.global_mapping.update(assembler.global_mapping)
         elif directive == 'event_handler':
             handler, event, conditions = value.split(' ', 2)
             event = self.top.preamble.define(CreateEvent(event))
@@ -243,11 +255,7 @@ class Assembler:
         if type == 'literal':
             return value
         elif type == 'address':
-            var = self.top.get_or_create_global('mem_%d' % value)
-            # initialize
-            if not var.register:
-                var.set_register(Mem(value))
-            return var
+            return self.get_global(Mem(value), 'mem_%d' % value)
         elif type == 'symbol':
             return self.get_const(value)
 
@@ -257,10 +265,8 @@ class Assembler:
         return src, dest
 
     def get_working(self, n=0):
-        w = self.func.create_var('tmp')
         suf = '' if n == 0 else ('_%d' % (n + 1))
-        w.set_register(Var('working_reg%s' % suf))
-        return w
+        return self.get_global(Var('working_reg%s' % suf), 'tmp' + suf)
 
     def handle_op(self, src, dest, Op, can_use_const=False):
         src, dest = self.get_src_dest(src, dest)

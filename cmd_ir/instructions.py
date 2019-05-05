@@ -4,8 +4,10 @@ import contextlib
 from .core import *
 from .nbt import *
 from commands import *
-from commands import DataMerge as DataMergeCmd, Selector as SelectorCmd
-from .core import EntityLocal
+from .core_types import *
+from .variables import *
+
+Selector = SelectorTy
 
 class Insn(metaclass=abc.ABCMeta):
 
@@ -107,7 +109,7 @@ class SetScore(Insn):
         if isinstance(self.value, Variable):
             self.value.clone_to(self.var, out)
         else:
-            self.var.store_val(self.value, out)
+            self.var.set_const_val(self.value, out)
 
     def serialize(self, holder):
         return '%s = %s' % tuple(self.serialize_args(holder))
@@ -129,47 +131,36 @@ class SimpleOperationInsn(Insn):
 
     def serialize(self, holder):
         dest, src = self.serialize_args(holder)
-        return '%s %s= %s' % (dest, self.opsymbol, src)
+        return '%s %s %s' % (dest, self.with_ref.op, src)
 
 class OnlyRefOperationInsn(SimpleOperationInsn):
-
     args = [Variable, Variable]
 
 class AddScore(SimpleOperationInsn):
-    opsymbol = '+'
     with_ref = OpAdd
     with_const = AddConst
 
 class SubScore(SimpleOperationInsn):
-    opsymbol = '-'
     with_ref = OpSub
     with_const = RemConst
 
 class MulScore(OnlyRefOperationInsn):
-    opsymbol = '*'
     with_ref = OpMul
 
 class DivScore(OnlyRefOperationInsn):
-    opsymbol = '/'
     with_ref = OpDiv
 
 class ModScore(OnlyRefOperationInsn):
-    opsymbol = '%'
     with_ref = OpMod
 
 class MovLtScore(OnlyRefOperationInsn):
-    opsymbol = '<'
     with_ref = OpIfLt
 
 class MovGtScore(OnlyRefOperationInsn):
-    opsymbol = '>'
     with_ref = OpIfGt
 
 class SwapScore(OnlyRefOperationInsn):
     with_ref = OpSwap
-
-    def serialize(self, holder):
-        return '%s >< %s' % tuple(self.serialize_args(holder))
 
 class Call(Insn):
 
@@ -252,40 +243,13 @@ class NBTCompoundSet(Insn):
     def apply(self, out):
         self.var.set(self.name, self.val)
 
-class DataMerge(Insn):
+class NBTDataMerge(Insn):
 
     args = [(BlockRef, EntityRef), NBTCompound]
     argnames = 'target data'
 
     def apply(self, out):
-        out.write(DataMergeCmd(self.target.as_ref(), self.data))
-
-class PlayerRef(EntityRef):
-
-    def __init__(self, name):
-        self.player = name
-
-    def as_cmdref(self):
-        return NameRef(self.player)
-
-class Selector(EntitySelection):
-
-    def __init__(self, type):
-        self.type = type
-        self.other_args = []
-        self.simple_args = {}
-
-    def set(self, key, value):
-        self.simple_args[key] = value
-
-    def set_var_range(self, var, min, max):
-        self.other_args.append(SelRange(var, min, max))
-
-    def as_cmdref(self):
-        args = SimpleSelectorArgs(self.simple_args)
-        for other in self.other_args:
-            args = ComboSelectorArgs(args, other)
-        return SelectorCmd(self.type.letter, args)
+        out.write(DataMerge(self.target.as_ref(), self.data))
 
 class SelectorType:
 
@@ -338,31 +302,6 @@ class SelectVarRange(Insn):
     def apply(self, out):
         with self.var.open_for_read(out) as ref:
             self.sel.set_var_range(ref, self.min, self.max)
-
-class Position(SimpleResolve, NativeType):
-
-    def __init__(self, x, y, z):
-        int2str = lambda v: str(v) if type(v) == int else v
-        super().__init__(*map(int2str, (x, y, z)))
-        self.x = x
-        self.y = y
-        self.z = z
-
-class RelPosVal(SimpleResolve, NativeType):
-
-    def __init__(self, val):
-        self.val = val
-
-    def resolve(self, scope):
-        return '~%f' % self.val
-
-class AncPosVal(SimpleResolve, NativeType):
-
-    def __init__(self, val):
-        self.val = val
-
-    def resolve(self, scope):
-        return '^%f' % self.val
 
 PosType = (int, RelPosVal, AncPosVal)
 
@@ -554,12 +493,6 @@ class ExecAnchor(Insn):
     def apply(self, out):
         self.chain.chain.anchored(self.anchor)
 
-class CmdFunction(NativeType, metaclass=abc.ABCMeta):
-
-    @abc.abstractmethod
-    def as_cmd(self):
-        pass
-
 class GetVariableFunc(CmdFunction):
 
     def __init__(self, var):
@@ -602,7 +535,7 @@ class SetCommandBlock(Insn):
     def apply(self, out):
         tag = NBTCompound()
         tag.set('Command', FutureNBTString(Function(self.func.global_name)))
-        out.write(DataMergeCmd(BlockReference(UtilBlockPos), tag))
+        out.write(DataMerge(UtilBlockPos.ref, tag))
 
 class ClearCommandBlock(Insn):
 
@@ -610,7 +543,7 @@ class ClearCommandBlock(Insn):
     argnames = ''
 
     def apply(self, out):
-        out.write(DataRemove(BlockReference(UtilBlockPos), NbtPath('Command')))
+        out.write(DataRemove(UtilBlockPos.ref, NbtPath('Command')))
 
 
 class SetCommandBlockFromStack(Insn):
@@ -619,9 +552,8 @@ class SetCommandBlockFromStack(Insn):
     argnames = ''
 
     def apply(self, out):
-        out.write(DataModifyFrom(BlockReference(UtilBlockPos),
-             NbtPath('Command'), 'set', EntityReference(EntityTag),
-                                 StackPath(0, 'cmd')))
+        out.write(DataModifyFrom(UtilBlockPos.ref, NbtPath('Command'),
+             'set', EntityTag.ref, StackPath(0, 'cmd')))
 
 class PopStack(Insn):
 
@@ -629,7 +561,7 @@ class PopStack(Insn):
     argnames = ''
 
     def apply(self, out):
-        out.write(DataRemove(EntityReference(EntityTag), StackPath(0)))
+        out.write(DataRemove(EntityTag.ref, StackPath(0)))
 
 class GetStackHead(Insn):
 
@@ -637,7 +569,7 @@ class GetStackHead(Insn):
     argnames = 'dest'
 
     def apply(self, out):
-        self.dest.read_from_stack(0, out)
+        VirtualStackPointer(self.dest.type, 0).clone_to(self.dest, out)
 
 class PushStack(Insn):
 
@@ -646,21 +578,12 @@ class PushStack(Insn):
 
     def apply(self, out):
         if isinstance(self.value, int):
+            vtype = VarType.i32
             tag = NBTCompound()
-            tag.set('int', NBTInt(self.value))
+            tag.set(vtype.nbt_path_key, vtype.nbt_type.new(self.value))
             out.write(DataModifyStack(None, None, 'prepend', tag))
         else:
-            if self.value.register is None:
-                out.write(DataModifyFromStack(None, 'prepend',
-                                              self.value.offset))
-            else:
-                out.write(ExecuteChain()
-                          .store('result')
-                          .entity(EntityTag, Path('working.int'), 'int')
-                          .run(self.value.read()))
-                out.write(DataModifyFrom(EntityReference(EntityTag),
-                                         StackPath(None), 'prepend',
-                          EntityReference(EntityTag), Path('working')))
+            self.value.push_to_stack(out)
 
 class PushFunction(Insn):
 
@@ -811,16 +734,28 @@ class EventHandler(PreambleOnlyInsn, Insn):
 
 class DefineVariable(PreambleOnlyInsn, ConstructorInsn):
 
+    args = [VarType]
+    argnames = 'type'
+
     func_preamble_only = True
     insn_name = 'define'
 
     def construct(self):
-        return Variable()
+        return LocalVariable(self.type)
+
+    def serialize_args(self, holder):
+        return [self.type.name]
 
 class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
+
+    args = [VarType]
+    argnames = 'type'
 
     top_preamble_only = True
     insn_name = 'global'
 
     def construct(self):
-        return Global()
+        return GlobalVariable(self.type)
+
+    def serialize_args(self, holder):
+        return [self.type.name]

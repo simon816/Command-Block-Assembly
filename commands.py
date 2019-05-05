@@ -136,6 +136,10 @@ class Selector(Resolvable):
             return {}
         return self.where.resolve(scope)
 
+    @property
+    def ref(self):
+        return EntityReference(self)
+
     def resolve(self, scope):
         return make_selector(self.type, **self.resolve_params(scope))
 
@@ -159,21 +163,24 @@ class NbtPath(Resolvable):
     def resolve(self, scope):
         return self.path
 
-class Path(Resolvable):
-
-    def __init__(self, path):
-        self.path = path
+class Path(NbtPath):
 
     def resolve(self, scope):
         return scope.custom_nbt_path(self.path)
 
-class StackPath(Path):
+class ArrayPath(Path):
 
     def __init__(self, index=None, key=None):
         sub = '[%d]' % index if index is not None else ''
         assert key is None or index is not None
         sub += '.%s' % key if key else ''
-        super().__init__('stack%s' % sub)
+        super().__init__('%s%s' % (self.name, sub))
+
+class StackPath(ArrayPath):
+    name = 'stack'
+
+class GlobalPath(ArrayPath):
+    name = 'globals'
 
 class Cmd(Command):
     def __init__(self, cmd):
@@ -352,8 +359,13 @@ class UtilBlockPos(BlockPos):
     def __init__(self):
         pass
 
+    @property
+    def ref(self):
+        return BlockReference(self)
+
     def resolve(self, scope):
         return scope.get_util_block()
+
 UtilBlockPos = UtilBlockPos()
 
 class DataGet(Command):
@@ -365,6 +377,11 @@ class DataGet(Command):
     def resolve(self, scope):
         return 'data get entity %s %s' % (self.target.resolve(scope),
                                           self.path.resolve(scope))
+
+class DataGetEtag(DataGet):
+
+    def __init__(self, path):
+        super().__init__(EntityTag, path)
 
 class DataGetStack(DataGet):
 

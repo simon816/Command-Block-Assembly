@@ -1,19 +1,49 @@
 from collections import OrderedDict
 from commands import Resolvable
-from .core import NativeType
+from .core_types import NativeType
 
 class NBTType(NativeType):
 
     def __init__(self, typename, compound=False):
         self.name = typename
-        self.compound = compound
+        self._compound = compound
+
+    @property
+    def exec_store_name(self):
+        assert self.isnumeric
+        # Currently we have the same names
+        return self.name
 
     @property
     def isnumeric(self):
-        return not self.compound and self.name != 'string'
+        return not self._compound and self.name != 'string'
 
     def __str__(self):
         return 'NBTType(%s)' % self.name
+
+    def new(self, *args):
+        # There are better ways of doing this
+        if self is self.byte:
+            impl = NBTByte
+        elif self is self.short:
+            impl = NBTShort
+        elif self is self.int:
+            impl = NBTInt
+        elif self is self.long:
+            impl = NBTLong
+        elif self is self.float:
+            impl = NBTFloat
+        elif self is self.double:
+            impl = NBTDouble
+        elif self is self.string:
+            impl = NBTString
+        elif self is self.list:
+            impl = NBTList
+        elif self is self.compound:
+            impl = NBTCompound
+        else:
+            assert False, str(self)
+        return impl(*args)
 
     byte = None
     short = None
@@ -41,7 +71,7 @@ class NBTBase(Resolvable):
 class NBTValue(NBTBase):
 
     def __init__(self, val):
-        self.val = val
+        self.val = self.validator(val)
 
     def __str__(self):
         return '%s(%s)' % (self.__class__.__name__, self.val)
@@ -49,33 +79,58 @@ class NBTValue(NBTBase):
     def resolve(self, scope):
         return self.serialize()
 
+class NBTByte(NBTValue):
 
-class NBTDouble(NBTValue):
-
-    type = NBTType.double
-
-    def __init__(self, val):
-        super().__init__(float(val))
+    type = NBTType.byte
+    validator = int
 
     def serialize(self):
-        return '%fd' % self.val
+        return '%db' % self.val
+
+class NBTShort(NBTValue):
+
+    type = NBTType.short
+    validator = int
+
+    def serialize(self):
+        return '%ds' % self.val
 
 class NBTInt(NBTValue):
 
     type = NBTType.int
-
-    def __init__(self, val):
-        super().__init__(int(val))
+    validator = int
 
     def serialize(self):
         return '%d' % self.val
 
+class NBTLong(NBTValue):
+
+    type = NBTType.long
+    validator = int
+
+    def serialize(self):
+        return '%dl' % self.val
+
+class NBTFloat(NBTValue):
+
+    type = NBTType.float
+    validator = int
+
+    def serialize(self):
+        return '%df' % self.val
+
+class NBTDouble(NBTValue):
+
+    type = NBTType.double
+    validator = float
+
+    def serialize(self):
+        return '%fd' % self.val
+
 class NBTString(NBTValue):
 
     type = NBTType.string
-
-    def __init__(self, val):
-        super().__init__(str(val))
+    validator = str
 
     @staticmethod
     def quote(string):

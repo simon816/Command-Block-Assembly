@@ -126,16 +126,12 @@ class ExtendedAssembler(Assembler):
         self.use_mem = False
         self.mem_get = self.top.generate_name('mem_get', FunctionRef('mem_get'))
         self.mem_set = self.top.generate_name('mem_set', FunctionRef('mem_set'))
-
-    def mem_addr(self):
-        a = self.func.create_var('mem_addr')
-        a.set_register(Var('memory_address'))
-        return a
-
-    def mem_buffer(self):
-        a = self.func.create_var('mem_buf')
-        a.set_register(Var('memory_buffer'))
-        return a
+        self.mem_addr = GlobalScoreVariable(VarType.i32, Var('memory_address'))
+        self.mem_buf = GlobalScoreVariable(VarType.i32, Var('memory_buffer'))
+        self.top.finalize_global(self.top.create_global('mem_addr', VarType.i32),
+                                 self.mem_addr)
+        self.top.finalize_global(self.top.create_global('mem_buf', VarType.i32),
+                                 self.mem_buf)
 
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""
@@ -145,16 +141,15 @@ class ExtendedAssembler(Assembler):
         d_off = self.resolve_ref(*d_off)
         assert type(s_off) == int
         assert type(d_off) == int
-        addr = self.mem_addr()
-        self.block.add(SetScore(addr, src))
+        self.block.add(SetScore(self.mem_addr, src))
         if s_off != 0:
             AddFn = AddScore if s_off > 0 else SubScore
-            self.block.add(AddFn(addr, abs(s_off)))
+            self.block.add(AddFn(self.mem_addr, abs(s_off)))
         self.block.add(RunFunction(self.mem_get))
-        self.block.add(SetScore(addr, dest))
+        self.block.add(SetScore(self.mem_addr, dest))
         if d_off != 0:
             AddFn = AddScore if d_off > 0 else SubScore
-            self.block.add(AddFn(addr, abs(d_off)))
+            self.block.add(AddFn(self.mem_addr, abs(d_off)))
         self.block.add(RunFunction(self.mem_set))
 
     def handle_mov_ind_d(self, src, dest, d_off):
@@ -163,13 +158,11 @@ class ExtendedAssembler(Assembler):
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*d_off)
         assert type(offset) == int
-        addr = self.mem_addr()
-        buffer = self.mem_buffer()
-        self.block.add(SetScore(buffer, src))
-        self.block.add(SetScore(addr, dest))
+        self.block.add(SetScore(self.mem_buf, src))
+        self.block.add(SetScore(self.mem_addr, dest))
         if offset != 0:
             AddFn = AddScore if offset > 0 else SubScore
-            self.block.add(AddFn(addr, abs(offset)))
+            self.block.add(AddFn(self.mem_addr, abs(offset)))
         self.block.add(RunFunction(self.mem_set))
 
     def handle_mov_ind_s(self, src, s_off, dest):
@@ -178,12 +171,10 @@ class ExtendedAssembler(Assembler):
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*s_off)
         assert type(offset) == int
-        addr = self.mem_addr()
-        buffer = self.mem_buffer()
-        self.block.add(SetScore(addr, src))
+        self.block.add(SetScore(self.mem_addr, src))
         if offset != 0:
             AddFn = AddScore if offset > 0 else SubScore
-            self.block.add(AddFn(addr, abs(offset)))
+            self.block.add(AddFn(self.mem_addr, abs(offset)))
         self.block.add(RunFunction(self.mem_get))
-        self.block.add(SetScore(dest, buffer))
+        self.block.add(SetScore(dest, self.mem_buf))
 

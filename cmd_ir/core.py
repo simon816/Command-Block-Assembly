@@ -1,22 +1,9 @@
 from collections import OrderedDict
 import abc
 
-from commands import *
+from commands import SetConst, Var
 
-class NativeType:
-    pass
-
-class EntitySelection(NativeType, metaclass=abc.ABCMeta):
-
-    @abc.abstractmethod
-    def as_cmdref(self):
-        pass
-
-class EntityRef(EntitySelection):
-    pass
-
-class BlockRef(NativeType):
-    pass
+from .core_types import FunctionLike
 
 class FuncWriter:
 
@@ -63,19 +50,6 @@ class Preamble(InstructionSeq):
                           for insn in self.insns)
         return indent + 'preamble {\n' + insns + '\n' + indent + '}\n'
 
-class UniqNames:
-
-    def uniq_name(self, dict, hint):
-        i = 0
-        while '%s%d' % (hint, i) in dict:
-            i += 1
-        return '%s%d' % (hint, i)
-
-    def uniq(self, dict, hint, callback):
-        name = self.uniq_name(dict, hint)
-        obj = dict[name] = callback(name)
-        return obj
-
 class Scope(OrderedDict):
 
     def __init__(self, parent=None):
@@ -106,23 +80,44 @@ class Scope(OrderedDict):
             val = self[name]
         return val
 
-    def for_value(self, value):
+    def get_no_parent(self, key):
+        if super().__contains__(key):
+            return self[key]
+        raise KeyError(key)
+
+    def for_value(self, value, look_parent=True):
         if value in self.inverse_dict:
             return self.inverse_dict[value]
-        if self.parent is not None:
+        if look_parent and self.parent is not None:
             return self.parent.for_value(value)
         raise KeyError(value)
 
-class VariableHolder(UniqNames):
+class VariableHolder:
+
+    def uniq_name(self, hint):
+        i = 0
+        while '%s%d' % (hint, i) in self.scope:
+            i += 1
+        return '%s%d' % (hint, i)
+
+    def uniq(self, hint, callback):
+        name = self.uniq_name(hint)
+        obj = self.scope[name] = callback(name)
+        return obj
 
     def generate_name(self, namehint, value):
-        return self.uniq(self.scope, namehint, lambda n: value)
+        return self.uniq(namehint, lambda n: value)
 
     def name_for(self, value):
         return self.scope.for_value(value)
 
     def get_var(self, name):
         return self.scope[name]
+
+    def lookup(self, name):
+        if name in self.scope:
+            return self.scope[name]
+        return None
 
 class TopLevel(VariableHolder):
 
@@ -138,22 +133,22 @@ class TopLevel(VariableHolder):
     def _create_func(self, name):
         return IRFunction(name, self)
 
-    def create_global(self, namehint):
-        return self.uniq(self.scope, namehint, self._create_global)
+    def create_global(self, namehint, vartype):
+        def create(name):
+            from .instructions import DefineGlobal
+            return self.preamble.add(DefineGlobal(vartype))
+        return self.uniq(namehint, create)
 
-    def get_or_create_global(self, name):
-        return self.scope.get_or_create(name, self._create_global)
-
-    def _create_global(self, name):
-        from .instructions import DefineGlobal
-        return self.preamble.add(DefineGlobal())
+    def finalize_global(self, placeholder, real):
+        name = self.scope.for_value(placeholder, False)
+        placeholder.transfer(real)
+        self.scope[name] = real
 
     def lookup_func(self, name):
-        if name in self.scope:
-            func = self.scope[name]
+        func = self.lookup(name)
+        if func is not None:
             assert isinstance(func, VisibleFunction)
-            return func
-        return None
+        return func
 
     def include_from(self, other):
         for name, var in other.scope.items():
@@ -162,13 +157,14 @@ class TopLevel(VariableHolder):
 
     def end(self):
         assert not self.finished
-        o = 0
+        # TODO
+        #o = 0
         for name, var in self.scope.items():
             if isinstance(var, VisibleFunction):
                 assert var.finished, "unfinished function " + name
-            elif isinstance(var, Global):
-                var.set_offset(o)
-                o += 1
+            #elif isinstance(var, Global):
+            #    var.set_offset(o)
+            #    o += 1
         self.finished = True
 
     def writeout(self, writer):
@@ -195,13 +191,6 @@ class TopLevel(VariableHolder):
                 strs.append(elem.serialize())
         return '\n'.join(strs)
 
-class FunctionLike(NativeType, metaclass=abc.ABCMeta):
-
-    @property
-    @abc.abstractmethod
-    def global_name(self):
-        pass
-
 class VisibleFunction(FunctionLike):
 
     @property
@@ -213,7 +202,6 @@ class VisibleFunction(FunctionLike):
 
     def writeout(self, writer):
         pass
-
 
 class ExternFunction(VisibleFunction):
 
@@ -267,27 +255,32 @@ class IRFunction(VisibleFunction, VariableHolder):
         return BasicBlock(name, self)
 
     def create_block(self, namehint):
-        block = self.uniq(self.scope, namehint, self._create_block)
+        block = self.uniq(namehint, self._create_block)
         block.defined = True
         return block
 
-    def create_var(self, namehint):
-        return self.uniq(self.scope, namehint, self._create_variable)
+    def create_var(self, namehint, vartype):
+        def create(name):
+            from .instructions import DefineVariable
+            return self.preamble.add(DefineVariable(vartype))
+        return self.uniq(namehint, create)
 
-    def _create_variable(self, name):
-        from .instructions import DefineVariable
-        return self.preamble.add(DefineVariable())
+    def finalize_variable(self, placeholder, real):
+        name = self.scope.for_value(placeholder, False)
+        placeholder.transfer(real)
+        self.scope[name] = real
 
     def end(self):
         assert self.is_defined
         assert not self.finished
         for block in self.blocks:
             block.end()
-        o = 0
-        for var in list(self.scope.values())[::-1]:
-            if isinstance(var, Variable):
-                var.set_offset(o)
-                o += 1
+        # TODO
+        #o = 0
+        #for var in list(self.scope.values())[::-1]:
+        #    if isinstance(var, StackVariable):
+        #        var.set_offset(o)
+        #        o += 1
         self._finished = True
 
     def get_func_table(self):
@@ -360,109 +353,3 @@ class BasicBlock(FunctionLike, InstructionSeq):
         lines = [self._name + ':']
         lines.extend(insn.serialize(self._func) for insn in self.insns)
         return '\n'.join('    ' + line for line in lines)
-
-
-class OpenVar:
-
-    def __init__(self, var, out, write=False):
-        assert var.finalized
-        self.var = var
-        self.out = out
-        self.write = write
-        self.tmpvar = None
-
-    def __enter__(self):
-        if self.var.register is None:
-            self.tmpvar = Var('working_reg')
-            self.out.write(ExecuteChain().store('result').score(EntityTag,
-                    self.tmpvar).run(self.var.read()))
-            return self.tmpvar
-        return self.var.register
-
-    def __exit__(self, *args):
-        if self.write and self.tmpvar is not None:
-            self.out.write(ExecuteChain()
-                           .store('result')
-                           .entity(EntityTag, StackPath(self.var.offset, 'int'),
-                                   'int')
-                           .run(GetValue(self.tmpvar)))
-
-class Variable(NativeType):
-
-    def __init__(self):
-        self.offset = None
-        self.register = None
-        self.finalized = False
-
-    def set_offset(self, offset):
-        assert self.offset is None
-        self.offset = offset
-        self.finalized = True
-
-    def set_register(self, reg):
-        assert self.register is None
-        self.register = reg
-
-    def clone_to(self, other, out):
-        if self.register is not None:
-            if other.register is not None:
-                out.write(OpAssign(other.register, self.register))
-            else:
-                out.write(ExecuteChain().store('result').entity(EntityTag,
-                    StackPath(other.offset, 'int'), 'int').run(self.read()))
-        else:
-            if other.register is not None:
-                out.write(ExecuteChain().store('result').score(EntityTag,
-                    other.register).run(self.read()))
-            else:
-                out.write(DataModifyFromStack(other.offset, 'set', self.offset))
-
-    def read_from_stack(self, offset, out):
-        if self.register:
-                out.write(ExecuteChain().store('result').score(EntityTag,
-                    self.register).run(DataGetStack(offset, 'int')))
-        else:
-            out.write(DataModifyFromStack(self.offset, 'set', offset))
-
-    def store_val(self, value, out):
-        if self.register is not None:
-            out.write(SetConst(self.register, value))
-        else:
-            from .nbt import NBTInt
-            out.write(DataModifyStack(self.offset, 'int', 'set', NBTInt(value)))
-
-    def open_for_write(self, out):
-        return OpenVar(self, out, write=True)
-
-    def open_for_read(self, out):
-        return OpenVar(self, out)
-
-    def read(self):
-        if self.register:
-            return GetValue(self.register)
-        return DataGetStack(self.offset, 'int')
-
-class Global(Variable):
-
-    def read(self):
-        if self.register:
-            return super().read()
-        return DataGet(EntityTag, 'globals[%d]' % self.offset)
-
-
-class VirtualString(str, NativeType):
-
-    def serialize(self):
-        return '"%s"' % str(self).replace('\\', '\\\\').replace('"', '\\"')
-
-class EntityLocal(NativeType):
-
-    def __init__(self, name):
-        self.name = name
-
-class EntityLocalAccess(Variable):
-
-    def __init__(self, local, target):
-        super().__init__()
-        self.finalized = True # for now
-        self.register = EntityLocalRef(local.name, target.as_cmdref())
