@@ -9,23 +9,34 @@ from .variables import *
 
 Selector = SelectorTy
 
+def get_subclasses(cls):
+    for subclass in cls.__subclasses__():
+        yield from get_subclasses(subclass)
+        yield subclass
+
 class Insn(metaclass=abc.ABCMeta):
+
+    __lookup_cache = {}
+
+    @classmethod
+    def lookup(cls, name):
+        if not len(cls.__lookup_cache):
+            for clz in get_subclasses(cls):
+                if hasattr(clz, 'insn_name'):
+                    cls.__lookup_cache[clz.insn_name] = clz
+        return cls.__lookup_cache.get(name)
 
     preamble_safe = False
 
     def __init__(self, *args):
         assert len(args) == len(self.args)
         for i, arg in enumerate(args):
-            assert isinstance(arg, self.args[i]), "Incorrect argument type " \
-            + "for argument %d:\nExpect type %s, got %s" % (i, self.args[i],
-                                                         type(arg))
+            assert isinstance(arg, self.args[i]), ("Incorrect argument type " \
+            + "for argument %d:\nExpect type %s, got %s\n" \
+            + "Instruction: %s") % (i, self.args[i], type(arg), type(self))
         names = self.argnames.split(' ')
         self.__dict__.update(zip(names, args))
-        if not hasattr(self, 'insn_name'):
-            name = self.__class__.__name__
-            import re
-            self.insn_name = (name[0] + re.sub('([A-Z])', r'_\1', name[1:])
-                              ).lower()
+        assert hasattr(self, 'insn_name'), self
 
     def __str__(self):
         if self.argnames:
@@ -52,7 +63,12 @@ class Insn(metaclass=abc.ABCMeta):
             if val is None:
                 return 'NULL'
             assert isinstance(val, NativeType), str(val)
-            return holder.name_for(val)
+            name = holder.name_for(val)
+            if isinstance(val, BasicBlock):
+                return ':' + name
+            if isinstance(val, IRFunction):
+                return '@' + name
+            return '$' + name
         l = []
         if self.argnames:
             names = self.argnames.split(' ')
@@ -82,7 +98,7 @@ class ConstructorInsn(VoidApplicationInsn):
         return self._value
 
     def serialize(self, holder):
-        return '%s = %s' % (holder.name_for(self._value),
+        return '$%s = %s' % (holder.name_for(self._value),
                             super().serialize(holder))
 
 
@@ -104,6 +120,7 @@ class SetScore(Insn):
 
     args = [Variable, (int, Variable)]
     argnames = 'var value'
+    insn_name = '#invalid'
 
     def apply(self, out):
         if isinstance(self.value, Variable):
@@ -118,6 +135,7 @@ class SimpleOperationInsn(Insn):
 
     args = [Variable, (int, Variable)]
     argnames = 'dest src'
+    insn_name = '#invalid'
 
     def apply(self, out):
         # Possible optimisation where scope exit ("put back" value) is applied
@@ -132,6 +150,17 @@ class SimpleOperationInsn(Insn):
     def serialize(self, holder):
         dest, src = self.serialize_args(holder)
         return '%s %s %s' % (dest, self.with_ref.op, src)
+
+    __op_lookup = {}
+
+    @classmethod
+    def lookup_by_op(cls, op):
+        if not len(cls.__op_lookup):
+            for clz in get_subclasses(cls):
+                if hasattr(clz, 'with_ref'):
+                    cls.__op_lookup[clz.with_ref.op] = clz
+        return cls.__op_lookup[op]
+
 
 class OnlyRefOperationInsn(SimpleOperationInsn):
     args = [Variable, Variable]
@@ -166,6 +195,7 @@ class Call(Insn):
 
     args = [FunctionLike]
     argnames = 'label'
+    insn_name = 'call'
 
     def apply(self, out):
         out.write(Function(self.label.global_name))
@@ -221,6 +251,7 @@ class NBTListAppend(Insn):
 
     args = [NBTList, NBTBase]
     argnames = 'list value'
+    insn_name = 'nbt_list_append'
 
     def activate(self, seq):
         assert self.list.list_type == self.value.type
@@ -239,6 +270,7 @@ class NBTCompoundSet(Insn):
 
     args = [NBTCompound, str, NBTBase]
     argnames = 'var name val'
+    insn_name = 'nbt_compound_set'
 
     def apply(self, out):
         self.var.set(self.name, self.val)
@@ -247,11 +279,12 @@ class NBTDataMerge(Insn):
 
     args = [(BlockRef, EntityRef), NBTCompound]
     argnames = 'target data'
+    insn_name = 'nbt_data_merge'
 
     def apply(self, out):
         out.write(DataMerge(self.target.as_ref(), self.data))
 
-class SelectorType:
+class SelectorType(InsnArg):
 
     _LOOKUP = {}
 
@@ -261,6 +294,10 @@ class SelectorType:
 
     @classmethod
     def lookup(cls, name):
+        return cls._LOOKUP[name]
+
+    @classmethod
+    def _init_from_parser(cls, name):
         return cls._LOOKUP[name]
 
     ALL_PLAYERS = None
@@ -285,16 +322,18 @@ class CreateSelector(ConstructorInsn):
 
 class SetSelector(Insn):
 
-    args = [Selector, str, str]
+    args = [Selector, str, VirtualString]
     argnames = 'sel key value'
+    insn_name = 'set_selector'
 
     def apply(self, out):
-        self.sel.set(self.key, self.value)
+        self.sel.set(self.key, str(self.value))
 
 class SelectVarRange(Insn):
 
     args = [Selector, Variable, Opt(int), Opt(int)]
     argnames = 'sel var min max'
+    insn_name = 'select_var_range'
 
     def activate(self, seq):
         assert self.min is not None or self.max is not None
@@ -390,6 +429,7 @@ class ExecStoreVar(ConstructorInsn):
 
     args = [Variable]
     argnames = 'var'
+    insn_name = 'exec_store_var'
 
     def construct(self):
         return ExecStoreVarSpec(self.var)
@@ -398,6 +438,7 @@ class ExecStore(Insn):
 
     args = [ExecChain, str, ExecStoreSpec]
     argnames = 'chain storetype spec'
+    insn_name = 'exec_store'
 
     def apply(self, out):
         ch = self.chain
@@ -407,6 +448,7 @@ class ExecUnlessEntity(Insn):
 
     args = [ExecChain, Selector]
     argnames = 'chain target'
+    insn_name = 'exec_unless_entity'
 
     def apply(self, out):
         self.chain.chain.cond('unless').where(self.target.as_cmdref())
@@ -424,6 +466,7 @@ class ExecAtEntity(Insn):
 
     args = [ExecChain, Selector]
     argnames = 'chain target'
+    insn_name = 'exec_at_entity'
 
     def apply(self, out):
         self.chain.chain.at(self.target.as_cmdref())
@@ -432,6 +475,7 @@ class ExecAtEntityPos(Insn):
 
     args = [ExecChain, Selector]
     argnames = 'chain target'
+    insn_name = 'exec_at_entity_pos'
 
     def apply(self, out):
         self.chain.chain.at_entity_pos(self.target.as_cmdref())
@@ -440,6 +484,7 @@ class ExecuteAtPos(Insn):
 
     args = [ExecChain, Position]
     argnames = 'chain pos'
+    insn_name = 'exec_at_pos'
 
     def apply(self, out):
         self.chain.chain.at_pos(self.pos)
@@ -448,6 +493,7 @@ class ExecAlign(Insn):
 
     args = [ExecChain, str]
     argnames = 'chain axes'
+    insn_name = 'exec_align'
 
     def apply(self, out):
         self.chain.chain.align(self.axes)
@@ -456,6 +502,7 @@ class ExecFacePos(Insn):
 
     args = [ExecChain, Position]
     argnames = 'chain pos'
+    insn_name = 'exec_face_pos'
 
     def apply(self, out):
         self.chain.chain.facing(self.pos)
@@ -464,6 +511,7 @@ class ExecFaceEntity(Insn):
 
     args = [ExecChain, Selector, str]
     argnames = 'chain target feature'
+    insn_name = 'exec_face_entity'
 
     def apply(self, out):
         self.chain.chain.facing_entity(self.target.as_cmdref(), self.feature)
@@ -472,6 +520,7 @@ class ExecRotate(Insn):
 
     args = [ExecChain, int, int]
     argnames = 'chain y x'
+    insn_name = 'exec_rotate'
 
     def apply(self, out):
         self.chain.chain.rotated(self.y, self.x)
@@ -489,6 +538,7 @@ class ExecAnchor(Insn):
 
     args = [ExecChain, str]
     argnames = 'chain anchor'
+    insn_name = 'exec_anchor'
 
     def apply(self, out):
         self.chain.chain.anchored(self.anchor)
@@ -513,6 +563,7 @@ class ExecRun(Insn):
 
     args = [ExecChain, (CmdFunction, FunctionLike)]
     argnames = 'exec func'
+    insn_name = 'exec_run'
 
     def apply(self, out):
         if isinstance(self.func, FunctionLike):
@@ -531,6 +582,7 @@ def make_yield_tick(block, func, callback):
 class SetCommandBlock(Insn):
     args = [FunctionLike]
     argnames = 'func'
+    insn_name = 'set_command_block'
 
     def apply(self, out):
         tag = NBTCompound()
@@ -541,6 +593,7 @@ class ClearCommandBlock(Insn):
 
     args = []
     argnames = ''
+    insn_name = 'clear_command_block'
 
     def apply(self, out):
         out.write(DataRemove(UtilBlockPos.ref, NbtPath('Command')))
@@ -550,6 +603,7 @@ class SetCommandBlockFromStack(Insn):
 
     args = []
     argnames = ''
+    insn_name = 'set_command_block_from_stack'
 
     def apply(self, out):
         out.write(DataModifyFrom(UtilBlockPos.ref, NbtPath('Command'),
@@ -559,6 +613,7 @@ class PopStack(Insn):
 
     args = []
     argnames = ''
+    insn_name = 'pop_stack'
 
     def apply(self, out):
         out.write(DataRemove(EntityTag.ref, StackPath(0)))
@@ -567,6 +622,7 @@ class GetStackHead(Insn):
 
     args = [Variable]
     argnames = 'dest'
+    insn_name = 'get_stack_head'
 
     def apply(self, out):
         VirtualStackPointer(self.dest.type, 0).clone_to(self.dest, out)
@@ -575,6 +631,7 @@ class PushStack(Insn):
 
     args = [(Variable, int)]
     argnames = 'value'
+    insn_name = 'push_stack'
 
     def apply(self, out):
         if isinstance(self.value, int):
@@ -589,6 +646,7 @@ class PushFunction(Insn):
 
     args = [FunctionLike]
     argnames = 'func'
+    insn_name = 'push_function'
 
     def apply(self, out):
         tag = NBTCompound()
@@ -630,6 +688,7 @@ class TextAppend(Insn):
 
     args = [TextObject, (VirtualString, int, Variable, TextObject)]
     argnames = 'text value'
+    insn_name = 'text_append'
 
     def apply(self, out):
         self.text.append(self.value)
@@ -638,6 +697,7 @@ class TextSend(Insn):
 
     args = [TextObject, Selector]
     argnames = 'text target'
+    insn_name = 'text_send'
 
     def apply(self, out):
         out.write(Tellraw(self.text.to_args(out), self.target.as_cmdref()))
@@ -706,28 +766,31 @@ class EventRef(NativeType):
 
 class CreateEvent(PreambleOnlyInsn, ConstructorInsn):
 
-    args = [str]
+    args = [VirtualString]
     argnames = 'event_name'
     top_preamble_only = True
     insn_name = 'event'
 
     def construct(self):
-        return EventRef(self.event_name)
+        return EventRef(str(self.event_name))
 
 class AddEventCondition(PreambleOnlyInsn, Insn):
 
-    args = [EventRef, str, VirtualString]
+    args = [EventRef, VirtualString, VirtualString]
     argnames = 'event path value'
     top_preamble_only = True
+    insn_name = 'add_event_condition'
 
     def apply(self, out):
-        self.event.add_condition(tuple(self.path.split('.')), str(self.value))
+        self.event.add_condition(tuple(str(self.path).split('.')),
+                                 str(self.value))
 
 class EventHandler(PreambleOnlyInsn, Insn):
 
     args = [FunctionLike, EventRef]
     argnames = 'handler event'
     top_preamble_only = True
+    insn_name = 'event_handler'
 
     def apply(self, out):
         out.write_event_handler(self.handler, self.event)

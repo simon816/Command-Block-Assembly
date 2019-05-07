@@ -108,6 +108,10 @@ class VariableHolder:
     def generate_name(self, namehint, value):
         return self.uniq(namehint, lambda n: value)
 
+    def store(self, name, value):
+        assert name not in self.scope
+        self.scope[name] = value
+
     def name_for(self, value):
         return self.scope.for_value(value)
 
@@ -339,7 +343,7 @@ class BasicBlock(FunctionLike, InstructionSeq):
         return 'BasicBlock(%s)' % self.global_name
 
     def end(self):
-        assert self.defined
+        assert self.defined, self
 
     def writeout(self):
         writer = CmdWriter()

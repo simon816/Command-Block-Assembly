@@ -2,7 +2,13 @@ import abc
 
 from commands import *
 
-class NativeType:
+class InsnArg:
+
+    @classmethod
+    def _init_from_parser(cls, value):
+        return value
+
+class NativeType(InsnArg):
     pass
 
 class EntitySelection(NativeType, metaclass=abc.ABCMeta):

@@ -145,11 +145,12 @@ class Assembler:
             self.global_mapping.update(assembler.global_mapping)
         elif directive == 'event_handler':
             handler, event, conditions = value.split(' ', 2)
-            event = self.top.preamble.define(CreateEvent(event))
+            event = self.top.preamble.define(CreateEvent(VirtualString(event)))
             if conditions:
                 for cond in conditions.split(';'):
                     key, value = cond.split('=', 1)
-                    self.top.preamble.add(AddEventCondition(event, key, VirtualString(value)))
+                    self.top.preamble.add(AddEventCondition(event,
+                                VirtualString(key), VirtualString(value)))
             self.top.preamble.add(EventHandler(self.lookup_symbol(handler), event))
 
     def init_instructions(self):
@@ -560,7 +561,7 @@ void OP(int src, int *dest) {
             val_type, val = pairs[i + 1]
             assert val_type == 'string'
             if key_type == 'string':
-                self.block.add(SetSelector(sel, key, val))
+                self.block.add(SetSelector(sel, key, VirtualString(val)))
             elif key_type == 'symbol':
                 # Special case where an entity local can be queried
                 var = self.get_const(key)

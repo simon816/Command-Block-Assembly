@@ -2,15 +2,22 @@ import abc
 
 from commands import *
 
-from .core_types import NativeType
+from .core_types import InsnArg, NativeType
 from .nbt import NBTType
 
-class VarType:
+class VarType(InsnArg):
+
+    __LOOKUP = {}
 
     def __init__(self, name, nbt_key, nbt_type):
         self.name = name
         self.nbt_path_key = nbt_key
         self.nbt_type = nbt_type
+        self.__LOOKUP[name] = self
+
+    @classmethod
+    def _init_from_parser(cls, value):
+        return cls.__LOOKUP[value]
 
     i32 = None
 
