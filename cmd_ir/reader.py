@@ -68,7 +68,7 @@ class BuildProgram(Interpreter):
         opname, operands = self.visit_children(node)
         insn = Insn.lookup(opname.value)
         assert insn is not None, opname.value
-        assert len(operands) == len(insn.args)
+        assert len(operands) == len(insn.args), opname.value
         ctor_args = []
         for i, argtype in enumerate(insn.args):
             # Only allowable for non-tuple args
@@ -122,9 +122,19 @@ class Reader:
 
     def __init__(self):
         self.parser = _standalone_instance
+        self.env = []
+
+    def set_env(self, name, value):
+        self.env.append((name, value))
 
     def read(self, text):
         tree = self.parser.parse(text)
         builder = BuildProgram()
+        self.preprocess(builder.top)
         builder.visit(tree)
+        builder.top.end()
         return builder.top
+
+    def preprocess(self, top):
+        for name, value in self.env:
+            top.store(name, value)

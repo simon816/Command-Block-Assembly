@@ -6,6 +6,7 @@ from placer import CommandPlacer
 class Scope:
     def __init__(self, namespace, tag_name, variables, block_pos, args={}, extern=[]):
         self.entity_tag = namespace + '_' + tag_name
+        self.pos_util = namespace + '_' + tag_name + '_pos'
         self.namespace = namespace
         self.variables = variables
         self.mem_locs = {}

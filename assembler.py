@@ -35,6 +35,7 @@ class Assembler:
 
     def new_function(self, name):
         if self.func is not None:
+            self.func.add(Return())
             self.func.end()
         self.func = self.top.get_or_create_func('sub_' + name)
         self.block = self.func.create_block('entry')
@@ -45,10 +46,9 @@ class Assembler:
     def get_global(self, ref, name):
         var = self.global_mapping.get(name)
         if var is None:
-            var = GlobalScoreVariable(VarType.i32, ref)
-            self.top.finalize_global(self.top.create_global(name, VarType.i32),
-                                     var)
-            self.global_mapping[name] = var
+            var = self.global_mapping[name] = \
+                  self.top.create_global(name, VarType.i32)
+            self.top.finalize_global(var, GlobalScoreVariable(VarType.i32, ref))
         return var
 
     def parse(self, text, filename=''):
@@ -519,6 +519,7 @@ void OP(int src, int *dest) {
         self.block.add(Call(self.lookup_symbol(sub_name)))
 
     def handle_ret(self):
+        self.block.add(Return())
         self.block = self.func.create_block('dead_after_ret')
 
     def handle_test_cmd(self, cmd):
@@ -693,11 +694,11 @@ void OP(int src, int *dest) {
         assert func is not None, "Cannot find function " + sub_name
         return Function(func.global_name)
 
-class SessionWriter:
+class SessionWriter(FuncWriter):
 
     def __init__(self, session, top):
         self.sess = session
-        setup = top.lookup_func('__setup__')
+        setup = top.lookup_func('sub___setup__')
         self.setup_func = setup.global_name if setup is not None else None
         self.event_handlers = []
 

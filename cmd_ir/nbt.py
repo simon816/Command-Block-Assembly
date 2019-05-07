@@ -4,9 +4,12 @@ from .core_types import NativeType
 
 class NBTType(NativeType):
 
+    __LOOKUP = {}
+
     def __init__(self, typename, compound=False):
         self.name = typename
         self._compound = compound
+        self.__LOOKUP[typename] = self
 
     @property
     def exec_store_name(self):
@@ -20,6 +23,13 @@ class NBTType(NativeType):
 
     def __str__(self):
         return 'NBTType(%s)' % self.name
+
+    def serialize(self):
+        return self.name
+
+    @classmethod
+    def _init_from_parser(cls, value):
+        return cls.__LOOKUP[value]
 
     def new(self, *args):
         # There are better ways of doing this
@@ -65,7 +75,7 @@ NBTType.string = NBTType('string')
 NBTType.list = NBTType('list', True)
 NBTType.compound = NBTType('compound', True)
 
-class NBTBase(Resolvable):
+class NBTBase(Resolvable, NativeType):
     pass
 
 class NBTValue(NBTBase):

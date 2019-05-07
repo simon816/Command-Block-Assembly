@@ -93,6 +93,9 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     def _direct_ref(self):
         return None
 
+    def _direct_nbt(self):
+        return None
+
     @abc.abstractmethod
     def _store_from_cmd(self, cmd, out):
         pass
@@ -114,7 +117,7 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
                                   self.nbt_val(value)))
 
     def nbt_val(self, value):
-        self.type.nbt_type.new(value)
+        return self.type.nbt_type.new(value)
 
     def _store_from_cmd(self, cmd, out):
         out.write(ExecuteChain()
@@ -126,10 +129,14 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
     def read(self):
         return DataGetEtag(self.path)
 
+    def _direct_nbt(self):
+        return self.path
+
     def clone_to(self, other, out):
-        if isinstance(other, NbtStorableVariable):
+        other_path = other._direct_nbt()
+        if other_path is not None:
             # Optimize here - can copy NBT directly
-            out.write(DataModifyFrom(EntityTag.ref, other.path, 'set',
+            out.write(DataModifyFrom(EntityTag.ref, other_path, 'set',
                                      EntityTag.ref, self.path))
         else:
             super().clone_to(other, out)
@@ -179,32 +186,33 @@ class ScoreStorableVariable(Variable):
     def read(self):
         return GetValue(self.ref)
 
-class PlaceholderVariable(Variable):
+class ProxyVariable(Variable):
 
     def __init__(self, type):
         super().__init__(type)
-        self.real = None
+        self.var = None
 
-    def transfer(self, real_var):
-        assert self.real is None
-        assert real_var.type == self.type
-        self.real = real_var
+    def set_proxy(self, var):
+        assert self.var is None
+        assert var.type == self.type
+        self.var = var
 
-    def open_for_write(self, out): assert False
-    def open_for_read(self, out): assert False
-    def read(self): assert False
-    def clone_to(self, other, out): assert False
-    def set_const_val(self, value, out): assert False
-    def push_to_stack(self, out): assert False
-    def _write_to_reference(self, ref, out): assert False
-    def _read_from_reference(self, ref, out): assert False
-    def _direct_ref(self): assert False
-    def _store_from_cmd(self, cmd, out): assert False
+    def open_for_write(self, out): return self.var.open_for_write(out)
+    def open_for_read(self, out): return self.var.open_for_read(out)
+    def read(self): return self.var.read()
+    def clone_to(self, other, out): return self.var.clone_to(other, out)
+    def set_const_val(self, value, out): return self.var.set_const_val(value, out)
+    def push_to_stack(self, out): return self.var.push_to_stack(out)
+    def _write_to_reference(self, ref, out): return self.var._write_to_reference(ref, out)
+    def _read_from_reference(self, ref, out): return self.var._read_from_reference(ref, out)
+    def _direct_ref(self): return self.var._direct_ref()
+    def _direct_nbt(self): return self.var._direct_nbt()
+    def _store_from_cmd(self, cmd, out): return self.var._store_from_cmd(cmd, out)
 
-class LocalVariable(PlaceholderVariable):
+class LocalVariable(ProxyVariable):
     pass
 
-class GlobalVariable(PlaceholderVariable):
+class GlobalVariable(ProxyVariable):
     pass
 
 class LocalStackVariable(NbtOffsetVariable):

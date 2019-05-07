@@ -155,6 +155,16 @@ class ETagSelector(Selector):
 
 EntityTag = ETagSelector(None)
 
+class _PosUtilSelector(Selector):
+
+    def __init__(self):
+        super().__init__('e', None)
+
+    def resolve_params(self, scope):
+        return {'tag': scope.pos_util, 'limit': 1}
+
+PosUtil = _PosUtilSelector()
+
 class NbtPath(Resolvable):
 
     def __init__(self, path):

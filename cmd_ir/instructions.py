@@ -27,9 +27,10 @@ class Insn(metaclass=abc.ABCMeta):
         return cls.__lookup_cache.get(name)
 
     preamble_safe = False
+    is_block_terminator = False
 
     def __init__(self, *args):
-        assert len(args) == len(self.args)
+        assert len(args) == len(self.args), type(self)
         for i, arg in enumerate(args):
             assert isinstance(arg, self.args[i]), ("Incorrect argument type " \
             + "for argument %d:\nExpect type %s, got %s\n" \
@@ -50,18 +51,23 @@ class Insn(metaclass=abc.ABCMeta):
     def activate(self, seq):
         pass
 
+    def declare(self):
+        pass
+
     @abc.abstractmethod
     def apply(self, out):
         pass
 
     def serialize_args(self, holder):
         def serialize(val):
-            if isinstance(val, VirtualString):
-                return val.serialize()
             if isinstance(val, (str, int, float)):
                 return str(val)
             if val is None:
                 return 'NULL'
+            if isinstance(val, VirtualString):
+                return val.serialize()
+            if isinstance(val, NBTType):
+                return val.serialize()
             assert isinstance(val, NativeType), str(val)
             name = holder.name_for(val)
             if isinstance(val, BasicBlock):
@@ -82,6 +88,43 @@ class Insn(metaclass=abc.ABCMeta):
             args = ' ' + ', '.join(self.serialize_args(holder))
         return self.insn_name + args
 
+    def query(self, argtype):
+        if not self.argnames:
+            return []
+        names = self.argnames.split(' ')
+        for i, name in enumerate(names):
+            if isinstance(getattr(self, name), argtype):
+                yield QueryResult(self, name, self.args[i])
+
+    def copy(self):
+        cls = self.__class__
+        if not self.argnames:
+            return cls()
+        names = self.argnames.split(' ')
+        args = []
+        for i, name in enumerate(names):
+            args.append(getattr(self, name))
+        return cls(*args)
+
+    def terminator(self):
+        return self.is_block_terminator
+
+class QueryResult:
+
+    def __init__(self, insn, name, argtype):
+        self.__insn = insn
+        self.__name = name
+        self.__type = argtype
+
+    @property
+    def val(self):
+        return getattr(self.__insn, self.__name)
+
+    @val.setter
+    def val(self, value):
+        assert isinstance(value, self.__type)
+        setattr(self.__insn, self.__name, value)
+
 class VoidApplicationInsn(Insn):
 
     def apply(self, out):
@@ -96,6 +139,11 @@ class ConstructorInsn(VoidApplicationInsn):
     def activate(self, seq):
         self._value = self.construct()
         return self._value
+
+    def copy(self):
+        cpy = super().copy()
+        cpy._value = self._value
+        return cpy
 
     def serialize(self, holder):
         return '$%s = %s' % (holder.name_for(self._value),
@@ -196,6 +244,10 @@ class Call(Insn):
     args = [FunctionLike]
     argnames = 'label'
     insn_name = 'call'
+    is_block_terminator = True
+
+    def declare(self):
+        self.label.usage()
 
     def apply(self, out):
         out.write(Function(self.label.global_name))
@@ -211,15 +263,27 @@ class RangeBr(Insn):
 
     def activate(self, seq):
         assert self.min is not None or self.max is not None
-        self.inverted = self.if_true is None
-        if self.inverted:
-            self.if_true, self.if_false = self.if_false, self.if_true
-        assert self.if_true is not None
-        if self.if_false is not None:
+        assert self.if_true is not None or self.is_false is not None
+        if self.if_false and self.if_true:
             self.if_true.needs_success_tracker = True
 
+    def declare(self):
+        if self.if_true:
+            self.if_true.usage()
+        if self.if_false:
+            self.if_false.usage()
+
+    def terminator(self):
+        return self.if_true and self.if_false
+
     def apply(self, out):
-        have_false = self.if_false is not None
+        if not self.if_true:
+            if_true, if_false = self.if_false, self.if_true
+            inverted = True
+        else:
+            if_true, if_false = self.if_true, self.if_false
+            inverted = False
+        have_false = if_false is not None
         if have_false:
             # Workaround: execute store doesn't set success to 0 if failed
             # See MC-125058
@@ -227,16 +291,25 @@ class RangeBr(Insn):
             # tracker. See MC-125145
             out.write(SetConst(Var('success_tracker'), 0))
         with self.var.open_for_read(out) as var:
-            true_fn = Function(self.if_true.global_name)
+            true_fn = Function(if_true.global_name)
             sel_range = SelRange(var, self.min, self.max)
-            if self.inverted:
+            if inverted:
                 out.write(Execute.Unless(sel_range, true_fn))
             else:
                 out.write(Execute.If(sel_range, true_fn))
         if have_false:
-            false_fn = Function(self.if_false.global_name)
+            false_fn = Function(if_false.global_name)
             out.write(Execute.If(SelEquals(Var('success_tracker'), 0),
                                  false_fn))
+
+class CreateNBTValue(ConstructorInsn):
+
+    args = [NBTType, (float, int)]
+    argnames = 'type value'
+    insn_name = 'nbt_val'
+
+    def construct(self):
+        return self.type.new(self.value)
 
 class CreateNBTList(ConstructorInsn):
 
@@ -282,7 +355,7 @@ class NBTDataMerge(Insn):
     insn_name = 'nbt_data_merge'
 
     def apply(self, out):
-        out.write(DataMerge(self.target.as_ref(), self.data))
+        out.write(DataMerge(self.target.as_cmdref(), self.data))
 
 class SelectorType(InsnArg):
 
@@ -403,7 +476,7 @@ class ExecStoreEntitySpec(ExecStoreSpec):
         self.scale = scale
 
     def apply(self, out, chain, storechain):
-        storechain.entity(self.target.selector(), NbtPath(self.path), \
+        storechain.entity(self.target.as_cmdref(), NbtPath(self.path), \
                            self.nbttype.name, self.scale)
 
 class ExecStoreVarSpec(ExecStoreSpec):
@@ -417,12 +490,13 @@ class ExecStoreVarSpec(ExecStoreSpec):
 
 class ExecStoreEntity(ConstructorInsn):
 
-    args = [EntityRef, str, NBTType, int]
+    args = [EntityRef, VirtualString, NBTType, int]
     argnames = 'target path nbttype scale'
+    insn_name = 'exec_store_entity'
 
     def construct(self):
         assert self.nbttype.isnumeric
-        return ExecStoreEntitySpec(self.target, self.path, self.nbttype,
+        return ExecStoreEntitySpec(self.target, str(self.path), self.nbttype,
                                    self.scale)
 
 class ExecStoreVar(ConstructorInsn):
@@ -555,6 +629,7 @@ class Getter(ConstructorInsn):
 
     args = [Variable]
     argnames = 'var'
+    insn_name = 'getter'
 
     def construct(self):
         return GetVariableFunc(self.var)
@@ -564,6 +639,10 @@ class ExecRun(Insn):
     args = [ExecChain, (CmdFunction, FunctionLike)]
     argnames = 'exec func'
     insn_name = 'exec_run'
+
+    def declare(self):
+        if isinstance(self.func, FunctionLike):
+            self.func.usage()
 
     def apply(self, out):
         if isinstance(self.func, FunctionLike):
@@ -583,6 +662,9 @@ class SetCommandBlock(Insn):
     args = [FunctionLike]
     argnames = 'func'
     insn_name = 'set_command_block'
+
+    def declare(self):
+        self.func.usage()
 
     def apply(self, out):
         tag = NBTCompound()
@@ -608,6 +690,14 @@ class SetCommandBlockFromStack(Insn):
     def apply(self, out):
         out.write(DataModifyFrom(UtilBlockPos.ref, NbtPath('Command'),
              'set', EntityTag.ref, StackPath(0, 'cmd')))
+
+# application defined in IRFunction
+class Return(VoidApplicationInsn):
+
+    args = []
+    argnames = ''
+    insn_name = 'ret'
+    is_block_terminator = True
 
 class PopStack(Insn):
 
@@ -647,6 +737,9 @@ class PushFunction(Insn):
     args = [FunctionLike]
     argnames = 'func'
     insn_name = 'push_function'
+
+    def declare(self):
+        self.func.usage()
 
     def apply(self, out):
         tag = NBTCompound()
@@ -791,6 +884,9 @@ class EventHandler(PreambleOnlyInsn, Insn):
     argnames = 'handler event'
     top_preamble_only = True
     insn_name = 'event_handler'
+
+    def declare(self):
+        self.handler.usage()
 
     def apply(self, out):
         out.write_event_handler(self.handler, self.event)

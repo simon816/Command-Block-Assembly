@@ -28,10 +28,16 @@ class EntityLocal(NativeType):
     def __init__(self, name):
         self.name = name
 
-class VirtualString(str, NativeType):
+class VirtualString(NativeType):
+
+    def __init__(self, val):
+        self.val = val
+
+    def __str__(self):
+        return self.val
 
     def serialize(self):
-        return '"%s"' % str(self).replace('\\', '\\\\').replace('"', '\\"')
+        return '"%s"' % self.val.replace('\\', '\\\\').replace('"', '\\"')
 
 class FunctionLike(NativeType, metaclass=abc.ABCMeta):
 
@@ -67,6 +73,11 @@ class SelectorTy(EntitySelection):
         for other in self.other_args:
             args = ComboSelectorArgs(args, other)
         return Selector(self.type.letter, args)
+
+class PosUtilEntity(EntityRef):
+
+    def as_cmdref(self):
+        return PosUtil.ref
 
 class Position(SimpleResolve, NativeType):
 

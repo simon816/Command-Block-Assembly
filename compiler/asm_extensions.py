@@ -126,12 +126,12 @@ class ExtendedAssembler(Assembler):
         self.use_mem = False
         self.mem_get = self.top.generate_name('mem_get', FunctionRef('mem_get'))
         self.mem_set = self.top.generate_name('mem_set', FunctionRef('mem_set'))
-        self.mem_addr = GlobalScoreVariable(VarType.i32, Var('memory_address'))
-        self.mem_buf = GlobalScoreVariable(VarType.i32, Var('memory_buffer'))
-        self.top.finalize_global(self.top.create_global('mem_addr', VarType.i32),
-                                 self.mem_addr)
-        self.top.finalize_global(self.top.create_global('mem_buf', VarType.i32),
-                                 self.mem_buf)
+        self.mem_addr = self.top.create_global('mem_addr', VarType.i32)
+        self.mem_buf = self.top.create_global('mem_buf', VarType.i32)
+        self.top.finalize_global(self.mem_addr, GlobalScoreVariable(
+            VarType.i32, Var('memory_address')))
+        self.top.finalize_global(self.mem_buf, GlobalScoreVariable(
+            VarType.i32, Var('memory_buffer')))
 
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""

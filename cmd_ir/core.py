@@ -3,18 +3,40 @@ import abc
 
 from commands import SetConst, Var
 
-from .core_types import FunctionLike
+from .core_types import FunctionLike, PosUtilEntity
 
-class FuncWriter:
+class FuncWriter(metaclass=abc.ABCMeta):
 
+    @abc.abstractmethod
     def write_func_table(self, table):
         pass
 
+    @abc.abstractmethod
     def write_function(self, name, insns):
         pass
 
+    @abc.abstractmethod
     def write_event_handler(self, handler, event):
         pass
+
+class CmdWriter:
+
+    def __init__(self):
+        self.pre = []
+        self.out = []
+        self.post = []
+
+    def prepend(self, cmd):
+        self.pre.append(cmd)
+
+    def last(self, cmd):
+        self.post.append(cmd)
+
+    def write(self, cmd):
+        self.out.append(cmd)
+
+    def get_output(self):
+        return self.pre + self.out + self.post
 
 class InstructionSeq:
 
@@ -29,6 +51,24 @@ class InstructionSeq:
 
     def define(self, insn):
         return self.holder.generate_name(insn.insn_name, self.add(insn))
+
+    def is_empty(self):
+        return len(self.insns) == 0
+
+    def transform(self, func):
+        changed = False
+        new_insns = []
+        for insn in self.insns:
+            new_insn = func(insn)
+            if not changed and new_insn != insn:
+                changed = True
+            if new_insn is not None:
+                if type(new_insn) == list:
+                    new_insns.extend(new_insn)
+                else:
+                    new_insns.append(new_insn)
+        self.insns = new_insns
+        return changed
 
 class Preamble(InstructionSeq):
 
@@ -123,13 +163,25 @@ class VariableHolder:
             return self.scope[name]
         return None
 
+    def transform_scope(self, func):
+        changed = False
+        new_scope = Scope(self.scope.parent)
+        for key, value in self.scope.items():
+            new_key, new_value = func(key, value)
+            if not changed:
+                changed = key != new_key or value != new_value
+            if new_key is not None:
+                new_scope[new_key] = new_value
+        self.scope = new_scope
+        return changed
+
 class TopLevel(VariableHolder):
 
     def __init__(self):
         self.scope = Scope()
-        # TODO pos_util
         self.preamble = Preamble(self)
         self.finished = False
+        self.store('pos_util', PosUtilEntity())
 
     def get_or_create_func(self, name):
         return self.scope.get_or_create(name, self._create_func)
@@ -145,8 +197,7 @@ class TopLevel(VariableHolder):
 
     def finalize_global(self, placeholder, real):
         name = self.scope.for_value(placeholder, False)
-        placeholder.transfer(real)
-        self.scope[name] = real
+        placeholder.set_proxy(real)
 
     def lookup_func(self, name):
         func = self.lookup(name)
@@ -233,6 +284,27 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._name = name
         self.preamble = Preamble(self)
         self._finished = False
+        self._use = 0
+        self._entryblock = self.uniq('entry', self._create_super_block)
+        self._entryblock.is_entry = True
+        self._exitblock = self.uniq('ret', self._create_super_block)
+        self._varsfinalized = False
+
+    def _create_super_block(self, name):
+        return SuperBlock(name, self)
+
+    def usage(self):
+        self._use += 1
+        self.allblocks[0].usage()
+        if not self._varsfinalized:
+            self.blocks[0].usage()
+
+    def reset(self):
+        self._use = 0
+
+    def is_empty(self):
+        assert self.is_defined
+        return all(block.is_empty() for block in self.blocks)
 
     @property
     def is_defined(self):
@@ -245,10 +317,15 @@ class IRFunction(VisibleFunction, VariableHolder):
     @property
     def global_name(self):
         assert self.is_defined
-        return next(iter(self.blocks)).global_name
+        return self._name
 
     @property
     def blocks(self):
+        return [block for block in self.allblocks if block not in [
+                    self._entryblock, self._exitblock]]
+
+    @property
+    def allblocks(self):
         return [var for var in self.scope.values() if
                 isinstance(var, BasicBlock)]
 
@@ -271,8 +348,7 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def finalize_variable(self, placeholder, real):
         name = self.scope.for_value(placeholder, False)
-        placeholder.transfer(real)
-        self.scope[name] = real
+        placeholder.set_proxy(real)
 
     def end(self):
         assert self.is_defined
@@ -288,38 +364,56 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._finished = True
 
     def get_func_table(self):
-        return [block.global_name for block in self.blocks]
+        return [block.global_name for block in self.allblocks] \
+               + [self.global_name]
 
     def writeout(self, writer):
         assert self.finished
         self.preamble.apply(writer)
-        for block in self.blocks:
+        for block in self.allblocks:
             writer.write_function(block.global_name, block.writeout())
+
+    # Possibly call this at end()
+    def is_closed(self):
+        return all(b.is_terminated() for b in self.blocks)
+
+    def variables_finalized(self):
+        self.add_entry_exit()
+        if self.is_closed():
+            for insn in self._exitblock.insns:
+                self._entryblock.add(insn)
+            self._exitblock.insns = []
+        # clear super, let optimizer have control
+        self._entryblock.superclear()
+        self._exitblock.superclear()
+        self._varsfinalized = True
+
+    def add_entry_exit(self):
+        from .variables import LocalVariable, NbtOffsetVariable
+        from .instructions import PushStack, PopStack, Call
+        # sorted from head to tail of stack
+        vars = sorted([var.var for var in self.scope.values() \
+                if isinstance(var, LocalVariable) \
+                and isinstance(var.var, NbtOffsetVariable)],
+                      key=lambda v: v.offset)
+        if not vars:
+            # Always branch to real entry point
+            self._entryblock.add(Call(self.blocks[0]))
+            return False
+        assert vars[0].offset == 0, "Stack tip not 0"
+        assert vars[-1].offset == len(vars) - 1, "Stack base not length - 1"
+        assert len({v.offset for v in vars}) == len(vars), "Stack collision"
+        for var in vars[::-1]:
+            # Push const int 0 for now, TODO consider defaults
+            self._entryblock.add(PushStack(0))
+            self._exitblock.add(PopStack())
+        self._entryblock.add(Call(self.blocks[0]))
+        return True
 
     def serialize(self):
         return 'function %s {\n%s\n%s\n}\n' % (self._name,
                                                self.preamble.serialize(),
            '\n\n'.join(block.serialize() for block in self.blocks))
-
-
-class CmdWriter:
-
-    def __init__(self):
-        self.pre = []
-        self.out = []
-        self.post = []
-
-    def prepend(self, cmd):
-        self.pre.append(cmd)
-
-    def last(self, cmd):
-        self.post.append(cmd)
-
-    def write(self, cmd):
-        self.out.append(cmd)
-
-    def get_output(self):
-        return self.pre + self.out + self.post
 
 
 class BasicBlock(FunctionLike, InstructionSeq):
@@ -330,13 +424,16 @@ class BasicBlock(FunctionLike, InstructionSeq):
         self._func = func
         self.needs_success_tracker = False
         self.defined = False
-        self.is_first_block = not func.is_defined
+        self._use = 0
+
+    def usage(self):
+        self._use += 1
+
+    def reset(self):
+        self._use = 0
 
     @property
     def global_name(self):
-        # Make function entry points have nicer names
-        if self.is_first_block:
-            return self._func._name
         return self._func._name + '_' + self._name
 
     def __str__(self):
@@ -344,6 +441,18 @@ class BasicBlock(FunctionLike, InstructionSeq):
 
     def end(self):
         assert self.defined, self
+
+    def is_terminated(self):
+        assert self.defined
+        if not self.insns:
+            return False
+        return self.insns[-1].terminator()
+
+    def add(self, insn):
+        from .instructions import Return, Call
+        if isinstance(insn, Return):
+            return super().add(Call(self._func._exitblock))
+        return super().add(insn)
 
     def writeout(self):
         writer = CmdWriter()
@@ -357,3 +466,32 @@ class BasicBlock(FunctionLike, InstructionSeq):
         lines = [self._name + ':']
         lines.extend(insn.serialize(self._func) for insn in self.insns)
         return '\n'.join('    ' + line for line in lines)
+
+class SuperBlock(BasicBlock):
+
+    def __init__(self, name, func):
+        super().__init__(name, func)
+        self._use = 2 # prevent elimination and inlining
+        self.defined = True
+        self._clear = False
+        self.is_entry = False
+
+    @property
+    def global_name(self):
+        if self.is_entry:
+            return self._func.global_name
+        return super().global_name
+
+    def usage(self):
+        if self._clear:
+            super().usage()
+
+    def superclear(self):
+        self._clear = True
+
+    def is_empty(self):
+        return self._clear and super().is_empty()
+
+    def reset(self):
+        if self._clear:
+            super().reset()
