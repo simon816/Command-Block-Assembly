@@ -14,6 +14,9 @@ def get_subclasses(cls):
         yield from get_subclasses(subclass)
         yield subclass
 
+
+READ, WRITE = 'acc_read', 'acc_write'
+
 class Insn(metaclass=abc.ABCMeta):
 
     __lookup_cache = {}
@@ -28,6 +31,7 @@ class Insn(metaclass=abc.ABCMeta):
 
     preamble_safe = False
     is_block_terminator = False
+    is_branch = False
 
     def __init__(self, *args):
         assert len(args) == len(self.args), type(self)
@@ -38,6 +42,8 @@ class Insn(metaclass=abc.ABCMeta):
         names = self.argnames.split(' ')
         self.__dict__.update(zip(names, args))
         assert hasattr(self, 'insn_name'), self
+        if not hasattr(self, 'access'):
+            self.__class__.access = [READ for _ in self.args]
 
     def __str__(self):
         if self.argnames:
@@ -68,11 +74,13 @@ class Insn(metaclass=abc.ABCMeta):
                 return val.serialize()
             if isinstance(val, NBTType):
                 return val.serialize()
-            assert isinstance(val, NativeType), str(val)
+            if isinstance(val, tuple):
+                return '(%s)' % ', '.join(map(serialize, val))
+            assert isinstance(val, NativeType), "%s, %s" % (val, self)
             name = holder.name_for(val)
             if isinstance(val, BasicBlock):
                 return ':' + name
-            if isinstance(val, IRFunction):
+            if isinstance(val, VisibleFunction):
                 return '@' + name
             return '$' + name
         l = []
@@ -94,7 +102,7 @@ class Insn(metaclass=abc.ABCMeta):
         names = self.argnames.split(' ')
         for i, name in enumerate(names):
             if isinstance(getattr(self, name), argtype):
-                yield QueryResult(self, name, self.args[i])
+                yield QueryResult(self, name, self.args[i], self.access[i])
 
     def copy(self):
         cls = self.__class__
@@ -111,10 +119,15 @@ class Insn(metaclass=abc.ABCMeta):
 
 class QueryResult:
 
-    def __init__(self, insn, name, argtype):
+    def __init__(self, insn, name, argtype, access):
         self.__insn = insn
         self.__name = name
         self.__type = argtype
+        self.__access = access
+
+    @property
+    def access(self):
+        return self.__access
 
     @property
     def val(self):
@@ -122,8 +135,11 @@ class QueryResult:
 
     @val.setter
     def val(self, value):
-        assert isinstance(value, self.__type)
+        assert isinstance(value, self.__type), self.__insn
         setattr(self.__insn, self.__name, value)
+
+    def accepts(self, vtype):
+        return issubclass(vtype, self.__type)
 
 class VoidApplicationInsn(Insn):
 
@@ -167,8 +183,14 @@ class PreambleOnlyInsn:
 class SetScore(Insn):
 
     args = [Variable, (int, Variable)]
+    access = [WRITE, READ]
     argnames = 'var value'
     insn_name = '#invalid'
+
+    def declare(self):
+        self.var.usage_write()
+        if isinstance(self.value, Variable):
+            self.value.usage_read()
 
     def apply(self, out):
         if isinstance(self.value, Variable):
@@ -182,8 +204,14 @@ class SetScore(Insn):
 class SimpleOperationInsn(Insn):
 
     args = [Variable, (int, Variable)]
+    access = [WRITE, READ]
     argnames = 'dest src'
     insn_name = '#invalid'
+
+    def declare(self):
+        self.dest.usage_write()
+        if isinstance(self.src, Variable):
+            self.src.usage_read()
 
     def apply(self, out):
         # Possible optimisation where scope exit ("put back" value) is applied
@@ -209,6 +237,7 @@ class SimpleOperationInsn(Insn):
                     cls.__op_lookup[clz.with_ref.op] = clz
         return cls.__op_lookup[op]
 
+import operator
 
 class OnlyRefOperationInsn(SimpleOperationInsn):
     args = [Variable, Variable]
@@ -216,28 +245,45 @@ class OnlyRefOperationInsn(SimpleOperationInsn):
 class AddScore(SimpleOperationInsn):
     with_ref = OpAdd
     with_const = AddConst
+    constfunc = operator.add
+    identity = 0
 
 class SubScore(SimpleOperationInsn):
     with_ref = OpSub
     with_const = RemConst
+    constfunc = operator.sub
+    identity = 0
 
 class MulScore(OnlyRefOperationInsn):
     with_ref = OpMul
+    constfunc = operator.mul
+    identitiy = 1
 
 class DivScore(OnlyRefOperationInsn):
     with_ref = OpDiv
+    constfunc = operator.floordiv
+    identitiy = 1
 
 class ModScore(OnlyRefOperationInsn):
     with_ref = OpMod
+    constfunc = operator.mod
+    identity = None
 
 class MovLtScore(OnlyRefOperationInsn):
     with_ref = OpIfLt
+    constfunc = lambda a, b: b if b < a else a
+    identity = None
 
 class MovGtScore(OnlyRefOperationInsn):
     with_ref = OpIfGt
+    constfunc = lambda a, b: b if b > a else a
+    identity = None
 
 class SwapScore(OnlyRefOperationInsn):
     with_ref = OpSwap
+    access = [WRITE, WRITE]
+    constfunc = None
+    identity = None
 
 class Call(Insn):
 
@@ -245,6 +291,7 @@ class Call(Insn):
     argnames = 'label'
     insn_name = 'call'
     is_block_terminator = True
+    is_branch = True
 
     def declare(self):
         self.label.usage()
@@ -255,11 +302,121 @@ class Call(Insn):
 def Opt(optype):
     return (type(None), optype)
 
+def make_stack_frame_from(values, out):
+    stack = NBTList(NBTType.compound)
+    for val in values:
+        item = NBTCompound()
+        default = 0
+        if type(val) == int:
+            default = val
+            vtype = VarType.i32
+        elif isinstance(val, Variable):
+            vtype = val.type
+        else:
+            assert False, val
+        item.set(vtype.nbt_path_key, vtype.nbt_type.new(default))
+        stack.append(item)
+    frame = NBTCompound()
+    frame.set('stack', stack)
+    out.write(DataModifyStack(None, None, 'prepend', frame))
+    for i, val in enumerate(values):
+        if isinstance(val, Variable):
+            dest = LocalStackVariable(val.type, i)
+            # Variable has moved down to the previous stack frame
+            val.realign_frame(1)
+            val.clone_to(dest, out)
+            val.realign_frame(-1)
+
+class TupleQueryResult(QueryResult):
+
+    def __init__(self, insn, name, t_index, argtype, access):
+        super().__init__(insn, name, tuple, access)
+        self.__index = t_index
+        self.__type = argtype
+
+    @property
+    def val(self):
+        return super().val[self.__index]
+
+    @val.setter
+    def val(self, value):
+        assert isinstance(value, self.__type)
+        newlist = list(super().val)
+        newlist[self.__index] = value
+        QueryResult.val.fset(self, tuple(newlist))
+
+    def accepts(self, vtype):
+        return issubclass(vtype, self.__type)
+
+class Invoke(Call):
+
+    args = [VisibleFunction, Opt(tuple), Opt(tuple)]
+    access = [READ, READ, WRITE]
+    argnames = 'label fnargs retvars'
+    fnargs_type = (int, Variable)
+    retvars_type = Opt(Variable)
+    insn_name = 'invoke'
+    is_branch = True
+
+    def declare(self):
+        if self.fnargs:
+            for arg in self.fnargs:
+                if isinstance(arg, Variable):
+                    arg.usage_read()
+        if self.retvars:
+            for var in self.retvars:
+                if var is not None:
+                    var.usage_write()
+        super().declare()
+
+    # Allow queries into the tuple arguments
+    def query(self, argtype):
+        yield from super().query(argtype)
+        if self.fnargs:
+            for i, arg in enumerate(self.fnargs):
+                if isinstance(arg, argtype):
+                    yield TupleQueryResult(self, 'fnargs', i, self.fnargs_type,
+                                           READ)
+        if self.retvars:
+            for i, var in enumerate(self.fnargs):
+                if isinstance(var, argtype):
+                    yield TupleQueryResult(self, 'retvars', i,
+                                           self.retvars_type, WRITE)
+
+    def apply(self, out):
+        # Validate arguments and return type
+        self.label.validate_args(self.fnargs, self.retvars)
+        allargs = []
+        arglen = 0
+        # Build parameter list
+        # - list of arguments followed by return variable pointers
+        if self.fnargs:
+            arglen = len(self.fnargs)
+            allargs.extend(self.fnargs)
+        if self.retvars:
+            # default return variable = 0
+            allargs.extend([0 for var in self.retvars])
+        if allargs:
+            make_stack_frame_from(allargs, out)
+        super().apply(out)
+        # Copy return values into return variables
+        if self.retvars:
+            for i, var in enumerate(self.retvars):
+                if var is None:
+                    continue
+                src = LocalStackVariable(var.type, arglen + i)
+                var.realign_frame(1)
+                src.clone_to(var, out)
+                var.realign_frame(-1)
+        if allargs:
+            out.write(DataRemove(EntityTag.ref, StackPath(0)))
+
 class RangeBr(Insn):
 
     args = [Variable, Opt(int), Opt(int), Opt(BasicBlock), Opt(BasicBlock)]
     argnames = 'var min max if_true if_false'
     insn_name = 'rangebr'
+    is_branch = True
 
     def activate(self, seq):
         assert self.min is not None or self.max is not None
@@ -272,6 +429,7 @@ class RangeBr(Insn):
             self.if_true.usage()
         if self.if_false:
             self.if_false.usage()
+        self.var.usage_read()
 
     def terminator(self):
         return self.if_true and self.if_false
@@ -411,6 +569,9 @@ class SelectVarRange(Insn):
     def activate(self, seq):
         assert self.min is not None or self.max is not None
 
+    def declare(self):
+        self.var.usage_read()
+
     def apply(self, out):
         with self.var.open_for_read(out) as ref:
             self.sel.set_var_range(ref, self.min, self.max)
@@ -444,18 +605,23 @@ class CreateAncPos(ConstructorInsn):
     def construct(self):
         return AncPosVal(self.val)
 
-class ExecChain(NativeType):
+class MultiOpen:
 
     def __init__(self):
-        self.chain = ExecuteChain()
         self.ctxstack = contextlib.ExitStack()
 
     @contextlib.contextmanager
     def context(self, ctx):
         yield self.ctxstack.enter_context(ctx)
 
-    def terminate(self):
+    def close(self):
         self.ctxstack.close()
+
+class ExecChain(NativeType, MultiOpen):
+
+    def __init__(self):
+        self.chain = ExecuteChain()
+        super().__init__()
 
 class CreateExec(ConstructorInsn):
 
@@ -502,11 +668,15 @@ class ExecStoreEntity(ConstructorInsn):
 class ExecStoreVar(ConstructorInsn):
 
     args = [Variable]
+    access = [WRITE]
     argnames = 'var'
     insn_name = 'exec_store_var'
 
     def construct(self):
         return ExecStoreVarSpec(self.var)
+
+    def declare(self):
+        self.var.usage_write()
 
 class ExecStore(Insn):
 
@@ -634,11 +804,15 @@ class Getter(ConstructorInsn):
     def construct(self):
         return GetVariableFunc(self.var)
 
+    def declare(self):
+        self.var.usage_read()
+
 class ExecRun(Insn):
 
     args = [ExecChain, (CmdFunction, FunctionLike)]
     argnames = 'exec func'
     insn_name = 'exec_run'
+    is_branch = True
 
     def declare(self):
         if isinstance(self.func, FunctionLike):
@@ -650,7 +824,7 @@ class ExecRun(Insn):
         else:
             cmd = self.func.as_cmd()
         out.write(self.exec.chain.run(cmd))
-        self.exec.terminate()
+        self.exec.close()
 
 def make_yield_tick(block, func, callback):
     tr = func.create_block('yield_trampoline')
@@ -680,7 +854,6 @@ class ClearCommandBlock(Insn):
     def apply(self, out):
         out.write(DataRemove(UtilBlockPos.ref, NbtPath('Command')))
 
-
 class SetCommandBlockFromStack(Insn):
 
     args = []
@@ -698,6 +871,11 @@ class Return(VoidApplicationInsn):
     argnames = ''
     insn_name = 'ret'
     is_block_terminator = True
+    is_branch = True
+
+# Direct stack manipulation. Should not be called when stack-based variables
+# may be possible (stack frames will be unaligned)
+# Only used by cmd_ir internals and assembler.py
 
 class PopStack(Insn):
 
@@ -711,17 +889,28 @@ class PopStack(Insn):
 class GetStackHead(Insn):
 
     args = [Variable]
+    access = [WRITE]
     argnames = 'dest'
     insn_name = 'get_stack_head'
 
+    def declare(self):
+        self.dest.usage_write()
+
     def apply(self, out):
+        # This insn does not handle the general case - only works for
+        # POP opcode in assembler
+        assert self.dest._direct_ref()
         VirtualStackPointer(self.dest.type, 0).clone_to(self.dest, out)
 
-class PushStack(Insn):
+class PushStackVal(Insn):
 
     args = [(Variable, int)]
     argnames = 'value'
-    insn_name = 'push_stack'
+    insn_name = 'push_stack_val'
+
+    def declare(self):
+        if isinstance(self.value, Variable):
+            self.value.usage_read()
 
     def apply(self, out):
         if isinstance(self.value, int):
@@ -744,7 +933,16 @@ class PushFunction(Insn):
     def apply(self, out):
         tag = NBTCompound()
         tag.set('cmd', FutureNBTString(Function(self.func.global_name)))
-        out.write(DataModifyStack(None, None, 'prepend', tag))
+        out.write(DataModifyStack(None, None, 'prepend', tag, StackFrameHead))
+
+class PushNewStackFrame(Insn):
+
+    args = [tuple]
+    argnames = 'framevals'
+    insn_name = 'push_stack_frame'
+
+    def apply(self, out):
+        make_stack_frame_from(self.framevals, out)
 
 class TextObject(NativeType):
 
@@ -756,18 +954,25 @@ class TextObject(NativeType):
 
     def to_args(self, out):
         args = []
+        opener = MultiOpen()
         for child in self.children:
             if isinstance(child, TextObject):
                 args.extend(child.to_args(out))
             elif isinstance(child, Variable):
-                with child.open_for_read(out) as ref:
-                    args.append(ref)
+                # optimize for direct nbt or ref
+                direct = child._direct_nbt() or child._direct_ref()
+                if direct:
+                    args.append(direct)
+                else:
+                    with opener.context(child.open_for_read(out)) as ref:
+                        args.append(ref)
             elif isinstance(child, VirtualString):
                 args.append(str(child))
             elif isinstance(child, int):
                 args.append(str(child))
             else:
                 assert False
+        opener.close()
         return args
 
 class CreateText(ConstructorInsn):
@@ -782,6 +987,10 @@ class TextAppend(Insn):
     args = [TextObject, (VirtualString, int, Variable, TextObject)]
     argnames = 'text value'
     insn_name = 'text_append'
+
+    def declare(self):
+        if isinstance(self.value, Variable):
+            self.value.usage_read()
 
     def apply(self, out):
         self.text.append(self.value)
@@ -817,6 +1026,7 @@ class RunFunction(Insn):
     args = [CmdFunction]
     argnames = 'func'
     insn_name = 'run_func'
+    is_branch = True
 
     def apply(self, out):
         out.write(self.func.as_cmd())
@@ -891,6 +1101,16 @@ class EventHandler(PreambleOnlyInsn, Insn):
     def apply(self, out):
         out.write_event_handler(self.handler, self.event)
 
+class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
+
+    args = []
+    argnames = ''
+    func_preamble_only = True
+    insn_name = 'extern'
+
+    def activate(self, seq):
+        seq.holder.set_extern(True)
+
 class DefineVariable(PreambleOnlyInsn, ConstructorInsn):
 
     args = [VarType]
@@ -918,3 +1138,25 @@ class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
 
     def serialize_args(self, holder):
         return [self.type.name]
+
+class ParameterInsn(DefineVariable):
+
+    insn_name = 'parameter'
+
+    def construct(self):
+        return ParameterVariable(self.type)
+
+    def activate(self, seq):
+        seq.holder.add_parameter(self.type)
+        return super().activate(seq)
+
+class ReturnVarInsn(DefineVariable):
+
+    insn_name = 'return'
+
+    def construct(self):
+        return ReturnVariable(self.type)
+
+    def activate(self, seq):
+        seq.holder.add_return(self.type)
+        return super().activate(seq)

@@ -3,21 +3,6 @@ from cmd_ir.core import *
 from cmd_ir.instructions import *
 from cmd_ir.variables import GlobalScoreVariable, VarType
 
-def type_aware(fn):
-    def wrap(*args):
-        self, d_type, *fn_args = args
-        fn_args.insert(0, self)
-        ret = fn(*fn_args)
-        if type(ret) == tuple:
-            cmd, dest = ret
-        else:
-            cmd, dest = None, ret
-        self.add_cast(d_type, cmd, dest)
-
-    wrap.type_aware = True
-    wrap.func = fn
-    return wrap
-
 class Assembler:
 
     def __init__(self):
@@ -25,7 +10,7 @@ class Assembler:
         self.constants = {}
         self.global_mapping = {}
         self.func = None
-        self.new_function('__main__')
+        self.block = None
         self.jump_later = None
         self.comparison_args = None
         self.init_instructions()
@@ -35,9 +20,11 @@ class Assembler:
 
     def new_function(self, name):
         if self.func is not None:
-            self.func.add(Return())
+            self.block.add(Return())
             self.func.end()
+            self.func.variables_finalized()
         self.func = self.top.get_or_create_func('sub_' + name)
+        self.func.preamble.add(ExternInsn())
         self.block = self.func.create_block('entry')
 
     def _predef_const(self, name, varname):
@@ -48,7 +35,7 @@ class Assembler:
         if var is None:
             var = self.global_mapping[name] = \
                   self.top.create_global(name, VarType.i32)
-            self.top.finalize_global(var, GlobalScoreVariable(VarType.i32, ref))
+            var.set_proxy(GlobalScoreVariable(VarType.i32, ref))
         return var
 
     def parse(self, text, filename=''):
@@ -670,7 +657,7 @@ void OP(int src, int *dest) {
         self.block.add(run)
 
     def handle_push(self):
-        self.block.add(PushStack(self.constants['sr']))
+        self.block.add(PushStackVal(self.constants['sr']))
 
     def handle_pop(self):
         self.block.add(GetStackHead(self.constants['sr']))
@@ -683,7 +670,10 @@ void OP(int src, int *dest) {
 
     def write_to_session(self, session):
         self.func.end()
+        self.func.variables_finalized()
         self.top.end()
+        from cmd_ir.optimizers import Optimizer
+        Optimizer().optimize(self.top)
         writer = SessionWriter(session, self.top)
         self.top.writeout(writer)
         writer.finish()

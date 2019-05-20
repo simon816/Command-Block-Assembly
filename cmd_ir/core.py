@@ -175,6 +175,12 @@ class VariableHolder:
         self.scope = new_scope
         return changed
 
+    def reset_var_usage(self):
+        from .variables import Variable
+        for var in self.scope.values():
+            if isinstance(var, Variable):
+                var.reset_usage()
+
 class TopLevel(VariableHolder):
 
     def __init__(self):
@@ -195,10 +201,6 @@ class TopLevel(VariableHolder):
             return self.preamble.add(DefineGlobal(vartype))
         return self.uniq(namehint, create)
 
-    def finalize_global(self, placeholder, real):
-        name = self.scope.for_value(placeholder, False)
-        placeholder.set_proxy(real)
-
     def lookup_func(self, name):
         func = self.lookup(name)
         if func is not None:
@@ -212,14 +214,9 @@ class TopLevel(VariableHolder):
 
     def end(self):
         assert not self.finished
-        # TODO
-        #o = 0
         for name, var in self.scope.items():
             if isinstance(var, VisibleFunction):
                 assert var.finished, "unfinished function " + name
-            #elif isinstance(var, Global):
-            #    var.set_offset(o)
-            #    o += 1
         self.finished = True
 
     def writeout(self, writer):
@@ -253,15 +250,48 @@ class VisibleFunction(FunctionLike):
         return False
 
     def get_func_table(self):
-        []
+        return []
 
     def writeout(self, writer):
         pass
+
+    def validate_args(self, args, retvars):
+        assert self.finished
+        from .variables import Variable, VarType
+        if self.params:
+            assert args is not None
+            assert len(args) == len(self.params)
+            for argtype, argval in zip(self.params, args):
+                if type(argval) == int:
+                    assert argtype == VarType.i32
+                else:
+                    assert isinstance(argval, Variable)
+                    assert argval.type == argtype
+        else:
+            assert args is None
+
+        if self.returns:
+            assert retvars is not None
+            assert len(retvars) == len(self.returns)
+            for rtype, rdest in zip(self.returns, retvars):
+                # Allow a dest of nowhere
+                if rdest is not None:
+                    assert isinstance(rdest, Variable)
+                    assert rdest.type == rtype
+        else:
+            assert retvars is None
+
+    @property
+    def extern_visibility(self):
+        assert False, "Not implemented"
 
 class ExternFunction(VisibleFunction):
 
     def __init__(self, global_name):
         self._gname = global_name
+        # TODO
+        self.params = []
+        self.returns = []
 
     @property
     def finished(self):
@@ -274,8 +304,18 @@ class ExternFunction(VisibleFunction):
     def get_func_table(self):
         return [self._gname]
 
+    @property
+    def extern_visibility(self):
+        return True
+
+    def usage(self):
+        pass
+
+    def is_empty(self):
+        return False
+
     def serialize(self):
-        return 'extern function %s\n'
+        return 'extern function %s\n' % self._gname
 
 class IRFunction(VisibleFunction, VariableHolder):
 
@@ -285,30 +325,56 @@ class IRFunction(VisibleFunction, VariableHolder):
         self.preamble = Preamble(self)
         self._finished = False
         self._use = 0
-        self._entryblock = self.uniq('entry', self._create_super_block)
+        # use "0" to avoid collision
+        self._entryblock = self.uniq('0entry', self._create_super_block)
         self._entryblock.is_entry = True
-        self._exitblock = self.uniq('ret', self._create_super_block)
+        self._exitblock = self.uniq('0ret', self._create_super_block)
         self._varsfinalized = False
+        self._is_extern = False
+        self.params = []
+        self.returns = []
 
     def _create_super_block(self, name):
         return SuperBlock(name, self)
 
     def usage(self):
         self._use += 1
+        self.entry_point_usage()
+
+    def add_parameter(self, vtype):
+        self.params.append(vtype)
+
+    def add_return(self, vtype):
+        self.returns.append(vtype)
+
+    def entry_point_usage(self):
         self.allblocks[0].usage()
         if not self._varsfinalized:
             self.blocks[0].usage()
 
+    def has_usage(self):
+        return self._use > 0
+
     def reset(self):
         self._use = 0
+        self.reset_var_usage()
 
     def is_empty(self):
         assert self.is_defined
-        return all(block.is_empty() for block in self.blocks)
+        return all(block.is_empty() for block in self.allblocks)
+
+    def set_extern(self, is_extern):
+        self._is_extern = is_extern
+
+    @property
+    def extern_visibility(self):
+        return self._is_extern
 
     @property
     def is_defined(self):
-        return len(self.blocks) > 0
+        if not self._varsfinalized:
+            return len(self.blocks) > 0
+        return len(self.allblocks) > 0
 
     @property
     def finished(self):
@@ -316,7 +382,7 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     @property
     def global_name(self):
-        assert self.is_defined
+        assert self.is_defined, self._name
         return self._name
 
     @property
@@ -346,21 +412,11 @@ class IRFunction(VisibleFunction, VariableHolder):
             return self.preamble.add(DefineVariable(vartype))
         return self.uniq(namehint, create)
 
-    def finalize_variable(self, placeholder, real):
-        name = self.scope.for_value(placeholder, False)
-        placeholder.set_proxy(real)
-
     def end(self):
         assert self.is_defined
         assert not self.finished
         for block in self.blocks:
             block.end()
-        # TODO
-        #o = 0
-        #for var in list(self.scope.values())[::-1]:
-        #    if isinstance(var, StackVariable):
-        #        var.set_offset(o)
-        #        o += 1
         self._finished = True
 
     def get_func_table(self):
@@ -373,12 +429,33 @@ class IRFunction(VisibleFunction, VariableHolder):
         for block in self.allblocks:
             writer.write_function(block.global_name, block.writeout())
 
-    # Possibly call this at end()
     def is_closed(self):
         return all(b.is_terminated() for b in self.blocks)
 
+    def configure_parameters(self, hasownstackframe):
+        from .variables import ParameterVariable, ReturnVariable, \
+                                 LocalStackVariable
+        offset = 0
+        rets = []
+        for var in self.scope.values():
+            if isinstance(var, ParameterVariable):
+                var.set_proxy(LocalStackVariable(var.type, offset))
+                if hasownstackframe:
+                    var.realign_frame(1)
+                offset += 1
+            elif isinstance(var, ReturnVariable):
+                rets.append(var)
+        # return variables go at the end
+        for retvar in rets:
+            retvar.set_proxy(LocalStackVariable(retvar.type, offset))
+            if hasownstackframe:
+                retvar.realign_frame(1)
+            offset += 1
+
     def variables_finalized(self):
-        self.add_entry_exit()
+        assert self.is_defined, self._name
+        stackvars = self.add_entry_exit()
+        self.configure_parameters(bool(stackvars))
         if self.is_closed():
             for insn in self._exitblock.insns:
                 self._entryblock.add(insn)
@@ -390,30 +467,31 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def add_entry_exit(self):
         from .variables import LocalVariable, NbtOffsetVariable
-        from .instructions import PushStack, PopStack, Call
+        from .instructions import PushNewStackFrame, PopStack, Call
         # sorted from head to tail of stack
         vars = sorted([var.var for var in self.scope.values() \
                 if isinstance(var, LocalVariable) \
                 and isinstance(var.var, NbtOffsetVariable)],
                       key=lambda v: v.offset)
-        if not vars:
-            # Always branch to real entry point
-            self._entryblock.add(Call(self.blocks[0]))
-            return False
-        assert vars[0].offset == 0, "Stack tip not 0"
-        assert vars[-1].offset == len(vars) - 1, "Stack base not length - 1"
-        assert len({v.offset for v in vars}) == len(vars), "Stack collision"
-        for var in vars[::-1]:
+        if vars:
+            assert vars[0].offset == 0, "Stack tip not 0"
+            assert vars[-1].offset == len(vars) - 1, "Stack base not length - 1"
+            assert len({v.offset for v in vars}) == len(vars), "Stack collision"
             # Push const int 0 for now, TODO consider defaults
-            self._entryblock.add(PushStack(0))
+            self._entryblock.add(PushNewStackFrame(tuple(0 for var in vars[::-1])))
             self._exitblock.add(PopStack())
+        # Always branch to real entry point
         self._entryblock.add(Call(self.blocks[0]))
-        return True
+        return vars
 
     def serialize(self):
         return 'function %s {\n%s\n%s\n}\n' % (self._name,
                                                self.preamble.serialize(),
-           '\n\n'.join(block.serialize() for block in self.blocks))
+           '\n\n'.join(block.serialize() for block in (self.allblocks if \
+                       self._varsfinalized else self.blocks)))
+
+    def __str__(self):
+        return 'Function(%s)' % (self._name)
 
 
 class BasicBlock(FunctionLike, InstructionSeq):
@@ -432,9 +510,12 @@ class BasicBlock(FunctionLike, InstructionSeq):
     def reset(self):
         self._use = 0
 
+    def use_count(self):
+        return self._use
+
     @property
     def global_name(self):
-        return self._func._name + '_' + self._name
+        return self._func._name + '/' + self._name
 
     def __str__(self):
         return 'BasicBlock(%s)' % self.global_name
@@ -471,7 +552,6 @@ class SuperBlock(BasicBlock):
 
     def __init__(self, name, func):
         super().__init__(name, func)
-        self._use = 2 # prevent elimination and inlining
         self.defined = True
         self._clear = False
         self.is_entry = False
@@ -485,6 +565,13 @@ class SuperBlock(BasicBlock):
     def usage(self):
         if self._clear:
             super().usage()
+
+    def use_count(self):
+        if self._clear:
+            if self.is_entry:
+                return 1 + super().use_count()
+            return super().use_count()
+        return 2 # prevent elimination and inlining
 
     def superclear(self):
         self._clear = True

@@ -189,6 +189,13 @@ class ArrayPath(Path):
 class StackPath(ArrayPath):
     name = 'stack'
 
+def StackFrame(index):
+    class StackFramePath(ArrayPath):
+        name = 'stack[%d].stack' % index
+    return StackFramePath
+
+StackFrameHead = StackFrame(0)
+
 class GlobalPath(ArrayPath):
     name = 'globals'
 
@@ -393,12 +400,6 @@ class DataGetEtag(DataGet):
     def __init__(self, path):
         super().__init__(EntityTag, path)
 
-class DataGetStack(DataGet):
-
-    def __init__(self, index, key=None):
-        super().__init__(EntityTag, StackPath(index, key))
-
-
 class DataMerge(Command):
 
     def __init__(self, ref, nbt):
@@ -444,15 +445,9 @@ class DataModifyFrom(DataModify):
 
 class DataModifyStack(DataModifyValue):
 
-    def __init__(self, index, key, action, value):
-        super().__init__(EntityReference(EntityTag), StackPath(index, key), action,
+    def __init__(self, index, key, action, value, path=StackPath):
+        super().__init__(EntityTag.ref, path(index, key), action,
                          value)
-
-class DataModifyFromStack(DataModifyFrom):
-
-    def __init__(self, index1, action, index2):
-        super().__init__(EntityReference(EntityTag), StackPath(index1), action,
-                         EntityReference(EntityTag), StackPath(index2))
 
 class DataRemove(Command):
 
@@ -502,7 +497,7 @@ class Tellraw(Command):
             return {'score':
                     {'name': arg.selector(None).resolve(scope),
                      'objective': arg.resolve(scope)}}
-        if isinstance(arg, StackPath):
+        if isinstance(arg, Path):
             return {'nbt': arg.resolve(scope),
                     'entity': EntityTag.resolve(scope)}
         else:

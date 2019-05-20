@@ -1,15 +1,15 @@
 try:
-    from .parser_gen import Lark_StandAlone, Interpreter, v_args
+    from .parser_gen import Lark_StandAlone, Interpreter, v_args, Token
     _standalone_instance = Lark_StandAlone()
 except ImportError:
-    from lark import Lark, v_args
+    from lark import Lark, v_args, Token
     from lark.visitors import Interpreter
     with open('cmd_ir/grammar.lark', 'r') as f:
         _standalone_instance = Lark(f, parser='lalr')
 
 from .core_types import *
 
-from .core import TopLevel
+from .core import TopLevel, ExternFunction
 from .instructions import Insn, ConstructorInsn, SetScore, SimpleOperationInsn
 
 class BuildProgram(Interpreter):
@@ -24,6 +24,10 @@ class BuildProgram(Interpreter):
         self.curr_seq = self.holder.preamble
         insns = self.visit_children(node)
         self.curr_seq = None
+
+    def extern_func(self, node):
+        name = node.children[0].value
+        self.top.store(name, ExternFunction(name))
 
     def function(self, node):
         name = node.children[0].value
@@ -80,7 +84,15 @@ class BuildProgram(Interpreter):
 
     def operand(self, node):
         token = node.children[0]
-        return self.token_to_val(token)
+        if isinstance(token, Token):
+            return self.token_to_val(token)
+        # must be tuple
+        tup, = self.visit_children(node)
+        return tup
+
+    def tuple(self, node):
+        tokens = self.visit_children(node)
+        return tuple(map(self.token_to_val, tokens))
 
     def atom(self, node):
         token, = node.children
