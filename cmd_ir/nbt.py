@@ -172,8 +172,8 @@ class NBTCompound(RecurseMixin):
 
     type = NBTType.compound
 
-    def __init__(self):
-        self.items = OrderedDict()
+    def __init__(self, items=[]):
+        self.items = OrderedDict(items)
 
     def set(self, name, value):
         assert isinstance(name, str)

@@ -84,12 +84,20 @@ class EntityLocalRef(Ref):
     def selector(self, where):
         if isinstance(self.target, Selector):
             return Selector(self.target.type,
-                            ComboSelectorArgs(self.target.where, where))
+                            ComboSelectorArgs.new(self.target.where, where))
         if isinstance(self.target, NameRef):
             assert where is None, "Cannot apply selector args to specific " \
                    + "entity local (%s is specific to %s), tried selector: %s" % (
                        self.name, self.target.name, where)
             return self.target
+
+class CriteriaRef(Ref):
+
+    def __init__(self, criteria):
+        self.criteria = criteria
+
+    def resolve(self, scope):
+        assert False, "TODO"
 
 class SimpleResolve(Resolvable):
 
@@ -191,7 +199,7 @@ class StackPath(ArrayPath):
 
 def StackFrame(index):
     class StackFramePath(ArrayPath):
-        name = 'stack[%d].stack' % index
+        name = 'stack[%d].stack' % (-index - 1)
     return StackFramePath
 
 StackFrameHead = StackFrame(0)
@@ -222,9 +230,8 @@ class Cmd(Command):
 
 class Execute(Command):
 
-    def __init__(self, chain, cmd):
+    def __init__(self, chain):
         self.chain = SimpleResolve(*chain._components)
-        self.command = cmd
 
     @staticmethod
     def where(where, cmd):
@@ -239,17 +246,18 @@ class Execute(Command):
         return ExecuteChain.unless_where(cond).run(cmd)
 
     def resolve(self, scope):
-        return 'execute %s run %s' % (self.chain.resolve(scope),
-                                      self.command.resolve(scope))
+        return 'execute %s' % self.chain.resolve(scope)
 
 def ensure_selector(sel_arg):
     return sel_arg.as_selector() if isinstance(sel_arg, SelectorArgs) \
+           else sel_arg.target if isinstance(sel_arg, EntityReference) \
            else sel_arg
 
 class ExecuteChain:
 
     def __init__(self):
         self._components = []
+        self.can_terminate = False
 
     def add(self, *args):
         for arg in args:
@@ -262,7 +270,12 @@ class ExecuteChain:
         return self
 
     def run(self, cmd):
-        return Execute(self, cmd)
+        self.add('run', cmd)
+        return Execute(self)
+
+    def finish(self):
+        assert self.can_terminate
+        return Execute(self)
 
     @staticmethod
     def unless_where(cond):
@@ -273,46 +286,58 @@ class ExecuteChain:
         return ExecuteChain().cond('if').where(cond)
 
     def where(self, select_arg):
+        self.can_terminate = False
         return self.add('as', ensure_selector(select_arg))
 
     def at(self, select_arg):
+        self.can_terminate = False
         return self.add('at', ensure_selector(select_arg))
 
     def at_pos(self, pos):
+        self.can_terminate = False
         return self.add('positioned', pos)
 
     def at_entity_pos(self, select_arg):
+        self.can_terminate = False
         return self.add('positioned', 'as', ensure_selector(select_arg))
 
     def align(self, axes):
+        self.can_terminate = False
         assert ''.join(axis for axis in axes if axis in 'xyz') == axes
         return self.add('align', axes)
 
     def facing(self, pos):
+        self.can_terminate = False
         return self.add('facing', pos)
 
     def facing_entity(self, select_arg, feature):
+        self.can_terminate = False
         assert feature == 'eyes' or feature == 'feet'
         return self.add('facing', 'entity', ensure_selector(select_arg), \
                         feature)
 
     def rotated(self, y, x):
+        self.can_terminate = False
         return self.add('rotated', y, x)
 
     def rotated_as_entity(self, select_arg):
+        self.can_terminate = False
         return self.add('rotated', 'as', ensure_selector(select_arg))
 
     def anchored(self, anchor):
+        self.can_terminate = False
         assert anchor == 'feet' or anchor == 'eyes'
         return self.add('anchored', anchor)
 
     def cond(self, cond_type):
+        self.can_terminate = False
         assert cond_type == 'if' or cond_type == 'unless'
         return ExecuteChain.Cond(self, cond_type)
 
     class Cond:
 
         def add(self, *args):
+            self.parent.can_terminate = True
             return self.parent.add(*((self.cond_type,) + args))
 
         def __init__(self, parent, cond_type):
@@ -323,13 +348,26 @@ class ExecuteChain:
             return self.add('entity', ensure_selector(select_arg))
 
         def score(self, target, t_objective, operator, source, s_objective):
+            assert operator in ['<', '<=', '=', '>=', '>']
             return self.add('score', target, t_objective, operator, source,
                              s_objective)
+
+        def var_cmp(self, left, operator, right):
+            return self.score(left.selector(None), left, operator,
+                              right.selector(None), right)
 
         def score_range(self, target, objective, range):
             return self.add('score', target, objective, 'matches', range)
 
+        def var_range(self, var, range):
+            return self.score_range(var.selector(None), var, range)
+
+        def block(self, pos, block):
+            assert isinstance(pos, BlockPos)
+            return self.add('block', pos, block)
+
     def store(self, store_type):
+        self.can_terminate = False
         return ExecuteChain.Store(self, store_type)
 
     class Store:
@@ -361,6 +399,18 @@ class EntityReference(BlockOrEntityRef):
 
 class BlockPos(Resolvable):
     pass
+
+class RelativeBlockCoord(SimpleResolve):
+
+    def __init__(self, val):
+        assert type(val) == int
+        super().__init__('~%s' % (str(val) if val else ''))
+
+class BasicBlockPos(SimpleResolve, BlockPos):
+
+    def __init__(self, x, y, z):
+        args = [str(a) if type(a) == int else a for a in (x, y, z)]
+        super().__init__(*args)
 
 class BlockReference(BlockOrEntityRef):
 
@@ -503,6 +553,39 @@ class Tellraw(Command):
         else:
             raise RuntimeError('Unknown argument type %r' % type(arg))
 
+class Teleport(Command):
+
+    def __init__(self, ref, pos):
+        assert isinstance(ref, EntityReference)
+        self.ent = ref.target
+        self.pos = pos
+
+    def resolve(self, scope):
+        return 'tp %s %s' % (self.ent.resolve(scope), self.pos.resolve(scope))
+
+class Clone(Command):
+
+    def __init__(self, src0, src1, dest):
+        self.src0 = src0
+        self.src1 = src1
+        self.dest = dest
+
+    def resolve(self, scope):
+        return 'clone %s %s %s' % (self.src0.resolve(scope),
+                                   self.src1.resolve(scope),
+                                   self.dest.resolve(scope))
+
+class Setblock(Command):
+
+    def __init__(self, pos, block):
+        assert isinstance(pos, BlockPos)
+        self.pos = pos
+        self.block = block
+
+    def resolve(self, scope):
+        return 'setblock %s %s' % (self.pos.resolve(scope),
+                                   self.block.resolve(scope))
+
 class Scoreboard(Command):
 
     allows_negative = False
@@ -549,7 +632,6 @@ class Tag(Command):
     def resolve(self, scope):
         return 'tag %s %s %s' % (EntityTag.resolve(scope), self.op, self.tag)
 
-
 class Operation(Command):
     def __init__(self, left, right, where=None):
         assert isinstance(left, Ref)
@@ -595,20 +677,14 @@ class SimpleSelectorArgs(SelectorArgs):
     def resolve(self, scope):
         return dict(self.args)
 
-class SelRange(SelectorArgs):
-    def __init__(self, varref, min=None, max=None):
+class ScoreRange(Resolvable):
+
+    def __init__(self, min=None, max=None):
         assert min is not None or max is not None
-        assert isinstance(varref, Ref)
-        assert varref.supports_where, "TODO"
-        self.var = varref
         self.min = min
         self.max = max
 
-    def as_selector(self):
-        return self.var.selector(self)
-
     def resolve(self, scope):
-        name = self.var.resolve(scope)
         range = ''
         if self.min is not None:
             range = '%d' % self.min
@@ -616,17 +692,33 @@ class SelRange(SelectorArgs):
             range += '..%d' % self.max
         elif self.max is None:
             range += '..'
-        return { 'scores': { name: range } }
+        return range
+
+class SelRange(SelectorArgs):
+    def __init__(self, varref, min=None, max=None):
+        assert isinstance(varref, Ref)
+        assert varref.supports_where, "TODO"
+        self.var = varref
+        self.range = ScoreRange(min, max)
+
+    def as_selector(self):
+        return self.var.selector(self)
+
+    def resolve(self, scope):
+        name = self.var.resolve(scope)
+        return { 'scores': { name: self.range.resolve(scope) } }
 
 class SelEquals(SelRange):
     def __init__(self, varref, value):
         super(SelEquals, self).__init__(varref, value, value)
 
 class ComboSelectorArgs(SelectorArgs):
-    def __new__(cls, first, second):
+
+    @staticmethod
+    def new(first, second):
         if first is None: return second
         if second is None: return first
-        return SelectorArgs.__new__(cls)
+        return ComboSelectorArgs(first, second)
 
     def __init__(self, first, second):
         self.first = first
@@ -640,6 +732,102 @@ class ComboSelectorArgs(SelectorArgs):
         sel.update(self.first.resolve(scope))
         sel.update(self.second.resolve(scope))
         return sel
+
+class SelNbt(SelectorArgs):
+
+    def __init__(self, path, value):
+        self.nbt_spec = {}
+        self.build_selector(path, self.nbt_spec, value)
+
+    def build_selector(self, path, parent, value):
+        for i in range(len(path) - 1):
+            node = path[i]
+            if node.isdigit():
+                pos = int(node)
+                while len(parent) < pos + 1:
+                    parent.append({})
+                parent = parent[pos]
+                continue
+            if node not in parent:
+                parent[node] = {}
+            if len(path) > i + 1:
+                if path[i+1].isdigit():
+                    if not parent[node]:
+                        parent[node] = []
+                    else:
+                        assert type(parent[node]) == list
+            parent = parent[node]
+        if path[-1].isdigit():
+            pos = int(path[-1])
+            while len(parent) < pos + 1:
+                parent.append({})
+            path[-1] = pos
+        parent[path[-1]] = value
+
+    def stringify_nbt(self, node, scope):
+        if type(node) == dict:
+            return '{%s}' % ','.join('%s:%s' % (k, self.stringify_nbt(v, scope))
+                                     for k,v in node.items())
+        if type(node) == list:
+            return '[%s]' % ','.join(map(lambda n:self.stringify_nbt(n, scope), node))
+        if isinstance(node, Resolvable):
+            return node.resolve(scope)
+        assert False, type(node)
+
+    def resolve(self, scope):
+        return {'nbt': self.stringify_nbt(self.nbt_spec, scope)}
+
+class TeamName(Resolvable):
+
+    def __init__(self, name):
+        self.name = name
+
+    def resolve(self, scope):
+        return scope.team_name(self.name)
+
+class TeamModify(Command):
+
+    def __init__(self, team, attr, value):
+        assert isinstance(team, TeamName)
+        self.team = team
+        assert attr in ['color', 'friendlyFire', 'seeFriendlyInvisibles',
+                        'nametagVisibility', 'deathMessageVisibility',
+                        'collisionRule', 'displayName', 'prefix', 'suffix']
+        self.attr = attr
+        self.value = value
+
+    def resolve(self, scope):
+        return 'team modify %s %s %s' % (self.team.resolve(scope), self.attr,
+                                         self.value)
+
+class Bossbar(Resolvable):
+
+    def __init__(self, name):
+        self.name = name
+
+    def resolve(self, scope):
+        return scope.bossbar(self.name)
+
+class BossbarSet(Command):
+
+    def __init__(self, bar, prop, value):
+        assert isinstance(bar, Bossbar)
+        self.bar = bar
+        self.prop = prop
+        self.value = value
+
+    def resolve(self, scope):
+        value = (' ' + self.value.resolve(scope)) if self.value else ''
+        return 'bossbar set %s %s%s' % (self.bar.resolve(scope), self.prop,
+                                         value)
+
+class Kill(Command):
+
+    def __init__(self, selector):
+        self.target = selector
+
+    def resolve(self, scope):
+        return 'kill %s' % self.target.resolve(scope)
 
 class LabelledSequence(CommandSequence):
     def __init__(self, label, varname='func_pointer'):

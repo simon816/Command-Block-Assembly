@@ -538,7 +538,7 @@ void OP(int src, int *dest) {
 
     def handle_cmd(self, cmd):
         cmd = self.block.define(CreateCommand(VirtualString(cmd)))
-        self.block.add(RunFunction(cmd))
+        self.block.add(RunCommand(cmd))
 
     def _read_selector(self, sel_type, pairs):
         assert sel_type[0] == 'string'
@@ -691,6 +691,7 @@ class SessionWriter(FuncWriter):
         setup = top.lookup_func('sub___setup__')
         self.setup_func = setup.global_name if setup is not None else None
         self.event_handlers = []
+        self.setupfuncs = []
 
     def write_func_table(self, table):
         self.sess.load_subroutine_table(table)
@@ -710,5 +711,14 @@ class SessionWriter(FuncWriter):
                 'handler': handler.global_name
             })
 
+    def write_setup_function(self, func):
+        self.setupfuncs.append(func)
+
     def finish(self):
         self.sess.add_event_handlers(self.event_handlers)
+        if self.setupfuncs:
+            sub = Subsequence()
+            from commands import Function
+            sub.commands = [Function(func.global_name) \
+                            for func in self.setupfuncs]
+            self.session.set_setup_hook(sub)

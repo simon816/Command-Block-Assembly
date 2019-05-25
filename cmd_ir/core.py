@@ -19,6 +19,10 @@ class FuncWriter(metaclass=abc.ABCMeta):
     def write_event_handler(self, handler, event):
         pass
 
+    @abc.abstractmethod
+    def write_setup_function(self, func):
+        pass
+
 class CmdWriter:
 
     def __init__(self):
@@ -77,12 +81,12 @@ class Preamble(InstructionSeq):
         self.is_top = isinstance(parent, TopLevel)
 
     def add(self, insn):
-        assert insn.preamble_safe
+        assert insn.preamble_safe, insn
         return super().add(insn)
 
     def apply(self, writer):
         for insn in self.insns:
-            insn.apply(writer)
+            insn.apply(writer, self.holder)
 
     def serialize(self):
         indent = '' if self.is_top else '    '
@@ -149,7 +153,7 @@ class VariableHolder:
         return self.uniq(namehint, lambda n: value)
 
     def store(self, name, value):
-        assert name not in self.scope
+        assert name not in self.scope, '%s: %s' % (name, self.scope[name])
         self.scope[name] = value
 
     def name_for(self, value):
@@ -429,12 +433,18 @@ class IRFunction(VisibleFunction, VariableHolder):
         for block in self.allblocks:
             writer.write_function(block.global_name, block.writeout())
 
+    def get_registers(self):
+        from .variables import Variable
+        return [var for var in self.scope.values() \
+                if isinstance(var, Variable) and var._direct_ref()]
+
     def is_closed(self):
         return all(b.is_terminated() for b in self.blocks)
 
     def configure_parameters(self, hasownstackframe):
         from .variables import ParameterVariable, ReturnVariable, \
                                  LocalStackVariable
+        # Linked to InvokeInsn
         offset = 0
         rets = []
         for var in self.scope.values():
@@ -477,8 +487,10 @@ class IRFunction(VisibleFunction, VariableHolder):
             assert vars[0].offset == 0, "Stack tip not 0"
             assert vars[-1].offset == len(vars) - 1, "Stack base not length - 1"
             assert len({v.offset for v in vars}) == len(vars), "Stack collision"
-            # Push const int 0 for now, TODO consider defaults
-            self._entryblock.add(PushNewStackFrame(tuple(0 for var in vars[::-1])))
+            # Push the variable type - this initializes with the default value
+            # TODO consider pushing initial value if known
+            self._entryblock.add(PushNewStackFrame(tuple(var.type for var \
+                                                         in vars[::-1])))
             self._exitblock.add(PopStack())
         # Always branch to real entry point
         self._entryblock.add(Call(self.blocks[0]))
@@ -538,7 +550,7 @@ class BasicBlock(FunctionLike, InstructionSeq):
     def writeout(self):
         writer = CmdWriter()
         for insn in self.insns:
-            insn.apply(writer)
+            insn.apply(writer, self._func)
         if self.needs_success_tracker:
             writer.write(SetConst(Var('success_tracker'), 1))
         return writer.get_output()

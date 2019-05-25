@@ -12,6 +12,13 @@ class DeclareVisitor(TopVisitor):
             top.reset_var_usage()
         super().visit(top)
 
+    def visit_preamble(self, preamble):
+        preamble.transform(self.visit_pre_insn)
+
+    def visit_pre_insn(self, insn):
+        insn.declare()
+        return insn
+
     def visit_function(self, name, func):
         if self.reset:
             func.reset()
@@ -23,6 +30,13 @@ class DeclareFnVisitor(FuncVisitor):
 
     def __init__(self, reset):
         self.reset = reset
+
+    def visit_preamble(self, preamble):
+        preamble.transform(self.visit_pre_insn)
+
+    def visit_pre_insn(self, insn):
+        insn.declare()
+        return insn
 
     def visit_block(self, name, block):
         if self.reset:
@@ -129,6 +143,11 @@ class DeadCodeBlockEliminator(BlockVisitor):
             if insn.value == insn.var:
                 self.kills.add(insn)
             self.varwrites[insn.var] = insn
+        elif isinstance(insn, SimpleOperationInsn):
+            # safe to kill, note that the variable is not declared read in
+            # SimpleOperationInsn so this optimization is possible
+            if not insn.dest.is_read_from:
+                self.kills.add(insn)
         else:
             # Don't remove anything that is used
             for arg in insn.query(Variable):
@@ -168,7 +187,7 @@ class CallEliminator(BlockVisitor):
             if insn.label.is_empty():
                 print("Empty", insn.label)
                 return None
-        if isinstance(insn, RangeBr):
+        if isinstance(insn, (CmpBr, RangeBr)):
             copy = insn.copy()
             changed = False
             for arg in copy.query(FunctionLike):
@@ -222,7 +241,7 @@ class AliasRewriter(BlockVisitor):
                 print("Alias re", arg.val, "to", self.data.aliases[arg.val])
                 arg.val = self.data.aliases[arg.val]
         # Need to update success tracker to new branch
-        if changed and isinstance(new, RangeBr) and new.if_true:
+        if changed and isinstance(new, (RangeBr, CmpBr)) and new.if_true:
             new.if_true.needs_success_tracker = True
         return new if changed else insn
 
@@ -260,6 +279,20 @@ class ConstantFolding(BlockVisitor):
                             return Call(new.if_true) if new.if_true else None
                         else:
                             return Call(new.if_false) if new.if_false else None
+                    elif isinstance(new, CmpBr):
+                        val = self.varvals[arg.val]
+                        var = new.left
+                        op = new.op
+                        if arg.name == 'left':
+                            var = new.right
+                            op = {'le': 'ge', 'lt': 'gt', 'ge': 'le',
+                                  'gt': 'lt', 'eq': 'eq'
+                            }[op]
+                        val += 1 if op == 'gt' else -1 if op == 'lt' else 0
+                        min = None if op in ['lt', 'le'] else val
+                        max = None if op in ['gt', 'ge'] else val
+                        return RangeBr(var, min, max, new.if_true, new.if_false)
+
         # See if we can perform constant folding on the operation
         if isinstance(new, SimpleOperationInsn):
             destval = self.get_val(new.dest)
@@ -275,6 +308,12 @@ class ConstantFolding(BlockVisitor):
                 if isinstance(new, ModScore) and new.src == 1:
                     self.varvals[new.dest] = 0
                     return SetScore(new.dest, 0)
+
+        if isinstance(new, SubScore) and isinstance(new.src, Variable):
+            # Subtracting itself always = 0
+            if new.src == new.dest:
+                self.varvals[new.dest] = 0
+                return SetScore(new.dest, 0)
 
         # Remove any variables that are written to
         for arg in new.query(Variable):
@@ -312,6 +351,20 @@ from collections import defaultdict
 
 class VariableAliasing(BlockVisitor):
 
+    """
+    Traces aliases and replaces them
+
+    e.g.
+
+    $x = $y
+    rangebr $x, 0, 0, :x_eq_zero, NULL
+
+    Becomes:
+
+    $x = $y
+    rangebr $y, 0, 0, :x_eq_zero, NULL
+    """
+
     def visit(self, block):
         self.aliases = {}
         self.inverse = defaultdict(set)
@@ -321,21 +374,29 @@ class VariableAliasing(BlockVisitor):
     def visit_insn(self, insn):
         new = insn.copy()
         changed = False
+        # Replace READs
         for arg in new.query(Variable):
             if arg.access is READ and arg.val in self.aliases:
                 print("Alias replace", self.n(arg.val),
                       self.n(self.aliases[arg.val]))
                 arg.val = self.aliases[arg.val]
                 changed = True
+        # Subtracting own alias equivalent to setting to 0
+        if isinstance(insn, SubScore) and isinstance(insn.src, Variable) \
+           and insn.dest in self.aliases \
+           and insn.src == self.aliases[insn.dest]:
+            self.remove_alias(insn.dest)
+            self.remove_inverse(insn.dest)
+            return SetScore(insn.dest, 0)
+        # Invalidate any WRITEs
+        for arg in new.query(Variable):
             if arg.access is WRITE:
                 # Anyone with this variable as an alias no longer aliases
                 # because we have changed value
                 if arg.val in self.inverse:
                     self.remove_inverse(arg.val)
                 if arg.val in self.aliases:
-                    sub = self.aliases[arg.val]
-                    self.inverse[sub].remove(arg.val)
-                    del self.aliases[arg.val]
+                    self.remove_alias(arg.val)
         if isinstance(insn, SetScore):
             if isinstance(insn.value, Variable) and insn.value != insn.var:
                 if insn.var in self.aliases:
@@ -351,6 +412,11 @@ class VariableAliasing(BlockVisitor):
             self.inverse.clear()
         return new if changed else insn
 
+    def remove_alias(self, var):
+        sub = self.aliases[var]
+        self.inverse[sub].remove(var)
+        del self.aliases[var]
+
     def remove_inverse(self, var):
         keys = self.inverse[var]
         del self.inverse[var]
@@ -362,6 +428,103 @@ class VariableAliasing(BlockVisitor):
         for gvar in [var for var in self.aliases.keys() \
                    if isinstance(var, GlobalVariable)]:
             del self.aliases[gvar]
+
+# Not 100% confident in this optimizer
+class ComparisonOptimizer(BlockVisitor):
+
+    """
+    Optimizes a specific situation where a comparison is made by subtracting
+    two values and branching on the result
+
+    e.g.
+
+    $cmp = $x
+    $cmp -= $y
+    rangebr $cmp, 0, 0, :x_equals_y, NULL
+
+    Optimizes to:
+
+    $cmp = $x
+    $cmp -= $y
+    cmpbr $y, eq, $x, :x_equals_y, NULL
+    """
+
+    def visit(self, block):
+        self.tracked = {}
+        self.lookup = defaultdict(set)
+        return super().visit(block)
+
+    def visit_insn(self, insn):
+        if isinstance(insn, SetScore):
+            self.invalidate(insn.var)
+            self.tracked[insn.var] = (insn.value, None)
+            if isinstance(insn.value, Variable):
+                # value is being tracked by var
+                self.lookup[insn.value].add(insn.var)
+        elif isinstance(insn, SubScore):
+            if insn.dest in self.tracked:
+                first, second = self.tracked[insn.dest]
+                if second:
+                    del self.tracked[insn.dest]
+                    if first in self.lookup:
+                        del self.lookup[first]
+                    if second in self.lookup:
+                        del self.lookup[second]
+                else:
+                    self.tracked[insn.dest] = (first, insn.src)
+                    if isinstance(insn.src, Variable):
+                        self.lookup[insn.src].add(insn.dest)
+            else:
+                self.invalidate(insn.dest)
+        elif isinstance(insn, RangeBr):
+            if insn.var in self.tracked:
+                right, left = self.tracked[insn.var]
+                op = None
+                if insn.min == 1 and insn.max is None:
+                    op = 'lt'
+                if insn.min == 0 and insn.max is None:
+                    op = 'le'
+                if insn.min == 0 and insn.max == 0:
+                    op = 'eq'
+                if insn.min is None and insn.max == 0:
+                    op = 'ge'
+                if insn.min is None and insn.max == -1:
+                    op = 'gt'
+                if op is not None and right is not None and left is not None:
+                    var, const = None, None
+                    if isinstance(left, Variable):
+                        if isinstance(right, Variable):
+                            insn = CmpBr(left, op, right, insn.if_true,
+                                         insn.if_false)
+                        else:
+                            var, const = left, right
+                    elif isinstance(right, Variable):
+                        var, const = right, left
+                        op = {'le': 'ge', 'lt': 'gt', 'ge': 'le',
+                              'gt': 'lt', 'eq': 'eq'
+                        }[op]
+                    if var is not None:
+                        const += 1 if op == 'gt' else -1 if op == 'lt' else 0
+                        min = None if op in ['lt', 'le'] else const
+                        max = None if op in ['gt', 'ge'] else const
+                        insn = RangeBr(var, min, max, insn.if_true,
+                                       insn.if_false)
+        else:
+            for arg in insn.query(Variable):
+                if arg.access is WRITE:
+                    self.invalidate(arg.val)
+        if insn.is_branch:
+            self.tracked = {}
+            self.lookup.clear()
+        return insn
+
+    def invalidate(self, var):
+        if var in self.lookup:
+            for key in self.lookup[var]:
+                if key in self.tracked:
+                    del self.tracked[key]
+        if var in self.tracked:
+            del self.tracked[var]
 
 class BlockOptimizers(FuncVisitor):
 
@@ -419,7 +582,8 @@ class Optimizer:
                     AliasRewriter(alias_data),
                     CallEliminator(),
                     ConstantFolding(),
-                    VariableAliasing()
+                    VariableAliasing(),
+                    ComparisonOptimizer()
                 ]),
                 AliasInliner(alias_data)
             ])

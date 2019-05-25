@@ -17,6 +17,8 @@ def get_subclasses(cls):
 
 READ, WRITE = 'acc_read', 'acc_write'
 
+STACK_HEAD = -1
+
 class Insn(metaclass=abc.ABCMeta):
 
     __lookup_cache = {}
@@ -61,7 +63,7 @@ class Insn(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def apply(self, out):
+    def apply(self, out, func):
         pass
 
     def serialize_args(self, holder):
@@ -76,6 +78,10 @@ class Insn(metaclass=abc.ABCMeta):
                 return val.serialize()
             if isinstance(val, tuple):
                 return '(%s)' % ', '.join(map(serialize, val))
+            if isinstance(val, VarType):
+                return val.name
+            if isinstance(val, TeamColor):
+                return val.name
             assert isinstance(val, NativeType), "%s, %s" % (val, self)
             name = holder.name_for(val)
             if isinstance(val, BasicBlock):
@@ -126,6 +132,10 @@ class QueryResult:
         self.__access = access
 
     @property
+    def name(self):
+        return self.__name
+
+    @property
     def access(self):
         return self.__access
 
@@ -135,7 +145,8 @@ class QueryResult:
 
     @val.setter
     def val(self, value):
-        assert isinstance(value, self.__type), self.__insn
+        assert isinstance(value, self.__type), '%s %s %s' % (self.__name,
+                                                  type(value), self.__insn)
         setattr(self.__insn, self.__name, value)
 
     def accepts(self, vtype):
@@ -143,7 +154,7 @@ class QueryResult:
 
 class VoidApplicationInsn(Insn):
 
-    def apply(self, out):
+    def apply(self, out, func):
         pass
 
 class ConstructorInsn(VoidApplicationInsn):
@@ -187,12 +198,15 @@ class SetScore(Insn):
     argnames = 'var value'
     insn_name = '#invalid'
 
+    def activate(self, seq):
+        assert self.var.type.isnumeric
+
     def declare(self):
         self.var.usage_write()
         if isinstance(self.value, Variable):
             self.value.usage_read()
 
-    def apply(self, out):
+    def apply(self, out, func):
         if isinstance(self.value, Variable):
             self.value.clone_to(self.var, out)
         else:
@@ -208,15 +222,22 @@ class SimpleOperationInsn(Insn):
     argnames = 'dest src'
     insn_name = '#invalid'
 
+    def activate(self, seq):
+        assert self.dest.type.isnumeric
+        if isinstance(self.src, Variable):
+            assert self.src.type.isnumeric
+
     def declare(self):
+        # Maybe a read is needed here. Don't for now to allow dead elimination
+        # self.dest.usage_read()
         self.dest.usage_write()
         if isinstance(self.src, Variable):
             self.src.usage_read()
 
-    def apply(self, out):
+    def apply(self, out, func):
         # Possible optimisation where scope exit ("put back" value) is applied
         # directly to operation i.e. store result ... scoreboard add ...
-        with self.dest.open_for_write(out) as ref:
+        with self.dest.open_for_write(out, read=True) as ref:
             if isinstance(self.src, Variable):
                 with self.src.open_for_read(out) as srcref:
                     out.write(self.with_ref(ref, srcref))
@@ -287,7 +308,7 @@ class SwapScore(OnlyRefOperationInsn):
 
 class Call(Insn):
 
-    args = [FunctionLike]
+    args = [BasicBlock]
     argnames = 'label'
     insn_name = 'call'
     is_block_terminator = True
@@ -296,7 +317,7 @@ class Call(Insn):
     def declare(self):
         self.label.usage()
 
-    def apply(self, out):
+    def apply(self, out, func):
         out.write(Function(self.label.global_name))
 
 def Opt(optype):
@@ -306,19 +327,22 @@ def make_stack_frame_from(values, out):
     stack = NBTList(NBTType.compound)
     for val in values:
         item = NBTCompound()
-        default = 0
         if type(val) == int:
             default = val
             vtype = VarType.i32
         elif isinstance(val, Variable):
             vtype = val.type
+            default = vtype.default_val
+        elif isinstance(val, VarType):
+            vtype = val
+            default = val.default_val
         else:
             assert False, val
         item.set(vtype.nbt_path_key, vtype.nbt_type.new(default))
         stack.append(item)
     frame = NBTCompound()
     frame.set('stack', stack)
-    out.write(DataModifyStack(None, None, 'prepend', frame))
+    out.write(DataModifyStack(None, None, 'append', frame))
     for i, val in enumerate(values):
         if isinstance(val, Variable):
             dest = LocalStackVariable(val.type, i)
@@ -348,14 +372,15 @@ class TupleQueryResult(QueryResult):
     def accepts(self, vtype):
         return issubclass(vtype, self.__type)
 
-class Invoke(Call):
+class Invoke(Insn):
 
     args = [VisibleFunction, Opt(tuple), Opt(tuple)]
     access = [READ, READ, WRITE]
-    argnames = 'label fnargs retvars'
+    argnames = 'func fnargs retvars'
     fnargs_type = (int, Variable)
     retvars_type = Opt(Variable)
     insn_name = 'invoke'
+    is_block_terminator = True
     is_branch = True
 
     def declare(self):
@@ -367,7 +392,7 @@ class Invoke(Call):
             for var in self.retvars:
                 if var is not None:
                     var.usage_write()
-        super().declare()
+        self.func.usage()
 
     # Allow queries into the tuple arguments
     def query(self, argtype):
@@ -378,49 +403,101 @@ class Invoke(Call):
                     yield TupleQueryResult(self, 'fnargs', i, self.fnargs_type,
                                            READ)
         if self.retvars:
-            for i, var in enumerate(self.fnargs):
+            for i, var in enumerate(self.retvars):
                 if isinstance(var, argtype):
                     yield TupleQueryResult(self, 'retvars', i,
                                            self.retvars_type, WRITE)
 
-    def apply(self, out):
+    def apply(self, out, func):
         # Validate arguments and return type
-        self.label.validate_args(self.fnargs, self.retvars)
+        self.func.validate_args(self.fnargs, self.retvars)
+
+        # See also: IRFunction.configure_parameters
+        # Build invocation frame
+        # list of:
+        #  - arguments
+        #  - return variable pointers
+        #  - saved registers
         allargs = []
-        arglen = 0
-        # Build parameter list
-        # - list of arguments followed by return variable pointers
+
+        # Arguments
+        args_start = 0
         if self.fnargs:
-            arglen = len(self.fnargs)
             allargs.extend(self.fnargs)
+
+        # Returns
+        ret_start = len(allargs)
         if self.retvars:
-            # default return variable = 0
-            allargs.extend([0 for var in self.retvars])
+            # default return variable = default for the type
+            allargs.extend([var.type.default_val for var in self.retvars])
+
+        # Save registers
+        reg_start = len(allargs)
+        registers = func.get_registers()
+        # Optimization - don't save registers used as return pointers
+        if self.retvars:
+            registers = [var for var in registers if var not in self.retvars]
+        allargs.extend(registers)
+
         if allargs:
             make_stack_frame_from(allargs, out)
-        super().apply(out)
+        out.write(Function(self.func.global_name))
+
+        # Restore registers
+        if registers:
+            for i, reg in enumerate(registers):
+                src = LocalStackVariable(reg.type, reg_start + i)
+                # shouldn't need to realign because they're registers,
+                # but just to be safe
+                reg.realign_frame(1)
+                src.clone_to(reg, out)
+                reg.realign_frame(-1)
+
         # Copy return values into return variables
         if self.retvars:
             for i, var in enumerate(self.retvars):
                 if var is None:
                     continue
-                src = LocalStackVariable(var.type, arglen + i)
+                src = LocalStackVariable(var.type, ret_start + i)
                 var.realign_frame(1)
                 src.clone_to(var, out)
                 var.realign_frame(-1)
+
+        # Pop invocation frame
         if allargs:
-            out.write(DataRemove(EntityTag.ref, StackPath(0)))
+            out.write(DataRemove(EntityTag.ref, StackPath(STACK_HEAD)))
+
+def _branch_apply(out, if_true, if_false, apply):
+    inverted = not if_true
+    if inverted:
+        if_true, if_false = if_false, if_true
+    have_false = if_false is not None
+    if have_false:
+        # Workaround: execute store doesn't set success to 0 if failed
+        # See MC-125058
+        # Can't use execute store anyway because it locks the success
+        # tracker. See MC-125145
+        out.write(SetConst(Var('success_tracker'), 0))
+    true_fn = Function(if_true.global_name)
+    out.write(apply(ExecuteChain().cond('unless' if inverted else 'if'))
+              .run(true_fn))
+    if have_false:
+        false_fn = Function(if_false.global_name)
+        out.write(Execute.If(SelEquals(Var('success_tracker'), 0),
+                             false_fn))
+
 
 class RangeBr(Insn):
 
-    args = [Variable, Opt(int), Opt(int), Opt(BasicBlock), Opt(BasicBlock)]
+    args = [Variable, Opt(int), Opt(int), Opt(FunctionLike), Opt(FunctionLike)]
     argnames = 'var min max if_true if_false'
     insn_name = 'rangebr'
     is_branch = True
 
     def activate(self, seq):
+        assert self.var.type.isnumeric
         assert self.min is not None or self.max is not None
-        assert self.if_true is not None or self.is_false is not None
+        assert self.if_true is not None or self.if_false is not None
         if self.if_false and self.if_true:
             self.if_true.needs_success_tracker = True
 
@@ -434,40 +511,60 @@ class RangeBr(Insn):
     def terminator(self):
         return self.if_true and self.if_false
 
-    def apply(self, out):
-        if not self.if_true:
-            if_true, if_false = self.if_false, self.if_true
-            inverted = True
-        else:
-            if_true, if_false = self.if_true, self.if_false
-            inverted = False
-        have_false = if_false is not None
-        if have_false:
-            # Workaround: execute store doesn't set success to 0 if failed
-            # See MC-125058
-            # Can't use execute store anyway because it locks the success
-            # tracker. See MC-125145
-            out.write(SetConst(Var('success_tracker'), 0))
+    def apply(self, out, func):
         with self.var.open_for_read(out) as var:
-            true_fn = Function(if_true.global_name)
-            sel_range = SelRange(var, self.min, self.max)
-            if inverted:
-                out.write(Execute.Unless(sel_range, true_fn))
-            else:
-                out.write(Execute.If(sel_range, true_fn))
-        if have_false:
-            false_fn = Function(if_false.global_name)
-            out.write(Execute.If(SelEquals(Var('success_tracker'), 0),
-                                 false_fn))
+            _branch_apply(out, self.if_true, self.if_false, lambda cond:
+                          cond.where(SelRange(var, self.min, self.max)))
+
+class CmpBr(Insn):
+
+    args = [Variable, str, Variable, Opt(FunctionLike), Opt(FunctionLike)]
+    argnames = 'left op right if_true if_false'
+    insn_name = 'cmpbr'
+    is_branch = True
+
+    def activate(self, seq):
+        assert self.left.type.isnumeric
+        assert self.right.type.isnumeric
+        assert self.op in ['lt', 'le', 'eq', 'ge', 'gt']
+        assert self.if_true is not None or self.if_false is not None
+        if self.if_false and self.if_true:
+            self.if_true.needs_success_tracker = True
+
+    def declare(self):
+        if self.if_true:
+            self.if_true.usage()
+        if self.if_false:
+            self.if_false.usage()
+        self.left.usage_read()
+        self.right.usage_read()
+
+    def terminator(self):
+        return self.if_true and self.if_false
+
+    def apply(self, out, func):
+        op = {
+            'lt': '<', 'le': '<=', 'eq': '=', 'ge': '>=', 'gt': '>'
+        }[self.op]
+        with self.left.open_for_read(out) as left:
+            with self.right.open_for_read(out) as right:
+                _branch_apply(out, self.if_true, self.if_false, lambda cond:
+                              cond.var_cmp(left, op, right))
 
 class CreateNBTValue(ConstructorInsn):
 
-    args = [NBTType, (float, int)]
+    args = [NBTType, (type(None), float, int, VirtualString)]
     argnames = 'type value'
     insn_name = 'nbt_val'
 
     def construct(self):
-        return self.type.new(self.value)
+        val = self.value
+        if isinstance(val, VirtualString):
+            val = str(val)
+        args = (val,)
+        if val is None:
+            args = tuple()
+        return self.type.new(*args)
 
 class CreateNBTList(ConstructorInsn):
 
@@ -487,7 +584,7 @@ class NBTListAppend(Insn):
     def activate(self, seq):
         assert self.list.list_type == self.value.type
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.list.append(self.value)
 
 class CreateNBTCompound(ConstructorInsn):
@@ -503,7 +600,7 @@ class NBTCompoundSet(Insn):
     argnames = 'var name val'
     insn_name = 'nbt_compound_set'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.var.set(self.name, self.val)
 
 class NBTDataMerge(Insn):
@@ -512,8 +609,44 @@ class NBTDataMerge(Insn):
     argnames = 'target data'
     insn_name = 'nbt_data_merge'
 
-    def apply(self, out):
+    def apply(self, out, func):
         out.write(DataMerge(self.target.as_cmdref(), self.data))
+
+class NBTAssign(Insn):
+
+    args = [Variable, NBTBase]
+    access = [WRITE, READ]
+    argnames = 'var nbt'
+    insn_name = 'nbt_assign'
+
+    def activate(self, seq):
+        assert self.var.type is VarType.nbt
+
+    def declare(self):
+        self.var.usage_write()
+
+    def apply(self, out, func):
+        path = self.var._direct_nbt()
+        assert path is not None
+        out.write(DataModifyValue(EntityTag.ref, path, 'set', self.nbt))
+
+class NBTSubPath(ConstructorInsn):
+
+    args = [Variable, VirtualString, VarType]
+    argnames = 'root path vartype'
+    insn_name = 'nbtsubpath'
+
+    def construct(self):
+        assert self.root.type is VarType.nbt
+        # Needs to be getter because path might not be resolved at this stage
+        return VirtualNbtVariable(self.vartype, self._getpath)
+
+    def _getpath(self):
+        # TODO proper child paths
+        return Path(self.root._direct_nbt().path + str(self.path))
+
+    def declare(self):
+        self.root.usage_read()
 
 class SelectorType(InsnArg):
 
@@ -557,7 +690,7 @@ class SetSelector(Insn):
     argnames = 'sel key value'
     insn_name = 'set_selector'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.sel.set(self.key, str(self.value))
 
 class SelectVarRange(Insn):
@@ -568,13 +701,23 @@ class SelectVarRange(Insn):
 
     def activate(self, seq):
         assert self.min is not None or self.max is not None
+        assert self.var.type.isnumeric
 
     def declare(self):
         self.var.usage_read()
 
-    def apply(self, out):
+    def apply(self, out, func):
         with self.var.open_for_read(out) as ref:
             self.sel.set_var_range(ref, self.min, self.max)
+
+class SelectNbt(Insn):
+
+    args = [Selector, VirtualString, NBTBase]
+    argnames = 'sel path val'
+    insn_name = 'sel_nbt'
+
+    def apply(self, out, func):
+        self.sel.set_nbt(str(self.path), self.val)
 
 PosType = (int, RelPosVal, AncPosVal)
 
@@ -620,8 +763,19 @@ class MultiOpen:
 class ExecChain(NativeType, MultiOpen):
 
     def __init__(self):
-        self.chain = ExecuteChain()
+        self.__chain = ExecuteChain()
+        self.terminated = False
         super().__init__()
+
+    @property
+    def chain(self):
+        assert not self.terminated
+        return self.__chain
+
+    def terminate(self):
+        assert not self.terminated
+        self.close()
+        self.terminated = True
 
 class CreateExec(ConstructorInsn):
 
@@ -652,6 +806,8 @@ class ExecStoreVarSpec(ExecStoreSpec):
 
     def apply(self, out, chain, storechain):
         with chain.context(self.var.open_for_write(out)) as ref:
+            if storechain.store_type == 'success':
+                out.write(SetConst(ref, 0)) # MC-125058
             storechain.score(EntityTag, ref)
 
 class ExecStoreEntity(ConstructorInsn):
@@ -673,6 +829,7 @@ class ExecStoreVar(ConstructorInsn):
     insn_name = 'exec_store_var'
 
     def construct(self):
+        assert self.var.type.isnumeric
         return ExecStoreVarSpec(self.var)
 
     def declare(self):
@@ -684,44 +841,90 @@ class ExecStore(Insn):
     argnames = 'chain storetype spec'
     insn_name = 'exec_store'
 
-    def apply(self, out):
+    def apply(self, out, func):
         ch = self.chain
         self.spec.apply(out, ch, ch.chain.store(self.storetype))
 
-class ExecUnlessEntity(Insn):
+class ExecCondBlock(Insn):
 
-    args = [ExecChain, Selector]
+    args = [ExecChain, Position, BlockType]
+    argnames = 'chain pos block'
+
+    def apply(self, out, func):
+        self.chain.chain.cond(self.cond) \
+          .block(self.pos.as_blockpos(), self.block)
+
+class ExecIfBlock(ExecCondBlock):
+    insn_name = 'exec_if_block'
+    cond = 'if'
+class ExecUnlessBlock(ExecCondBlock):
+    insn_name = 'exec_unless_block'
+    cond = 'unless'
+
+class ExecCondVar(Insn):
+
+    args = [ExecChain, Variable, Opt(int), Opt(int)]
+    argnames = 'chain var min max'
+
+    def activate(self, seq):
+        assert self.max or self.min
+        assert self.var.type.isnumeric
+
+    def declare(self):
+        self.var.usage_read()
+
+    def apply(self, out, func):
+        with self.chain.context(self.var.open_for_read(out)) as ref:
+            self.chain.chain.cond(self.cond).var_range(ref,
+                                  ScoreRange(self.min, self.max))
+
+class ExecIfVar(ExecCondVar):
+    insn_name = 'exec_if_var'
+    cond = 'if'
+class ExecUnlessVar(ExecCondVar):
+    insn_name = 'exec_unless_var'
+    cond = 'unless'
+
+class ExecCondEntity(Insn):
+
+    args = [ExecChain, EntitySelection]
     argnames = 'chain target'
-    insn_name = 'exec_unless_entity'
 
-    def apply(self, out):
-        self.chain.chain.cond('unless').where(self.target.as_cmdref())
+    def apply(self, out, func):
+        self.chain.chain.cond(self.cond).where(self.target.as_cmdref())
+
+class ExecIfEntity(ExecCondEntity):
+    insn_name = 'exec_if_entity'
+    cond = 'if'
+class ExecUnlessEntity(ExecCondEntity):
+    insn_name = 'exec_unless_entity'
+    cond = 'unless'
 
 class ExecAsEntity(Insn):
 
-    args = [ExecChain, Selector]
+    args = [ExecChain, EntitySelection]
     argnames = 'chain target'
     insn_name = 'exec_as'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.where(self.target.as_cmdref())
 
 class ExecAtEntity(Insn):
 
-    args = [ExecChain, Selector]
+    args = [ExecChain, EntitySelection]
     argnames = 'chain target'
     insn_name = 'exec_at_entity'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.at(self.target.as_cmdref())
 
 class ExecAtEntityPos(Insn):
 
-    args = [ExecChain, Selector]
+    args = [ExecChain, EntitySelection]
     argnames = 'chain target'
     insn_name = 'exec_at_entity_pos'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.at_entity_pos(self.target.as_cmdref())
 
 class ExecuteAtPos(Insn):
@@ -730,7 +933,7 @@ class ExecuteAtPos(Insn):
     argnames = 'chain pos'
     insn_name = 'exec_at_pos'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.at_pos(self.pos)
 
 class ExecAlign(Insn):
@@ -739,7 +942,7 @@ class ExecAlign(Insn):
     argnames = 'chain axes'
     insn_name = 'exec_align'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.align(self.axes)
 
 class ExecFacePos(Insn):
@@ -748,16 +951,16 @@ class ExecFacePos(Insn):
     argnames = 'chain pos'
     insn_name = 'exec_face_pos'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.facing(self.pos)
 
 class ExecFaceEntity(Insn):
 
-    args = [ExecChain, Selector, str]
+    args = [ExecChain, EntitySelection, str]
     argnames = 'chain target feature'
     insn_name = 'exec_face_entity'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.facing_entity(self.target.as_cmdref(), self.feature)
 
 class ExecRotate(Insn):
@@ -766,16 +969,16 @@ class ExecRotate(Insn):
     argnames = 'chain y x'
     insn_name = 'exec_rotate'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.rotated(self.y, self.x)
 
 class ExecRotatedAsEntity(Insn):
 
-    args = [ExecChain, Selector]
+    args = [ExecChain, EntitySelection]
     argnames = 'chain target'
     insn_name = 'exec_rot_entity'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.rotated_as_entity(self.target.as_cmdref())
 
 class ExecAnchor(Insn):
@@ -784,7 +987,7 @@ class ExecAnchor(Insn):
     argnames = 'chain anchor'
     insn_name = 'exec_anchor'
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.chain.chain.anchored(self.anchor)
 
 class GetVariableFunc(CmdFunction):
@@ -802,6 +1005,7 @@ class Getter(ConstructorInsn):
     insn_name = 'getter'
 
     def construct(self):
+        assert self.var.type.isnumeric
         return GetVariableFunc(self.var)
 
     def declare(self):
@@ -818,13 +1022,69 @@ class ExecRun(Insn):
         if isinstance(self.func, FunctionLike):
             self.func.usage()
 
-    def apply(self, out):
+    def apply(self, out, func):
         if isinstance(self.func, FunctionLike):
             cmd = Function(self.func.global_name)
         else:
             cmd = self.func.as_cmd()
         out.write(self.exec.chain.run(cmd))
-        self.exec.close()
+        self.exec.terminate()
+
+class ExecFinish(Insn):
+
+    args = [ExecChain]
+    argnames = 'exec'
+    insn_name = 'exec_finish'
+
+    def apply(self, out, func):
+        out.write(self.exec.chain.finish())
+        self.exec.terminate()
+
+class BlockInsn(ConstructorInsn):
+
+    args = [VirtualString]
+    argnames = 'block_id'
+    insn_name = 'block'
+
+    def construct(self):
+        return BlockType(str(self.block_id))
+
+class AddBlockPropInsn(Insn):
+
+    args = [BlockType, str, str]
+    argnames = 'block key value'
+    insn_name = 'add_block_prop'
+
+    def apply(self, out, func):
+        self.block.add_prop(self.key, self.value)
+
+class SetBlockInsn(Insn):
+
+    args = [Position, BlockType]
+    argnames = 'pos block'
+    insn_name = 'setblock'
+
+    def apply(self, out, func):
+        out.write(Setblock(self.pos.as_blockpos(), self.block))
+
+class TeleportInsn(Insn):
+
+    args = [EntitySelection, Position]
+    argnames = 'target pos'
+    insn_name = 'teleport'
+
+    def apply(self, out, func):
+        out.write(Teleport(self.target.as_cmdref(), self.pos))
+
+class CloneInsn(Insn):
+
+    args = [Position, Position, Position]
+    argnames = 'src0 src1 dest'
+    insn_name = 'clone'
+
+    def apply(self, out, func):
+        out.write(Clone(self.src0.as_blockpos(), self.src1.as_blockpos(),
+                        self.dest.as_blockpos()))
 
 def make_yield_tick(block, func, callback):
     tr = func.create_block('yield_trampoline')
@@ -840,7 +1100,7 @@ class SetCommandBlock(Insn):
     def declare(self):
         self.func.usage()
 
-    def apply(self, out):
+    def apply(self, out, func):
         tag = NBTCompound()
         tag.set('Command', FutureNBTString(Function(self.func.global_name)))
         out.write(DataMerge(UtilBlockPos.ref, tag))
@@ -851,7 +1111,7 @@ class ClearCommandBlock(Insn):
     argnames = ''
     insn_name = 'clear_command_block'
 
-    def apply(self, out):
+    def apply(self, out, func):
         out.write(DataRemove(UtilBlockPos.ref, NbtPath('Command')))
 
 class SetCommandBlockFromStack(Insn):
@@ -860,9 +1120,9 @@ class SetCommandBlockFromStack(Insn):
     argnames = ''
     insn_name = 'set_command_block_from_stack'
 
-    def apply(self, out):
+    def apply(self, out, func):
         out.write(DataModifyFrom(UtilBlockPos.ref, NbtPath('Command'),
-             'set', EntityTag.ref, StackPath(0, 'cmd')))
+             'set', EntityTag.ref, StackPath(STACK_HEAD, 'cmd')))
 
 # application defined in IRFunction
 class Return(VoidApplicationInsn):
@@ -883,8 +1143,8 @@ class PopStack(Insn):
     argnames = ''
     insn_name = 'pop_stack'
 
-    def apply(self, out):
-        out.write(DataRemove(EntityTag.ref, StackPath(0)))
+    def apply(self, out, func):
+        out.write(DataRemove(EntityTag.ref, StackPath(STACK_HEAD)))
 
 class GetStackHead(Insn):
 
@@ -896,11 +1156,11 @@ class GetStackHead(Insn):
     def declare(self):
         self.dest.usage_write()
 
-    def apply(self, out):
+    def apply(self, out, func):
         # This insn does not handle the general case - only works for
         # POP opcode in assembler
         assert self.dest._direct_ref()
-        VirtualStackPointer(self.dest.type, 0).clone_to(self.dest, out)
+        VirtualStackPointer(self.dest.type, STACK_HEAD).clone_to(self.dest, out)
 
 class PushStackVal(Insn):
 
@@ -912,12 +1172,12 @@ class PushStackVal(Insn):
         if isinstance(self.value, Variable):
             self.value.usage_read()
 
-    def apply(self, out):
+    def apply(self, out, func):
         if isinstance(self.value, int):
             vtype = VarType.i32
             tag = NBTCompound()
             tag.set(vtype.nbt_path_key, vtype.nbt_type.new(self.value))
-            out.write(DataModifyStack(None, None, 'prepend', tag))
+            out.write(DataModifyStack(None, None, 'append', tag))
         else:
             self.value.push_to_stack(out)
 
@@ -930,10 +1190,10 @@ class PushFunction(Insn):
     def declare(self):
         self.func.usage()
 
-    def apply(self, out):
+    def apply(self, out, func):
         tag = NBTCompound()
         tag.set('cmd', FutureNBTString(Function(self.func.global_name)))
-        out.write(DataModifyStack(None, None, 'prepend', tag, StackFrameHead))
+        out.write(DataModifyStack(None, None, 'append', tag, StackFrameHead))
 
 class PushNewStackFrame(Insn):
 
@@ -941,7 +1201,7 @@ class PushNewStackFrame(Insn):
     argnames = 'framevals'
     insn_name = 'push_stack_frame'
 
-    def apply(self, out):
+    def apply(self, out, func):
         make_stack_frame_from(self.framevals, out)
 
 class TextObject(NativeType):
@@ -987,21 +1247,22 @@ class TextAppend(Insn):
     args = [TextObject, (VirtualString, int, Variable, TextObject)]
     argnames = 'text value'
     insn_name = 'text_append'
+    preamble_safe = True
 
     def declare(self):
         if isinstance(self.value, Variable):
             self.value.usage_read()
 
-    def apply(self, out):
+    def apply(self, out, func):
         self.text.append(self.value)
 
 class TextSend(Insn):
 
-    args = [TextObject, Selector]
+    args = [TextObject, EntitySelection]
     argnames = 'text target'
     insn_name = 'text_send'
 
-    def apply(self, out):
+    def apply(self, out, func):
         out.write(Tellraw(self.text.to_args(out), self.target.as_cmdref()))
 
 class RawCommand(CmdFunction):
@@ -1021,15 +1282,15 @@ class CreateCommand(ConstructorInsn):
     def construct(self):
         return RawCommand(str(self.cmd))
 
-class RunFunction(Insn):
+class RunCommand(Insn):
 
     args = [CmdFunction]
-    argnames = 'func'
-    insn_name = 'run_func'
+    argnames = 'cmd'
+    insn_name = 'run_cmd'
     is_branch = True
 
-    def apply(self, out):
-        out.write(self.func.as_cmd())
+    def apply(self, out, func):
+        out.write(self.cmd.as_cmd())
 
 class CreateEntityLocal(PreambleOnlyInsn, ConstructorInsn):
 
@@ -1047,11 +1308,14 @@ class CreateEntityLocalAccess(ConstructorInsn):
     insn_name = 'entity_local_access'
 
     def construct(self):
-        return EntityLocalAccess(self.local, self.target)
+        return ProxyVariable(VarType.i32, True, True)
+
+    def apply(self, out, func):
+        self._value.set_proxy(EntityLocalAccess(self.local, self.target))
 
 class CreatePlayerRef(ConstructorInsn):
 
-    args = [str]
+    args = [VirtualString]
     argnames = 'name'
     insn_name = 'player_ref'
 
@@ -1084,7 +1348,7 @@ class AddEventCondition(PreambleOnlyInsn, Insn):
     top_preamble_only = True
     insn_name = 'add_event_condition'
 
-    def apply(self, out):
+    def apply(self, out, top):
         self.event.add_condition(tuple(str(self.path).split('.')),
                                  str(self.value))
 
@@ -1098,7 +1362,7 @@ class EventHandler(PreambleOnlyInsn, Insn):
     def declare(self):
         self.handler.usage()
 
-    def apply(self, out):
+    def apply(self, out, top):
         out.write_event_handler(self.handler, self.event)
 
 class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
@@ -1111,6 +1375,19 @@ class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
     def activate(self, seq):
         seq.holder.set_extern(True)
 
+class SetupInsn(PreambleOnlyInsn, Insn):
+
+    args = [VisibleFunction]
+    argnames = 'func'
+    top_preamble_only = True
+    insn_name = 'setupfn'
+
+    def declare(self):
+        self.func.usage()
+
+    def apply(self, out, top):
+        out.write_setup_function(self.func)
+
 class DefineVariable(PreambleOnlyInsn, ConstructorInsn):
 
     args = [VarType]
@@ -1122,9 +1399,6 @@ class DefineVariable(PreambleOnlyInsn, ConstructorInsn):
     def construct(self):
         return LocalVariable(self.type)
 
-    def serialize_args(self, holder):
-        return [self.type.name]
-
 class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
 
     args = [VarType]
@@ -1135,9 +1409,6 @@ class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
 
     def construct(self):
         return GlobalVariable(self.type)
-
-    def serialize_args(self, holder):
-        return [self.type.name]
 
 class ParameterInsn(DefineVariable):
 
@@ -1160,3 +1431,147 @@ class ReturnVarInsn(DefineVariable):
     def activate(self, seq):
         seq.holder.add_return(self.type)
         return super().activate(seq)
+
+class DefineObjective(PreambleOnlyInsn, ConstructorInsn):
+
+    args = [str, VirtualString]
+    argnames = 'name criteria'
+    insn_name = 'objective'
+    top_preamble_only = True
+
+    def construct(self):
+        return ObjectiveVariable(self.name, str(self.criteria))
+
+class TeamRef(NativeType):
+
+    def __init__(self, name):
+        self.name = name
+        self.ref = TeamName(name)
+
+class TeamColor(InsnArg):
+
+    __lookup = {}
+
+    def __init__(self, name):
+        self.name = name
+        self.__lookup[name] = self
+
+    @classmethod
+    def _init_from_parser(cls, value):
+        return cls.__lookup[value]
+
+    black = None
+    dark_blue = None
+    dark_green = None
+    dark_aqua = None
+    dark_red = None
+    dark_purple = None
+    gold = None
+    gray = None
+    dark_gray = None
+    blue = None
+    green = None
+    aqua = None
+    red = None
+    light_purple = None
+    yellow = None
+    white = None
+    reset = None
+
+TeamColor.black = TeamColor('black')
+TeamColor.dark_blue = TeamColor('dark_blue')
+TeamColor.dark_green = TeamColor('dark_green')
+TeamColor.dark_aqua = TeamColor('dark_aqua')
+TeamColor.dark_red = TeamColor('dark_red')
+TeamColor.dark_purple = TeamColor('dark_purple')
+TeamColor.gold = TeamColor('gold')
+TeamColor.gray = TeamColor('gray')
+TeamColor.dark_gray = TeamColor('dark_gray')
+TeamColor.blue = TeamColor('blue')
+TeamColor.green = TeamColor('green')
+TeamColor.aqua = TeamColor('aqua')
+TeamColor.red = TeamColor('red')
+TeamColor.light_purple = TeamColor('light_purple')
+TeamColor.yellow = TeamColor('yellow')
+TeamColor.white = TeamColor('white')
+TeamColor.reset = TeamColor('reset')
+
+class CreateTeamInsn(PreambleOnlyInsn, ConstructorInsn):
+
+    args = [str]
+    argnames = 'name'
+    insn_name = 'team'
+
+    def construct(self):
+        return TeamRef(self.name)
+
+class TeamColorInsn(Insn):
+
+    args = [TeamRef, TeamColor]
+    argnames = 'team color'
+    insn_name = 'team_color'
+
+    def apply(self, out, func):
+        out.write(TeamModify(self.team.ref, 'color', self.color.name))
+
+class TeamCollisionInsn(Insn):
+
+    args = [TeamRef, str]
+    argnames = 'team behaviour'
+    insn_name = 'team_collision'
+
+    def apply(self, out, func):
+        out.write(TeamModify(self.team.ref, 'collisionRule', self.behaviour))
+
+class BossbarRef(NativeType):
+
+    def __init__(self, name):
+        self.name = name
+        self.ref = Bossbar(name)
+
+class CreateBossbarInsn(PreambleOnlyInsn, ConstructorInsn):
+
+    args = [str, TextObject]
+    argnames = 'name display'
+    insn_name = 'bossbar'
+
+    def construct(self):
+        return BossbarRef(self.name)
+
+class BarMaxInsn(Insn):
+
+    args = [BossbarRef, int]
+    argnames = 'bar max'
+    insn_name = 'bar_set_max'
+
+    def apply(self, out, func):
+        out.write(BossbarSet(self.bar.ref, 'max', SimpleResolve(str(self.max))))
+
+class BarSetPlayers(Insn):
+
+    args = [BossbarRef, Opt(EntitySelection)]
+    argnames = 'bar players'
+    insn_name = 'bar_set_players'
+
+    def apply(self, out, func):
+        out.write(BossbarSet(self.bar.ref, 'players', None if not self.players \
+                             else self.players.as_cmdref().target))
+
+class BarSetValue(Insn):
+
+    args = [BossbarRef, int]
+    argnames = 'bar val'
+    insn_name = 'bar_set_value'
+
+    def apply(self, out, func):
+        out.write(BossbarSet(self.bar.ref, 'value',
+                             SimpleResolve(str(self.val))))
+
+class KillInsn(Insn):
+
+    args = [EntitySelection]
+    argnames = 'target'
+    insn_name = 'kill'
+
+    def apply(self, out, func):
+        out.write(Kill(self.target.as_cmdref()))

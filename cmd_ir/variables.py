@@ -2,17 +2,19 @@ import abc
 
 from commands import *
 
-from .core_types import InsnArg, NativeType
+from .core_types import InsnArg, NativeType, EntityLocal
 from .nbt import NBTType
 
 class VarType(InsnArg):
 
     __LOOKUP = {}
 
-    def __init__(self, name, nbt_key, nbt_type):
+    def __init__(self, name, nbt_key, numeric, nbt_type, default):
         self.name = name
         self.nbt_path_key = nbt_key
         self.nbt_type = nbt_type
+        self.isnumeric = numeric
+        self.default_val = default
         self.__LOOKUP[name] = self
 
     @classmethod
@@ -20,18 +22,22 @@ class VarType(InsnArg):
         return cls.__LOOKUP[value]
 
     i32 = None
+    nbt = None
 
-VarType.i32 = VarType('i32', 'int', NBTType.int)
+VarType.i32 = VarType('i32', 'int', True, NBTType.int, 0)
+VarType.nbt = VarType('nbt', 'nbt', False, NBTType.compound, [])
 
 
 class OpenVar:
 
     _working_in_use = []
 
-    def __init__(self, var, out, write=False):
+    def __init__(self, var, out, read=True, write=False):
+        assert read or write
         self.var = var
         self.out = out
         self.write = write
+        self.read = read
         self.ref = None
         self.using_temp = False
 
@@ -44,7 +50,8 @@ class OpenVar:
             self.using_temp = temps[0]
             self._working_in_use.append(self.using_temp)
             self.ref = Var(self.using_temp)
-            self.var._write_to_reference(self.ref, self.out)
+            if self.read:
+                self.var._write_to_reference(self.ref, self.out)
         return self.ref
 
     def __exit__(self, *args):
@@ -58,13 +65,13 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
 
     def __init__(self, vartype):
         assert isinstance(vartype, VarType)
-        assert vartype is VarType.i32, "Only i32 supported"
+        #assert vartype is VarType.i32, "Only i32 supported"
         self.type = vartype
         self.__use_w = 0
         self.__use_r = 0
 
-    def open_for_write(self, out):
-        return OpenVar(self, out, write=True)
+    def open_for_write(self, out, read=False):
+        return OpenVar(self, out, read=read, write=True)
 
     def open_for_read(self, out):
         return OpenVar(self, out)
@@ -178,7 +185,7 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
 
     def push_to_stack(self, out):
         # out-of-bounds stack path
-        out.write(DataModifyFrom(EntityTag.ref, StackPath(None), 'prepend',
+        out.write(DataModifyFrom(EntityTag.ref, StackPath(None), 'append',
                                  EntityTag.ref, self.root_path))
 
 class NbtOffsetVariable(NbtStorableVariable):
@@ -224,9 +231,11 @@ class ScoreStorableVariable(Variable):
 
 class ProxyVariable(Variable):
 
-    def __init__(self, type):
+    def __init__(self, type, always_read=False, always_write=False):
         super().__init__(type)
         self.var = None
+        self._al_read = always_read
+        self._al_write = always_write
 
     def set_proxy(self, var):
         assert self.var is None
@@ -235,7 +244,16 @@ class ProxyVariable(Variable):
 
     # Don't proxy usage tracking since tracking is done before
     # variable finalization
-    def open_for_write(self, out): return self.var.open_for_write(out)
+
+    @property
+    def is_written_to(self):
+        return self._al_write or super().is_written_to
+
+    @property
+    def is_read_from(self):
+        return self._al_read or super().is_read_from
+
+    def open_for_write(self, out, read=False): return self.var.open_for_write(out, read)
     def open_for_read(self, out): return self.var.open_for_read(out)
     def read(self): return self.var.read()
     def clone_to(self, other, out): return self.var.clone_to(other, out)
@@ -256,17 +274,15 @@ class GlobalVariable(ProxyVariable):
 
 class ParameterVariable(ProxyVariable):
 
-    # Already written to - stop this getting eliminated
-    @property
-    def is_written_to(self):
-        return True
+    def __init__(self, type):
+        # Always written to - stop this getting eliminated
+        super().__init__(type, always_write=True)
 
 class ReturnVariable(ProxyVariable):
 
-    # Always read from - stop this from getting eliminated
-    @property
-    def is_read_from(self):
-        return True
+    def __init__(self, type):
+        # Always read from - stop this from getting eliminated
+        super().__init__(type, always_read=True)
 
 class LocalStackVariable(NbtOffsetVariable):
 
@@ -296,6 +312,23 @@ class GlobalScoreVariable(ScoreStorableVariable):
 class VirtualStackPointer(LocalStackVariable):
     path_type = StackPath # out-of-bounds stack path
 
+class VirtualNbtVariable(NbtStorableVariable):
+
+    def __init__(self, type, path):
+        super().__init__(type)
+        if not callable(path):
+            self._pathgetter = lambda: path
+        else:
+            self._pathgetter = path
+
+    @property
+    def path(self):
+        return self._pathgetter()
+
+    @property
+    def root_path(self):
+        return self._pathgetter()
+
 class WorkingNbtVariable(NbtStorableVariable):
 
     @property
@@ -311,3 +344,17 @@ class EntityLocalAccess(ScoreStorableVariable):
     def __init__(self, local, target):
         super().__init__(VarType.i32,
                          EntityLocalRef(local.name, target.as_cmdref()))
+
+    @property
+    def is_read_from(self):
+        return True
+
+    @property
+    def is_written_to(self):
+        return True
+
+class ObjectiveVariable(ScoreStorableVariable, EntityLocal):
+
+    def __init__(self, name, criteria):
+        super().__init__(VarType.i32, CriteriaRef(criteria))
+        EntityLocal.__init__(self, name)

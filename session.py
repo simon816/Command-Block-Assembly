@@ -31,6 +31,12 @@ class Scope:
         self.variables[name] = name
         return self.variable(name)
 
+    def team_name(self, name):
+        return name
+
+    def bossbar(self, name):
+        return name
+
     def get_util_block(self):
         return self.util_pos
 
@@ -69,7 +75,17 @@ class Scope:
         return '%s:%s' % (self.namespace, name)
 
     def add_function_names(self, names):
+        for name in names:
+            self.validate_name(name)
         self.func_names.update(names)
+
+    # See https://www.minecraft.net/en-us/article/minecraft-snapshot-17w43a
+    def validate_name(self, name):
+        err = "Invalid name %r, should match [0-9a-z_\\/.-]+" % name
+        assert name, err
+        for char in name:
+            assert char.isdigit() or (
+                char.isalpha() and not char.isupper()) or char in '_/.-', err
 
     def cmd_arg(self, param, val):
         if param == 'tag':
@@ -195,17 +211,24 @@ class Session:
         pass
 
     def create_up_down_functions(self, pos, setup='setup', cleanup='cleanup'):
+        assert setup not in self.scope.func_names
+        assert cleanup not in self.scope.func_names
         self.scope.add_function_names((setup, cleanup))
         item = '{id:"minecraft:stone",Count:1b,tag:{stack:[],globals:[],working:{int:0}}}'
         nbt = ('{Tags:["%s"],ArmorItems:[%s],NoAI:1b,Invisible:1b,' + \
                'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
                'NoBasePlate:1b}') % (self.scope.entity_tag, item)
+        utilnbt = ('{Tags:["%s"],NoAI:1b,Invisible:1b,Small:0b,NoGravity:1b,' + \
+                  'Marker:1b,Invulnerable:1b,NoBasePlate:1b}') % (self.scope.pos_util)
         up = [
             'kill @e[tag=%s]' % self.scope.entity_tag,
-            'summon armor_stand %s %s' % (pos, nbt)
+            'kill @e[tag=%s]' % self.scope.pos_util,
+            'summon armor_stand %s %s' % (pos, nbt),
+            'summon armor_stand %s %s' % (pos, utilnbt)
         ]
         down = [
-            'kill @e[tag=%s]' % self.scope.entity_tag
+            'kill @e[tag=%s]' % self.scope.entity_tag,
+            'kill @e[tag=%s]' % self.scope.pos_util
         ]
         for obj in self.scope.get_objectives():
             up.append('scoreboard objectives add %s dummy' % obj)

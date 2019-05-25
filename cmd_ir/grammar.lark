@@ -40,3 +40,5 @@ ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "><" | "<" | ">"
 %import common.NEWLINE
 
 %ignore WS
+COMMENT: "#" /[^\n]/*
+%ignore COMMENT
