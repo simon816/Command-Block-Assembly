@@ -78,6 +78,13 @@ class BuildProgram(Interpreter):
             # Only allowable for non-tuple args
             if type(argtype) != tuple and issubclass(argtype, InsnArg):
                 ctor_args.append(argtype._init_from_parser(operands[i]))
+            # Special case for Opt types
+            elif type(argtype) == tuple and len(argtype) == 2 and \
+                 argtype[0] == type(None) and issubclass(argtype[1], InsnArg):
+                if operands[i] is not None:
+                    ctor_args.append(argtype[1]._init_from_parser(operands[i]))
+                else:
+                    ctor_args.append(None)
             else:
                 ctor_args.append(operands[i])
         return insn(*ctor_args)

@@ -2,6 +2,7 @@ from asm_reader import AsmReader
 from cmd_ir.core import *
 from cmd_ir.instructions import *
 from cmd_ir.variables import GlobalScoreVariable, VarType
+from cmd_ir.optimizers import Optimizer
 
 class Assembler:
 
@@ -14,7 +15,7 @@ class Assembler:
         self.jump_later = None
         self.comparison_args = None
         self.init_instructions()
-        self._predef_const('sr', 'stack_register')
+        self._predef_const('sr')
         self.lineno = None
         self.filename = None
 
@@ -26,16 +27,18 @@ class Assembler:
         self.func = self.top.get_or_create_func('sub_' + name)
         self.func.preamble.add(ExternInsn())
         self.block = self.func.create_block('entry')
+        if name == '__setup__':
+            self.top.preamble.add(SetupInsn(self.func))
 
-    def _predef_const(self, name, varname):
-        self.constants[name] = self.get_global(Var(varname), name)
+    def _predef_const(self, name):
+        self.constants[name] = self.get_global(name)
 
-    def get_global(self, ref, name):
+    def get_global(self, name):
         var = self.global_mapping.get(name)
         if var is None:
             var = self.global_mapping[name] = \
                   self.top.create_global(name, VarType.i32)
-            var.set_proxy(GlobalScoreVariable(VarType.i32, ref))
+            var.set_proxy(GlobalScoreVariable(VarType.i32, Var(name)))
         return var
 
     def parse(self, text, filename=''):
@@ -70,9 +73,11 @@ class Assembler:
         self.constants[name] = value
 
     def define_entity_local(self, name, specific):
-        local = self.top.preamble.define(CreateEntityLocal(name))
+        local = self.top.preamble.define(
+            DefineObjective(VirtualString(name), None))
         if specific:
-            sel = self.top.preamble.define(CreatePlayerRef(specific))
+            sel = self.top.preamble.define(
+                CreatePlayerRef(VirtualString(specific)))
         else:
             sel = self.top.preamble.define(CreateSelector(SelectorType.SENDER))
         var = self.top.preamble.define(CreateEntityLocalAccess(local, sel))
@@ -92,7 +97,7 @@ class Assembler:
             return
         new_block = self.func.get_or_create_block(name)
         new_block.defined = True
-        self.block.add(Call(new_block))
+        self.block.add(self.callinsn(new_block))
         self.block = new_block
 
     def lookup_symbol(self, symbol):
@@ -233,7 +238,7 @@ class Assembler:
 
         if self.jump_later:
             if old_jump_later is not None:
-                self.block.add(Call(old_jump_later))
+                self.block.add(self.callinsn(old_jump_later))
                 self.block = old_jump_later
                 if self.jump_later == old_jump_later:
                     self.jump_later = None
@@ -243,9 +248,14 @@ class Assembler:
         if type == 'literal':
             return value
         elif type == 'address':
-            return self.get_global(Mem(value), 'mem_%d' % value)
+            return self.get_global('mem_%d' % value)
         elif type == 'symbol':
             return self.get_const(value)
+
+    def callinsn(self, dest):
+        if isinstance(dest, VisibleFunction):
+            return Invoke(dest, None, None)
+        return Call(dest)
 
     def get_src_dest(self, src, dest):
         src, dest = self.resolve_ref(*src), self.resolve_ref(*dest)
@@ -253,8 +263,7 @@ class Assembler:
         return src, dest
 
     def get_working(self, n=0):
-        suf = '' if n == 0 else ('_%d' % (n + 1))
-        return self.get_global(Var('working_reg%s' % suf), 'tmp' + suf)
+        return self.get_global('tmp_%d' % n)
 
     def handle_op(self, src, dest, Op, can_use_const=False):
         src, dest = self.get_src_dest(src, dest)
@@ -333,7 +342,7 @@ void OP(int src, int *dest) {
         op_fn = self.func.create_block(name)
         cmp_fn = self.func.create_block(name + '_src_bit_test')
 
-        self.block.add(Call(op_fn))
+        self.block.add(self.callinsn(op_fn))
 
         op_fn.add(SetScore(work, src))
         op_fn.add(DivScore(work, order))
@@ -460,9 +469,9 @@ void OP(int src, int *dest) {
             other = left
         if not isinstance(var, Variable):
             if const_cmp(right, left):
-                self.block.add(Call(true_branch))
+                self.block.add(self.callinsn(true_branch))
             else:
-                self.block.add(Call(false_branch))
+                self.block.add(self.callinsn(false_branch))
         else:
             if isinstance(other, Variable):
                 tmp = self.get_working()
@@ -497,13 +506,13 @@ void OP(int src, int *dest) {
     def handle_jump(self, dest_arg):
         arg_type, symbol = dest_arg
         assert arg_type == 'symbol'
-        self.block.add(Call(self.lookup_symbol(symbol)))
+        self.block.add(self.callinsn(self.lookup_symbol(symbol)))
         self.block = self.func.create_block('dead_after_jump')
 
     def handle_call(self, sub_arg):
         ref_type, sub_name = sub_arg
         assert ref_type == 'symbol'
-        self.block.add(Call(self.lookup_symbol(sub_name)))
+        self.block.add(self.callinsn(self.lookup_symbol(sub_name)))
 
     def handle_ret(self):
         self.block.add(Return())
@@ -556,7 +565,8 @@ void OP(int src, int *dest) {
                 assert isinstance(var, EntityLocalAccess)
                 min, max = map(lambda v: int(v) if v else None, val.split('..')) \
                            if '..' in val else [int(val)]*2
-                self.block.add(SelectVarRange(sel, var, min, max))
+                local = EntityLocal(var._direct_ref().objective.objective)
+                self.block.add(SelectScoreRange(sel, local, min, max))
             else:
                 assert False, "Bad key type: " + str(pairs[i])
         return sel
@@ -668,57 +678,17 @@ void OP(int src, int *dest) {
         make_yield_tick(self.block, self.func, callback)
         self.block = callback
 
-    def write_to_session(self, session):
+    def finish(self):
         self.func.end()
         self.func.variables_finalized()
         self.top.end()
-        from cmd_ir.optimizers import Optimizer
         Optimizer().optimize(self.top)
-        writer = SessionWriter(session, self.top)
-        self.top.writeout(writer)
-        writer.finish()
+
+    def write_to_session(self, session):
+        return session.load_from_top(self.top)
 
     def get_sub_jump_command(self, sub_name):
         from commands import Function
         func = self.top.lookup_func('sub_' + sub_name)
         assert func is not None, "Cannot find function " + sub_name
         return Function(func.global_name)
-
-class SessionWriter(FuncWriter):
-
-    def __init__(self, session, top):
-        self.sess = session
-        setup = top.lookup_func('sub___setup__')
-        self.setup_func = setup.global_name if setup is not None else None
-        self.event_handlers = []
-        self.setupfuncs = []
-
-    def write_func_table(self, table):
-        self.sess.load_subroutine_table(table)
-
-    def write_function(self, name, insns):
-        sub = Subsequence()
-        sub.commands = insns
-        if name == self.setup_func:
-            self.sess.set_setup_hook(sub)
-        else:
-            self.sess.add_subsequence(name, sub)
-
-    def write_event_handler(self, handler, event):
-        self.event_handlers.append({
-                'event': event.name,
-                'conditions': event.conditions,
-                'handler': handler.global_name
-            })
-
-    def write_setup_function(self, func):
-        self.setupfuncs.append(func)
-
-    def finish(self):
-        self.sess.add_event_handlers(self.event_handlers)
-        if self.setupfuncs:
-            sub = Subsequence()
-            from commands import Function
-            sub.commands = [Function(func.global_name) \
-                            for func in self.setupfuncs]
-            self.session.set_setup_hook(sub)

@@ -149,3 +149,41 @@ class DummyWriter:
 
     def write_tag(self, type, name, values, replace=False, namespace=None):
         pass
+
+class DebugWriterWrapper:
+
+    def __init__(self, writer):
+        self.writer = writer
+
+    @property
+    def func_count(self):
+        return self.writer.func_count
+
+    @property
+    def command_count(self):
+        return self.writer.command_count
+
+    def open(self):
+        self.writer.open()
+
+    def close(self):
+        self.writer.close()
+
+    def write_function(self, name_parts, command_list):
+        print('Function', name_parts)
+        for cmd in command_list:
+            print(' ', cmd)
+        print()
+        self.writer.write_function(name_parts, command_list)
+
+    def write_advancement(self, advancement):
+        print('Advancement', advancement.name)
+        print(advancement.to_json())
+        print()
+        self.writer.write_advancement(advancement)
+
+    def write_tag(self, type, name, values, replace=False, namespace=None):
+        print('Tag')
+        print('%s: %s' % (name, values))
+        print()
+        self.writer.write_tag(type, name, values, replace, namespace)

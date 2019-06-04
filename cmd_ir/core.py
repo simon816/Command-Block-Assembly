@@ -23,12 +23,25 @@ class FuncWriter(metaclass=abc.ABCMeta):
     def write_setup_function(self, func):
         pass
 
+    @abc.abstractmethod
+    def write_bossbar(self, name, display):
+        pass
+
+    @abc.abstractmethod
+    def write_team(self, name, display):
+        pass
+
+    @abc.abstractmethod
+    def write_objective(self, name, criteria):
+        pass
+
 class CmdWriter:
 
-    def __init__(self):
+    def __init__(self, temp_gen):
         self.pre = []
         self.out = []
         self.post = []
+        self.temp_gen = temp_gen
 
     def prepend(self, cmd):
         self.pre.append(cmd)
@@ -41,6 +54,38 @@ class CmdWriter:
 
     def get_output(self):
         return self.pre + self.out + self.post
+
+    def allocate_temp(self):
+        return self.temp_gen.next()
+
+    def free_temp(self, tmp):
+        self.temp_gen.free(tmp)
+
+class TemporaryVarGen:
+
+    def __init__(self, writer):
+        self.temps = []
+        self.in_use = set()
+        self.counter = 0
+        self.writer = writer
+
+    def next(self):
+        if not self.temps:
+            tmp = 'temp_%d' % self.counter
+            self.writer.write_objective(tmp, None)
+            self.counter += 1
+        else:
+            tmp = self.temps.pop()
+        self.in_use.add(tmp)
+        return tmp
+
+    def free(self, temp):
+        assert temp in self.in_use
+        self.in_use.remove(temp)
+        self.temps.append(temp)
+
+    def finish(self):
+        assert not self.in_use
 
 class InstructionSeq:
 
@@ -129,6 +174,9 @@ class Scope(OrderedDict):
             return self[key]
         raise KeyError(key)
 
+    def contains_no_parent(self, key):
+        return super().__contains__(key)
+
     def for_value(self, value, look_parent=True):
         if value in self.inverse_dict:
             return self.inverse_dict[value]
@@ -153,7 +201,8 @@ class VariableHolder:
         return self.uniq(namehint, lambda n: value)
 
     def store(self, name, value):
-        assert name not in self.scope, '%s: %s' % (name, self.scope[name])
+        assert not self.scope.contains_no_parent(name),  \
+               '%s: %s' % (name, self.scope[name])
         self.scope[name] = value
 
     def name_for(self, value):
@@ -236,8 +285,13 @@ class TopLevel(VariableHolder):
                 functions.append(var)
         writer.write_func_table(table)
 
+        temp_generator = TemporaryVarGen(writer)
+        writer.write_objective('success_tracker', None)
+
         for func in functions:
-            func.writeout(writer)
+            func.writeout(writer, temp_generator)
+
+        temp_generator.finish()
 
     def serialize(self):
         strs = []
@@ -256,7 +310,7 @@ class VisibleFunction(FunctionLike):
     def get_func_table(self):
         return []
 
-    def writeout(self, writer):
+    def writeout(self, writer, temp_gen):
         pass
 
     def validate_args(self, args, retvars):
@@ -427,16 +481,18 @@ class IRFunction(VisibleFunction, VariableHolder):
         return [block.global_name for block in self.allblocks] \
                + [self.global_name]
 
-    def writeout(self, writer):
+    def writeout(self, writer, temp_gen):
         assert self.finished
         self.preamble.apply(writer)
         for block in self.allblocks:
-            writer.write_function(block.global_name, block.writeout())
+            writer.write_function(block.global_name, block.writeout(temp_gen))
 
     def get_registers(self):
+        assert self._varsfinalized
         from .variables import Variable
         return [var for var in self.scope.values() \
-                if isinstance(var, Variable) and var._direct_ref()]
+                if isinstance(var, Variable) and var._direct_ref() \
+                and not var.is_entity_local]
 
     def is_closed(self):
         return all(b.is_terminated() for b in self.blocks)
@@ -496,6 +552,10 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._entryblock.add(Call(self.blocks[0]))
         return vars
 
+    def add_advancement_revoke(self, event):
+        from .instructions import RevokeEventAdvancement
+        self._entryblock.add(RevokeEventAdvancement(self))
+
     def serialize(self):
         return 'function %s {\n%s\n%s\n}\n' % (self._name,
                                                self.preamble.serialize(),
@@ -547,8 +607,8 @@ class BasicBlock(FunctionLike, InstructionSeq):
             return super().add(Call(self._func._exitblock))
         return super().add(insn)
 
-    def writeout(self):
-        writer = CmdWriter()
+    def writeout(self, temp_gen):
+        writer = CmdWriter(temp_gen)
         for insn in self.insns:
             insn.apply(writer, self._func)
         if self.needs_success_tracker:

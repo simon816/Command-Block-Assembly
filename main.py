@@ -1,6 +1,6 @@
 import argparse
 from assembler import Assembler
-from datapack import DataPackWriter, DummyWriter
+from datapack import DataPackWriter, DummyWriter, DebugWriterWrapper
 from session import Session
 from placer import Rel
 import os
@@ -15,7 +15,7 @@ if __name__ == '__main__':
                         action='store_true')
     parser.add_argument('--debug', action='store_true', help="Enable debug output")
     parser.add_argument('--dump-ir', action='store_true', help="Dump CMD IR output")
-    parser.add_argument('--arg', help="ASM file arguments", action='append')
+    parser.add_argument('--gen-cleanup', action='store_true', help="Generate cleanup function")
     parser.add_argument('--jump', help='Output subroutine jump instruction')
     parser.add_argument('--place-location', default="~1,~,~1",
                         help="Location to place command blocks")
@@ -24,7 +24,6 @@ if __name__ == '__main__':
     parser.add_argument('--spawn-location', default='~ ~2 ~',
                         help="Location to spawn hidden armor stand")
     parser.add_argument('--pack-description', help="Datapack description")
-    parser.add_argument('--extern', action='append', help="Specify external symbol")
 
     args = parser.parse_args()
 
@@ -32,11 +31,11 @@ if __name__ == '__main__':
     with args.file as f:
         assembler.parse(f.read(), f.name)
 
-    sargs = {}
-    if args.arg:
-        for arg in args.arg:
-            k, v = arg.split('=', 2)
-            sargs[k] = v
+    assembler.finish()
+
+    if args.dump_ir:
+        print(assembler.top.serialize())
+
     parse_pos = lambda p: Rel(int(p[1:]) if p[1:] else 0) if p[0] == '~' else int(p)
 
     x, y, z = map(parse_pos, args.place_location.split(',', 3))
@@ -50,22 +49,21 @@ if __name__ == '__main__':
             writer.set_description(args.pack_description)
     else:
         writer = DummyWriter()
+    if args.debug:
+        writer = DebugWriterWrapper(writer)
     writer.open()
 
-    session = Session((x, y, z), writer, args.namespace,
-                      args=sargs, setup_on_load=args.setup_on_load, debug=args.debug,
-                      extern=args.extern)
-    assembler.write_to_session(session)
-    if args.dump_ir:
-        print(assembler.top.serialize())
-    setup, cleanup = session.create_up_down_functions(args.spawn_location)
+    session = Session((x, y, z), writer, args.namespace, args.spawn_location,
+                      args.gen_cleanup)
+    cleanup_func = assembler.write_to_session(session)
+
     writer.close()
+
     print('Generated', writer.command_count, 'commands in',
           writer.func_count, 'functions')
-    print('== Setup command ==')
-    print ('/' + setup)
-    print('== Cleanup command ==')
-    print('/' + cleanup)
+
+    if cleanup_func:
+        print("Cleanup function:", cleanup_func)
 
     if args.jump:
         print('== Jump to %s command ==' % args.jump)

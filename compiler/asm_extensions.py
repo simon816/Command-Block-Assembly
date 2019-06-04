@@ -5,71 +5,72 @@ from cmd_ir.instructions import *
 
 class CompilerSession(Session):
 
-    def __init__(self, pos, writer, namespace, page_size=64, **kwargs):
+    def __init__(self, pos, writer, namespace, entity_pos, create_cleanup,
+                 page_size=64):
+        super().__init__(pos, writer, namespace, entity_pos, create_cleanup)
         self.page_size = page_size
-        super(CompilerSession, self).__init__(pos, writer, namespace, **kwargs)
-        self.scope.variables.update({
-            'memory_address': 'ma',
-            'memory_buffer': 'mb',
-            'memory_slot': ('ms_%d', range(self.page_size))
-        })
         if page_size > 0:
             self.add_page()
 
     def add_page(self):
         mbr = Var('memory_buffer')
         mar = Var('memory_address')
+        self.define_objective('memory_buffer', None)
+        self.define_objective('memory_address', None)
 
         def pair_name(fn, pair):
             return 'memory/%s_%d_%d' % (fn, pair.min, pair.max)
 
         def create_function(pair, force=False):
-            getter = Subsequence()
-            setter = Subsequence()
+            getter = []
+            setter = []
             def gen_fn(fn, p):
-                return Execute.If(SelRange(mar, min=p.min, max=p.max),
-                                  Function(pair_name(fn, p)))
+                return ExecuteChain() \
+                       .cond('if') \
+                       .score_range(mar, ScoreRange(p.min, p.max)) \
+                       .run(Function(pair_name(fn, p)))
             def gen_assign(n, g=True):
-                slot = Var('memory_slot', n)
-                return OpAssign(mbr if g else slot, slot if g else mbr,
-                                where=SelEquals(mar, n))
+                slot = Var('memory_slot_%d' % n)
+                self.define_objective('memory_slot_%d' % n, None)
+                return ExecuteChain() \
+                        .cond('if') \
+                        .score_range(mar, ScoreRange(n, n)) \
+                        .run(OpAssign(mbr if g else slot, slot if g else mbr))
 
             if pair.left and pair.left.left:
-                getter.add_command(gen_fn('mem_get', pair.left))
-                setter.add_command(gen_fn('mem_set', pair.left))
+                getter.append(gen_fn('mem_get', pair.left))
+                setter.append(gen_fn('mem_set', pair.left))
             if pair.right and pair.right.right:
-                getter.add_command(gen_fn('mem_get', pair.right))
-                setter.add_command(gen_fn('mem_set', pair.right))
+                getter.append(gen_fn('mem_get', pair.right))
+                setter.append(gen_fn('mem_set', pair.right))
 
             if not pair.left and not pair.right and not force:
                 # Don't do anything here, it's done in the next level up
                 return
 
             if pair.left and not pair.left.left or force:
-                getter.add_command(gen_assign(pair.min))
-                setter.add_command(gen_assign(pair.min, False))
+                getter.append(gen_assign(pair.min))
+                setter.append(gen_assign(pair.min, False))
             if pair.right and not pair.right.right:
-                getter.add_command(gen_assign(pair.max))
-                setter.add_command(gen_assign(pair.max, False))
+                getter.append(gen_assign(pair.max))
+                setter.append(gen_assign(pair.max, False))
 
             name_get = pair_name('mem_get', pair)
             name_set = pair_name('mem_set', pair)
             self.scope.add_function_names((name_get, name_set))
-            self.add_subsequence(name_get, getter)
-            self.add_subsequence(name_set, setter)
+            self.add_function(name_get, getter)
+            self.add_function(name_set, setter)
 
         entry_point = self.generate_bin_tree(self.page_size, create_function)
         if not entry_point.left and not entry_point.right:
             create_function(entry_point, force=True)
 
         # Redirect mem_get and mem_set to the actual entry point
-        getter = Subsequence()
-        setter = Subsequence()
-        getter.add_command(Function(pair_name('mem_get', entry_point)))
-        setter.add_command(Function(pair_name('mem_set', entry_point)))
+        getter = [Function(pair_name('mem_get', entry_point))]
+        setter = [Function(pair_name('mem_set', entry_point))]
         self.scope.add_function_names(('mem_get', 'mem_set'))
-        self.add_subsequence('mem_get', getter)
-        self.add_subsequence('mem_set', setter)
+        self.add_function('mem_get', getter)
+        self.add_function('mem_set', setter)
 
 
     def generate_bin_tree(self, size, callback):
@@ -103,7 +104,7 @@ class CompilerSession(Session):
 
     def extended_setup(self, up, down):
         for i in range(self.page_size):
-            slot = Var('memory_slot', i)
+            slot = Var('memory_slot_%d' % i)
             up.append(SetConst(slot, 0).resolve(self.scope))
 
 class FunctionRef(CmdFunction):
@@ -114,7 +115,7 @@ class FunctionRef(CmdFunction):
     def as_cmd(self):
         return Function(self.name)
 
-class MemGetFn(RunFunction):
+class MemGetFn(RunCommand):
 
     def __init__(self, ass):
         super().__init__(ass.mem_get)
@@ -127,7 +128,7 @@ class MemGetFn(RunFunction):
     def copy(self):
         return MemGetFn(self._ass)
 
-class MemSetFn(RunFunction):
+class MemSetFn(RunCommand):
 
     def __init__(self, ass):
         super().__init__(ass.mem_set)

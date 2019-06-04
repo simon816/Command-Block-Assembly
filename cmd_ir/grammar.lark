@@ -4,9 +4,9 @@ preamble: "preamble" "{" instruction* "}"
 
 ?body: function | extern_func
 
-extern_func: "extern" "function" IDENT NEWLINE
+extern_func: "extern" "function" FUNC_NAME NEWLINE
 
-function: "function" IDENT "{" function_body "}"
+function: "function" FUNC_NAME "{" function_body "}"
 
 function_body: preamble? block*
 
@@ -23,17 +23,23 @@ operand: IDENT | atom | tuple
 
 tuple: "(" atom ["," atom] ")"
 
+
 LABEL: CNAME ":"
 IDENT: CNAME
+FUNC_NAME: PATH_COMPONENT ("/" PATH_COMPONENT)*
 VAR_NAME: "$" CNAME
-FUNC_REF: "@" CNAME
 BLOCK_REF: ":" CNAME
+FUNC_REF: "@" FUNC_NAME
 NULL: "NULL"
+
+PATH_COMPONENT: ("-"|"_"|"."|LCASE_LETTER|DIGIT)+
 
 ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "><" | "<" | ">"
 
 %import common.ESCAPED_STRING
 %import common.CNAME
+%import common.LCASE_LETTER
+%import common.DIGIT
 %import common.SIGNED_INT
 %import common.SIGNED_FLOAT
 %import common.WS

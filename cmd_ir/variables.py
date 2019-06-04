@@ -2,7 +2,7 @@ import abc
 
 from commands import *
 
-from .core_types import InsnArg, NativeType, EntityLocal
+from .core_types import InsnArg, NativeType
 from .nbt import NBTType
 
 class VarType(InsnArg):
@@ -30,8 +30,6 @@ VarType.nbt = VarType('nbt', 'nbt', False, NBTType.compound, [])
 
 class OpenVar:
 
-    _working_in_use = []
-
     def __init__(self, var, out, read=True, write=False):
         assert read or write
         self.var = var
@@ -44,11 +42,7 @@ class OpenVar:
     def __enter__(self):
         self.ref = self.var._direct_ref()
         if self.ref is None:
-            temps = [v for v in ('working_reg', 'working_reg_2') \
-                     if v not in self._working_in_use]
-            assert temps
-            self.using_temp = temps[0]
-            self._working_in_use.append(self.using_temp)
+            self.using_temp = self.out.allocate_temp()
             self.ref = Var(self.using_temp)
             if self.read:
                 self.var._write_to_reference(self.ref, self.out)
@@ -59,7 +53,7 @@ class OpenVar:
         if self.write and self.using_temp:
             self.var._read_from_reference(self.ref, self.out)
         if self.using_temp:
-            self._working_in_use.remove(self.using_temp)
+            self.out.free_temp(self.using_temp)
 
 class Variable(NativeType, metaclass=abc.ABCMeta):
 
@@ -98,6 +92,11 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     def is_referenced(self):
         return self.is_read_from or self.is_written_to
 
+    @property
+    def is_entity_local(self):
+        # Bit of a hack
+        return isinstance(self, EntityLocalAccess)
+
     @abc.abstractmethod
     def read(self):
         pass
@@ -126,7 +125,7 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     def _write_to_reference(self, ref, out):
         out.write(ExecuteChain()
                   .store('result')
-                  .score(EntityTag, ref)
+                  .score(ref)
                   .run(self.read()))
 
     def _read_from_reference(self, ref, out):
@@ -155,7 +154,7 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
         pass
 
     def set_const_val(self, value, out):
-        out.write(DataModifyValue(EntityTag.ref, self.path, 'set',
+        out.write(DataModifyValue(GlobalEntity.ref, self.path, 'set',
                                   self.nbt_val(value)))
 
     def nbt_val(self, value):
@@ -164,12 +163,12 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
     def _store_from_cmd(self, cmd, out):
         out.write(ExecuteChain()
                   .store('result')
-                  .entity(EntityTag, self.path, self.type.nbt_type.
+                  .entity(GlobalEntity, self.path, self.type.nbt_type.
                           exec_store_name)
                   .run(cmd))
 
     def read(self):
-        return DataGetEtag(self.path)
+        return DataGetGlobal(self.path)
 
     def _direct_nbt(self):
         return self.path
@@ -178,15 +177,15 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
         other_path = other._direct_nbt()
         if other_path is not None:
             # Optimize here - can copy NBT directly
-            out.write(DataModifyFrom(EntityTag.ref, other_path, 'set',
-                                     EntityTag.ref, self.path))
+            out.write(DataModifyFrom(GlobalEntity.ref, other_path, 'set',
+                                     GlobalEntity.ref, self.path))
         else:
             super().clone_to(other, out)
 
     def push_to_stack(self, out):
         # out-of-bounds stack path
-        out.write(DataModifyFrom(EntityTag.ref, StackPath(None), 'append',
-                                 EntityTag.ref, self.root_path))
+        out.write(DataModifyFrom(GlobalEntity.ref, StackPath(None), 'append',
+                                 GlobalEntity.ref, self.root_path))
 
 class NbtOffsetVariable(NbtStorableVariable):
 
@@ -220,7 +219,7 @@ class ScoreStorableVariable(Variable):
     def _store_from_cmd(self, cmd, out):
         out.write(ExecuteChain()
                   .store('result')
-                  .score(EntityTag, self.ref)
+                  .score(self.ref)
                   .run(cmd))
 
     def _direct_ref(self):
@@ -229,18 +228,27 @@ class ScoreStorableVariable(Variable):
     def read(self):
         return GetValue(self.ref)
 
+class ProxyEmptyException(Exception):
+    pass
+
 class ProxyVariable(Variable):
 
     def __init__(self, type, always_read=False, always_write=False):
         super().__init__(type)
-        self.var = None
+        self.__var = None
         self._al_read = always_read
         self._al_write = always_write
 
     def set_proxy(self, var):
-        assert self.var is None
+        assert self.__var is None
         assert var.type == self.type
-        self.var = var
+        self.__var = var
+
+    @property
+    def var(self):
+        if self.__var is None:
+            raise ProxyEmptyException("Proxy not finalized")
+        return self.__var
 
     # Don't proxy usage tracking since tracking is done before
     # variable finalization
@@ -342,8 +350,8 @@ class WorkingNbtVariable(NbtStorableVariable):
 class EntityLocalAccess(ScoreStorableVariable):
 
     def __init__(self, local, target):
-        super().__init__(VarType.i32,
-                         EntityLocalRef(local.name, target.as_cmdref()))
+        super().__init__(VarType.i32, ScoreRef(target.as_resolve(),
+                                               local.obj_ref))
 
     @property
     def is_read_from(self):
@@ -352,9 +360,3 @@ class EntityLocalAccess(ScoreStorableVariable):
     @property
     def is_written_to(self):
         return True
-
-class ObjectiveVariable(ScoreStorableVariable, EntityLocal):
-
-    def __init__(self, name, criteria):
-        super().__init__(VarType.i32, CriteriaRef(criteria))
-        EntityLocal.__init__(self, name)

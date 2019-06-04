@@ -132,7 +132,9 @@ class DeadCodeBlockEliminator(BlockVisitor):
             return self.kill(insn)
 
     def scan(self, insn):
+        processed = False
         if isinstance(insn, SetScore):
+            processed = True
             # Kill earlier assignment
             if insn.var in self.varwrites:
                 self.kills.add(self.varwrites[insn.var])
@@ -143,12 +145,16 @@ class DeadCodeBlockEliminator(BlockVisitor):
             if insn.value == insn.var:
                 self.kills.add(insn)
             self.varwrites[insn.var] = insn
-        elif isinstance(insn, SimpleOperationInsn):
+            # Don't remove "value" variable when used
+            if insn.value in self.varwrites:
+                del self.varwrites[insn.value]
+        if isinstance(insn, SimpleOperationInsn):
             # safe to kill, note that the variable is not declared read in
             # SimpleOperationInsn so this optimization is possible
             if not insn.dest.is_read_from:
+                processed = True
                 self.kills.add(insn)
-        else:
+        if not processed:
             # Don't remove anything that is used
             for arg in insn.query(Variable):
                 if arg.val in self.varwrites:
@@ -158,6 +164,8 @@ class DeadCodeBlockEliminator(BlockVisitor):
                 # self.clear_globals()
                 # don't have gen/kill yet
                 self.varwrites = {}
+            if isinstance(insn, ExecAsEntity):
+                self.clear_sender_vars()
 
     def kill(self, insn):
         if insn in self.kills:
@@ -169,6 +177,12 @@ class DeadCodeBlockEliminator(BlockVisitor):
         for gvar in [var for var in self.varwrites.keys() \
                    if isinstance(var, GlobalVariable)]:
             del self.varwrites[gvar]
+
+    def clear_sender_vars(self):
+        # Should make this only for @s locals
+        remove = [var for var in self.varwrites.keys() if var.is_entity_local]
+        for var in remove:
+            del self.varwrites[var]
 
 class CallInliner(BlockVisitor):
 
@@ -206,6 +220,7 @@ class AliasData:
 
     def __init__(self):
         self.aliases = {}
+        self.cmd_aliases = set()
 
 class AliasInliner(FuncVisitor):
 
@@ -215,22 +230,43 @@ class AliasInliner(FuncVisitor):
     def visit(self, func):
         self.changed = False
 #        self.data.aliases = {}
+        self.func = func
         super().visit(func)
 
     def visit_block(self, name, block):
-        if len(block.insns) == 1:
-            insn = block.insns[0]
+        insns = [insn for insn in block.insns if not insn.is_virtual]
+        if len(insns) == 1:
+            insn = insns[0]
             if isinstance(insn, Call) and insn.label != block:
                 self.changed |= block not in self.data.aliases \
                                or self.data.aliases[block] != insn.label
                 self.data.aliases[block] = insn.label
                 print("Alias", block, "to", insn.label)
+            # Attempt to inline invoke
+            if self.func._varsfinalized and isinstance(insn, Invoke) \
+               and not self.func.get_registers():
+                 if not insn.func.params and not insn.func.returns:
+                    self.changed |= block not in self.data.aliases \
+                                   or self.data.aliases[block] != insn.func
+                    self.data.aliases[block] = insn.func
+                    print("Alias", block, "to", insn.func)
+
+            # Blocks that have one instruction that generates one command
+            # are recorded for exec_run substitution
+            if insn.single_command():
+                self.changed |= block not in self.data.cmd_aliases
+                self.data.cmd_aliases.add(block)
+                print("Alias", block, "to insn", insn)
         return name, block
 
 class AliasRewriter(BlockVisitor):
 
     def __init__(self, data):
         self.data = data
+
+    def visit(self, block):
+        self.block = block
+        return super().visit(block)
 
     def visit_insn(self, insn):
         new = insn.copy()
@@ -240,6 +276,13 @@ class AliasRewriter(BlockVisitor):
                 changed = True
                 print("Alias re", arg.val, "to", self.data.aliases[arg.val])
                 arg.val = self.data.aliases[arg.val]
+            # Things like exec_run
+            elif arg.val in self.data.cmd_aliases and arg.accepts(CmdFunction):
+                changed = True
+                cmdvar = BlockAsCommand(arg.val)
+                print("Alias cmd", arg.val, "to", cmdvar)
+                arg.val = cmdvar
+
         # Need to update success tracker to new branch
         if changed and isinstance(new, (RangeBr, CmpBr)) and new.if_true:
             new.if_true.needs_success_tracker = True
@@ -261,9 +304,9 @@ class ConstantFolding(BlockVisitor):
         if not isinstance(new, OnlyRefOperationInsn):
             for arg in new.query(Variable):
                 if arg.access is READ and arg.val in self.varvals:
-                    print("Const replace", self.n(arg.val),
-                          "with", self.varvals[arg.val], "in", new)
                     if arg.accepts(int):
+                        print("Const replace", self.n(arg.val),
+                              "with", self.varvals[arg.val], "in", new)
                         arg.val = self.varvals[arg.val]
                         changed = True
                     # probably wrong place for this, but can't replace var
@@ -333,6 +376,10 @@ class ConstantFolding(BlockVisitor):
             # don't have gen/kill yet so assume all are killed
             self.varvals = {}
 
+        # When "execute as", any @s entity locals are invalidated
+        if isinstance(insn, ExecAsEntity):
+            self.clear_sender_vars()
+
         return new if changed else insn
 
     def get_val(self, val):
@@ -346,6 +393,12 @@ class ConstantFolding(BlockVisitor):
         for gvar in [var for var in self.varvals.keys() \
                    if isinstance(var, GlobalVariable)]:
             del self.varvals[gvar]
+
+    def clear_sender_vars(self):
+        # Should make this only for @s locals
+        remove = [var for var in self.varvals.keys() if var.is_entity_local]
+        for var in remove:
+            del self.varvals[var]
 
 from collections import defaultdict
 
@@ -398,10 +451,11 @@ class VariableAliasing(BlockVisitor):
                 if arg.val in self.aliases:
                     self.remove_alias(arg.val)
         if isinstance(insn, SetScore):
-            if isinstance(insn.value, Variable) and insn.value != insn.var:
-                if insn.var in self.aliases:
-                    # Remove this var from old inverse set
-                    self.inverse[self.aliases[insn.var]].remove(insn.var)
+            if insn.var in self.aliases:
+                # Remove this var from old inverse set
+                self.remove_alias(insn.var)
+            if isinstance(insn.value, Variable) and insn.value != insn.var and \
+               self.entity_local_compat(insn.var, insn.value):
                 self.aliases[insn.var] = insn.value
                 self.inverse[insn.value].add(insn.var)
         if insn.is_branch:
@@ -410,6 +464,11 @@ class VariableAliasing(BlockVisitor):
             # don't have gen/kill yet so assume all are killed
             self.aliases = {}
             self.inverse.clear()
+
+        # When "execute as", any @s entity locals are invalidated
+        if isinstance(insn, ExecAsEntity):
+            self.clear_sender_vars()
+
         return new if changed else insn
 
     def remove_alias(self, var):
@@ -423,11 +482,23 @@ class VariableAliasing(BlockVisitor):
         for key in keys:
             del self.aliases[key]
 
+    def entity_local_compat(self, var1, var2):
+        if not var1.is_entity_local and not var2.is_entity_local:
+            return True
+        return False # For now, don't alias entity locals
+
     def clear_globals(self):
         # TODO inverse
         for gvar in [var for var in self.aliases.keys() \
                    if isinstance(var, GlobalVariable)]:
             del self.aliases[gvar]
+
+    def clear_sender_vars(self):
+        # Should make this only for @s locals
+        remove = [var for var in self.aliases.keys() if var.is_entity_local]
+        for var in remove:
+            self.remove_inverse(var)
+            self.remove_alias(var)
 
 # Not 100% confident in this optimizer
 class ComparisonOptimizer(BlockVisitor):

@@ -1,83 +1,94 @@
-import os
-from commands import *
-from datapack import Advancement
+from commands import CommandBlock, Cmd
 from placer import CommandPlacer
+from cmd_ir.core import FuncWriter
+from datapack import Advancement
 
 class Scope:
-    def __init__(self, namespace, tag_name, variables, block_pos, args={}, extern=[]):
-        self.entity_tag = namespace + '_' + tag_name
-        self.pos_util = namespace + '_' + tag_name + '_pos'
+
+    def __init__(self, namespace, block_pos):
         self.namespace = namespace
-        self.variables = variables
-        self.mem_locs = {}
-        self.tags = {}
-        self.args = args
+        self.objectives = {}
         self.func_names = set()
-        self.extern = set(extern or [])
+        self.bossbars = {}
+        self.teams = {}
         assert all(type(c) == int for c in block_pos), \
         "Block position must be absolute (for now). Use --place-location"
         self.util_pos = '%d %d %d' % block_pos
+        self._global_tag = self.namespace + '_global'
+        self._pos_tag = self.namespace + '_pos_util'
+        self._global_used = False
+        self._pos_entity_used = False
+        self._util_block_used = False
 
-    def variable(self, name, args=()):
-        var = self.variables[name]
-        if type(var) == tuple:
-            var = var[0]
-        return self.trim(self.namespace + '_' + var % args)
-
-    def entity_local(self, name):
-        if name in self.extern:
-            return name
-        name = 'el_%s' % name
-        self.variables[name] = name
-        return self.variable(name)
-
-    def team_name(self, name):
-        return name
-
-    def bossbar(self, name):
-        return name
-
-    def get_util_block(self):
-        return self.util_pos
-
-    def memory(self, orig):
-        self.mem_locs[orig] = True
-        return self.trim('%s_x%x' % (self.namespace, orig))
+    def objective(self, name):
+        if name not in self.objectives:
+            raise NameError('Objective name %r not found' % name)
+        real_name, criteria, is_used = self.objectives[name]
+        if not is_used:
+            self.objectives[name] = (real_name, criteria, True)
+        return real_name
 
     def trim(self, obj_name):
         # Objective name length must be <= 16
         return obj_name[-16:]
 
+    def global_entity(self):
+        self._global_used = True
+        return '@e[tag=%s,limit=1]' % self._global_tag
+
+    def pos_util_entity(self):
+        self._pos_entity_used = True
+        return '@e[tag=%s,limit=1]' % self._pos_tag
+
     def custom_nbt_path(self, path):
         return 'ArmorItems[0].tag.' + path
 
-    def get_objectives(self):
-        objectives = []
-        for name in self.variables:
-            if type(self.variables[name]) == tuple:
-                template, options = self.variables[name]
-                for args in options:
-                    if not type(args) in [tuple, list]:
-                        args = (args,)
-                    objectives.append(self.variable(name, *args))
-            else:
-                objectives.append(self.variable(name))
-        for loc in self.mem_locs:
-            objectives.append(self.memory(loc))
-        return objectives
-
-    def get_mem_locs(self):
-        return self.mem_locs.keys()
+    def get_util_block(self):
+        self._util_block_used = True
+        return self.util_pos
 
     def function_name(self, name):
         if name not in self.func_names:
             raise NameError('Function name %r not found' % name)
         return '%s:%s' % (self.namespace, name)
 
+    def team_name(self, name):
+        if name not in self.teams:
+            raise NameError('Team name %r not found' % name)
+        team_name, display = self.teams[name]
+        return team_name
+
+    def bossbar(self, name):
+        if name not in self.bossbars:
+            raise NameError('Bossbar %r not found' % name)
+        full_name, display = self.bossbars[name]
+        return full_name
+
+    def advancement_name(self, name):
+        return '%s:%s' % (self.namespace, name)
+
+
+    def add_objective(self, name, criteria=None):
+        if name in self.objectives:
+            assert self.objectives[name][1] == criteria
+            return
+        self.objectives[name] = (self.trim(name), criteria, False)
+
     def add_function_names(self, names):
         for name in names:
             self.validate_name(name)
         self.func_names.update(names)
+
+    def add_bossbar(self, name, display):
+        assert name not in self.bossbars
+        self.validate_name(name)
+        full_name = '%s:%s' % (self.namespace, name)
+        self.bossbars[name] = (full_name, display)
+
+    def add_team(self, name, display):
+        assert name not in self.teams
+        # TODO validation on name and display
+        self.teams[name] = (name, display)
 
     # See https://www.minecraft.net/en-us/article/minecraft-snapshot-17w43a
     def validate_name(self, name):
@@ -87,179 +98,183 @@ class Scope:
             assert char.isdigit() or (
                 char.isalpha() and not char.isupper()) or char in '_/.-', err
 
-    def cmd_arg(self, param, val):
-        if param == 'tag':
-            if val not in self.tags:
-                self.tags[val] = '%s_tag_%s' % (self.namespace, val)
-            return self.tags[val]
-        elif param == 'arg':
-            if val not in self.args:
-                raise KeyError('Missing argument %r, use --arg' % val)
-            return self.args[val]
-        elif param == 'entity_local':
-            return self.entity_local(val)
-        elif param == 'func':
-            return self.function_name('sub_' + val)
-        else:
-            raise KeyError('unknown command argument %s' % param)
+    def get_objectives(self):
+        return list(self.objectives.values())
+
+    def get_bossbars(self):
+        return list(self.bossbars.values())
+
+    def get_teams(self):
+        return list(self.teams.values())
 
 class Session:
 
-    def __init__(self, pos, writer, namespace, args={},
-                 setup_on_load=False, debug=False, extern=[]):
+    def __init__(self, pos, writer, namespace, entity_pos, create_cleanup):
         self.placer = CommandPlacer(pos)
         self.writer = writer
-        self.scope = Scope(namespace, 'etag', {
-            'stack_register': 'sr',
-            'working_reg': 'a',
-            'working_reg_2': 'b',
-            'working_reg_3': 'c',
-            'success_tracker': 'st',
-        }, pos, args, extern)
-        self.print_debug = debug
-        self.setup_hook = None
-        self.setup_on_load = setup_on_load
+        self.scope = Scope(namespace, pos)
         self.add_util_command_block()
+        self.entity_pos = entity_pos
+        self.create_cleanup = create_cleanup
 
     def add_util_command_block(self):
-        seq = CommandSequence()
-        seq.add_block(CommandBlock(Cmd(''), conditional=False, mode='REPEAT'))
-        self.add_command_blocks([seq])
+        block = CommandBlock(Cmd(''), conditional=False, mode='REPEAT')
+        self.placer.place((((block, ''), []),))
 
-        dump = Subsequence()
-        dump.add_command(Tellraw([StackPath(None)], Selector('a', None)))
-        self.add_subsequence('stack_dump', dump)
-
-    def load_subroutine_table(self, known_functions):
+    def load_function_table(self, known_functions):
         self.scope.add_function_names(known_functions)
 
-    def add_subsequence(self, name, subsequence):
-        commands = list(map(lambda cmd: cmd.resolve(self.scope),
-                       subsequence.get_commands()))
-        self.writer.write_function(name, commands)
-        if self.print_debug:
-            print('Function', name)
-            for cmd in commands:
-                print(' ', cmd)
-            print()
+    def define_objective(self, name, criteria):
+        self.scope.add_objective(name, criteria)
 
-    def add_command_blocks(self, lines):
-        for line in lines:
-            resolved = line.resolve(self.scope)
-            self.placer.place(resolved)
-            if self.print_debug:
-                print('Command block line')
-                for (_, cmd), branch in resolved:
-                    print(' ', cmd)
-                    for (_, cmd2) in branch:
-                        print('branch >', cmd2)
-                print()
+    def define_bossbar(self, name, display):
+        self.scope.add_bossbar(name, display)
+
+    def define_team(self, name, display):
+        self.scope.add_team(name, display)
+
+    def add_function(self, name, commands):
+        self.writer.write_function(name, [cmd.resolve(self.scope)
+                                          for cmd in commands])
 
     def add_event_handlers(self, event_handlers):
+        load_func, clean_func = self.create_load_function()
+
         tag_events = {
             'minecraft:tick': ('minecraft', 'tick', []),
-            'minecraft:load': ('minecraft', 'load', [])
+            'minecraft:load': ('minecraft', 'load', [load_func])
         }
-        if self.setup_on_load:
-            fn = 'setup_on_load_trampoline'
-            self.scope.add_function_names((fn,))
-            tag_events['minecraft:load'][2].append(
-                self.scope.function_name(fn))
+
         for event_handler in event_handlers:
-            event_name, conditions, handler = (event_handler['event'],
-            event_handler['conditions'], event_handler['handler'])
+            event_name, conditions, handler = event_handler
+
+            # This is a tag-based event
             if event_name in tag_events:
                 assert not conditions
                 namespace, tag_name, values = tag_events[event_name]
                 values.append(self.scope.function_name(handler))
-            else:
-                self.add_event_handler(event_name, conditions, handler)
+            else: # This is an advancement-based event
+                # Note: advancement name = handler func name
+                adv = Advancement(handler)
+                adv.event_criteria(handler, event_name, conditions)
+                adv.reward_function(self.scope.function_name(handler))
+                self.writer.write_advancement(adv)
 
+        # Write all tag events if has values
         for namespace, tag_name, values in tag_events.values():
             if values:
                 self.writer.write_tag('functions', tag_name, values,
                                       namespace=namespace)
-                if self.print_debug:
-                    print('Tag')
-                    print('%s: %s' % (tag_name, values))
-                    print()
 
-    def add_event_handler(self, event_name, conditions, handler):
-        # TODO refactor
-        trampoline = handler + '_trampoline'
-        self.scope.add_function_names((trampoline,))
-        fn_name = self.scope.function_name(trampoline)
-        adv = Advancement('adv_' + handler)
-        adv.event_criteria(handler, event_name, conditions)
-        adv.reward_function(fn_name)
-        self.writer.write_advancement(adv)
-        if self.print_debug:
-            print('Advancement', adv.name)
-            print(adv.to_json())
-            print()
-        trampoline_seq = Subsequence()
-        trampoline_seq.add_command(SimpleResolve('advancement', 'revoke', '@s',
-                 'only', self.scope.namespace + ':' + adv.name))
-        trampoline_seq.add_command(Function(handler))
-        self.add_subsequence(trampoline, trampoline_seq)
+        # Return up to main in case cleanup was requested
+        return clean_func
 
+    def _unique_func(self, hint):
+        name = hint
+        i = 0
+        while name in self.scope.func_names:
+            name = '%s%d' % (hint, i)
+            i += 1
+        self.scope.add_function_names((name,))
+        return name
 
-    def set_setup_hook(self, hook):
-        self.setup_hook = hook
+    def create_load_function(self):
+        setup_name = self._unique_func('setup')
 
-    def extended_setup(self, up, down):
+        itemtag = '{stack:[],globals:[],working:{int:0}}}'
+        item = '{id:"minecraft:stone",Count:1b,tag:%s' % itemtag
+        globalnbt = ('{Tags:["%s"],ArmorItems:[%s],NoAI:1b,Invisible:1b,' + \
+               'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
+               'NoBasePlate:1b}') % (self.scope._global_tag, item)
+        utilnbt = ('{Tags:["%s"],NoAI:1b,Invisible:1b,Small:0b,NoGravity:1b,' +\
+                  'Marker:1b,Invulnerable:1b,NoBasePlate:1b}') % (
+                      self.scope._pos_tag)
+        setup = []
+        clean = []
+        if self.scope._global_used:
+            setup.append('kill %s' % self.scope.global_entity())
+            setup.append('summon armor_stand %s %s' %
+                         (self.entity_pos, globalnbt))
+            clean.append('kill %s' % self.scope.global_entity())
+
+        if self.scope._pos_entity_used:
+            setup.append('kill %s' % self.scope.pos_util_entity())
+            setup.append('summon armor_stand %s %s'
+                         % (self.entity_pos, utilnbt))
+            clean.append('kill %s' % self.scope.pos_util_entity())
+
+        for obj, criteria, used in self.scope.get_objectives():
+            if not used:
+                continue
+            if criteria is None:
+                criteria = 'dummy'
+            setup.append('scoreboard objectives add %s %s' % (obj, criteria))
+            clean.append('scoreboard objectives remove %s' % obj)
+
+        for name, display in self.scope.get_bossbars():
+            setup.append('bossbar add %s %s' % (name,
+                                            display.resolve_str(self.scope)))
+            clean.append('bossbar remove %s' % name)
+
+        for name, display in self.scope.get_teams():
+            display = (' ' + display.resolve_str(self.scope)) if display else ''
+            setup.append('team add %s%s' % (name, display))
+            clean.append('team remove %s' % name)
+
+        if self.scope._util_block_used:
+            setup.extend(self.placer.output())
+            clean.extend(self.placer.cleanup())
+
+        self.extended_setup(setup, clean)
+
+        self.writer.write_function(setup_name, setup)
+        clean_func = None
+        if self.create_cleanup:
+            cleanup_name = self._unique_func('cleanup')
+            self.writer.write_function(cleanup_name, clean)
+            clean_func = self.scope.function_name(cleanup_name)
+
+        return self.scope.function_name(setup_name), clean_func
+
+    # TODO remove
+    def extended_setup(self, setup, clean):
         pass
 
-    def create_up_down_functions(self, pos, setup='setup', cleanup='cleanup'):
-        assert setup not in self.scope.func_names
-        assert cleanup not in self.scope.func_names
-        self.scope.add_function_names((setup, cleanup))
-        item = '{id:"minecraft:stone",Count:1b,tag:{stack:[],globals:[],working:{int:0}}}'
-        nbt = ('{Tags:["%s"],ArmorItems:[%s],NoAI:1b,Invisible:1b,' + \
-               'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
-               'NoBasePlate:1b}') % (self.scope.entity_tag, item)
-        utilnbt = ('{Tags:["%s"],NoAI:1b,Invisible:1b,Small:0b,NoGravity:1b,' + \
-                  'Marker:1b,Invulnerable:1b,NoBasePlate:1b}') % (self.scope.pos_util)
-        up = [
-            'kill @e[tag=%s]' % self.scope.entity_tag,
-            'kill @e[tag=%s]' % self.scope.pos_util,
-            'summon armor_stand %s %s' % (pos, nbt),
-            'summon armor_stand %s %s' % (pos, utilnbt)
-        ]
-        down = [
-            'kill @e[tag=%s]' % self.scope.entity_tag,
-            'kill @e[tag=%s]' % self.scope.pos_util
-        ]
-        for obj in self.scope.get_objectives():
-            up.append('scoreboard objectives add %s dummy' % obj)
-            down.append('scoreboard objectives remove %s' % obj)
-        for loc in self.scope.get_mem_locs():
-            up.append(SetConst(Mem(loc), 0).resolve(self.scope))
-        for var, val in {
-                'working_reg': 0,
-                'success_tracker': 0,
-            }.items():
-            up.append(SetConst(Var(var), val).resolve(self.scope))
-        up.extend(self.placer.output())
-        down.extend(self.placer.cleanup())
-        self.extended_setup(up, down)
-        if self.setup_hook:
-            for cmd in self.setup_hook.get_commands():
-                up.append(cmd.resolve(self.scope))
-        self.writer.write_function(setup, up)
-        self.writer.write_function(cleanup, down)
-        if self.setup_on_load:
-            self.writer.write_function('setup_on_load_trampoline', [
-                Function(setup).resolve(self.scope)
-            ])
-        if self.print_debug:
-            print('Function', setup)
-            for cmd in up:
-                print(' ', cmd)
-            print()
-            print('Function', cleanup)
-            for cmd in down:
-                print(' ', cmd)
-            print()
-        return (Function(setup).resolve(self.scope),
-                Function(cleanup).resolve(self.scope))
+    def load_from_top(self, top):
+        writer = _SessionWriter(self)
+        top.writeout(writer)
+        return writer.finish()
+
+class _SessionWriter(FuncWriter):
+
+    def __init__(self, session):
+        self.session = session
+        self.event_handlers = []
+
+    def write_func_table(self, table):
+        self.session.load_function_table(table)
+
+    def write_function(self, name, commands):
+        self.session.add_function(name, commands)
+
+    def write_event_handler(self, handler, event):
+        self.event_handlers.append((
+                event.name,
+                event.conditions,
+                handler.global_name
+            ))
+
+    def write_bossbar(self, name, display):
+        self.session.define_bossbar(name, display)
+
+    def write_team(self, name, display):
+        self.session.define_team(name, display)
+
+    def write_objective(self, name, criteria):
+        self.session.define_objective(name, criteria)
+
+    def write_setup_function(self, func):
+        self.event_handlers.append(('minecraft:load', None, func.global_name))
+
+    def finish(self):
+        return self.session.add_event_handlers(self.event_handlers)

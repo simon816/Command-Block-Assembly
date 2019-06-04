@@ -14,11 +14,19 @@ class NativeType(InsnArg):
 class EntitySelection(NativeType, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
-    def as_cmdref(self):
+    def as_resolve(self):
+        pass
+
+    @property
+    @abc.abstractmethod
+    def is_only_one(self):
         pass
 
 class EntityRef(EntitySelection):
-    pass
+
+    @property
+    def is_only_one(self):
+        return True
 
 # Possible merge with Position
 class BlockRef(NativeType):
@@ -31,6 +39,7 @@ class EntityLocal(NativeType):
 
     def __init__(self, name):
         self.name = name
+        self.obj_ref = ObjectiveRef(name)
 
 class VirtualString(NativeType):
 
@@ -55,72 +64,116 @@ class PlayerRef(EntityRef):
     def __init__(self, name):
         self.player = name
 
-    def as_cmdref(self):
+    def as_resolve(self):
         return NameRef(self.player)
+
+class SelectorType(InsnArg):
+
+    _LOOKUP = {}
+
+    def __init__(self, letter, limit):
+        self.letter = letter
+        self.max_limit = limit
+        self._LOOKUP[letter] = self
+
+    @classmethod
+    def lookup(cls, name):
+        return cls._LOOKUP[name]
+
+    @classmethod
+    def _init_from_parser(cls, name):
+        return cls._LOOKUP[name]
+
+    ALL_PLAYERS = None
+    ALL_ENTITIES = None
+    SENDER = None
+    NEAREST_PLAYER = None
+    RANDOM_PLAYER = None
+
+SelectorType.ALL_PLAYERS = SelectorType('a', None)
+SelectorType.ALL_ENTITIES = SelectorType('e', None)
+SelectorType.SENDER = SelectorType('s', 1)
+SelectorType.NEAREST_PLAYER = SelectorType('p', 1)
+SelectorType.RANDOM_PLAYER = SelectorType('r', 1)
 
 # Name conflict with commands.Selector
 class SelectorTy(EntitySelection):
+
+    def __new__(cls, type):
+        if type.max_limit == 1:
+            return SingleEntitySelector(type)
+        return super().__new__(cls)
 
     def __init__(self, type):
         self.type = type
         self.other_args = []
         self.simple_args = {}
+        self.var_ranges = []
 
     def set(self, key, value):
         self.simple_args[key] = value
 
-    def set_var_range(self, var, min, max):
-        self.other_args.append(SelRange(var, min, max))
+    def set_score_range(self, objective, min, max):
+        self.other_args.append(SelRange(objective, min, max))
 
     def set_nbt(self, path, value):
-        self.other_args.append(SelNbt(path.split('.'), value))
+        parts = path.split('.') if path else []
+        self.other_args.append(SelNbt(parts, value))
 
-    def as_cmdref(self):
+    @property
+    def is_only_one(self):
+        return 'limit' in self.simple_args and self.simple_args['limit'] == '1'
+
+    def as_resolve(self):
         args = SimpleSelectorArgs(self.simple_args)
         for other in self.other_args:
             args = ComboSelectorArgs.new(args, other)
         return Selector(self.type.letter, args)
 
+# Same as Selector but is also an EntityRef so can be used in more places
+class SingleEntitySelector(SelectorTy, EntityRef):
+
+    def __new__(cls, type):
+        return object.__new__(cls)
+
+    @property
+    def is_only_one(self):
+        return True
+
 class PosUtilEntity(EntityRef):
 
-    def as_cmdref(self):
-        return PosUtil.ref
+    def as_resolve(self):
+        return PosUtil
 
-class Position(SimpleResolve, NativeType):
+class Position(NativeType):
 
     def __init__(self, x, y, z):
-        int2str = lambda v: str(v) if type(v) == int else v
-        super().__init__(*map(int2str, (x, y, z)))
         self.x = x
         self.y = y
         self.z = z
+        def internal(val):
+            if isinstance(val, (RelPosVal, AncPosVal)):
+                return val.as_coord
+            return val
+        self._x, self._y, self._z = map(internal, (x, y, z))
 
     def as_blockpos(self):
-        x, y, z = [v if type(v) == int else v.as_blockcoord() for v in (
-            self.x, self.y, self.z)]
-        return BasicBlockPos(x, y, z)
+        return WorldPos(self._x, self._y, self._z, block_pos=True)
 
-class RelPosVal(SimpleResolve, NativeType):
+    def as_worldpos(self):
+        return WorldPos(self._x, self._y, self._z)
 
-    def __init__(self, val):
-        self.val = val
-
-    def resolve(self, scope):
-        return '~%f' % self.val
-
-    def as_blockcoord(self):
-        return RelativeBlockCoord(self.val)
-
-class AncPosVal(SimpleResolve, NativeType):
+class RelPosVal(NativeType):
 
     def __init__(self, val):
         self.val = val
+        self.as_coord = WorldRelCoord(val)
 
-    def resolve(self, scope):
-        return '^%f' % self.val
+class AncPosVal(NativeType):
 
-    def as_blockcoord(self):
-        assert False
+    def __init__(self, val):
+        self.val = val
+        self.as_coord = AnchorRelCoord(val)
 
 class CmdFunction(NativeType, metaclass=abc.ABCMeta):
 
@@ -141,3 +194,20 @@ class BlockType(Resolvable, NativeType):
         props = ','.join(['%s=%s' % (key, self.props[key]) \
                           for key in sorted(self.props.keys())])
         return '%s%s' % (self.block_id, '[%s]' % props if props else '')
+
+class ItemType(Resolvable, NativeType):
+
+    def __init__(self, item_id):
+        self.item_id = item_id
+        self.nbt_props = {}
+
+    def add_nbt(self, nbt):
+        self.nbt_props.update(nbt.items)
+
+    def resolve(self, scope):
+        props = ''
+        if self.nbt_props:
+            from .nbt import NBTCompound
+            nbt = NBTCompound(self.nbt_props.items())
+            props = '[%s]' % nbt.resolve(scope)
+        return '%s%s' % (self.item_id, props)

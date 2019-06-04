@@ -124,10 +124,10 @@ class NBTLong(NBTValue):
 class NBTFloat(NBTValue):
 
     type = NBTType.float
-    validator = int
+    validator = float
 
     def serialize(self):
-        return '%df' % self.val
+        return '%ff' % self.val
 
 class NBTDouble(NBTValue):
 
@@ -195,7 +195,7 @@ class NBTList(RecurseMixin):
 
     def append(self, item):
         assert isinstance(item, NBTBase)
-        assert item.type == self.list_type
+        assert item.type == self.list_type or self.list_type is None
         self.items.append(item)
 
     def recurse(self, apply):
