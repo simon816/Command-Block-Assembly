@@ -481,7 +481,6 @@ class IRFunction(VisibleFunction, VariableHolder):
         assert not self.finished
         for block in self.blocks:
             block.end()
-        print("%s is closed: %s" % (self, self.is_closed()))
         self._finished = True
 
     def get_func_table(self):

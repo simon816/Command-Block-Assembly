@@ -64,7 +64,7 @@ class DeadCodeEliminator(TopVisitor):
         if isinstance(insn, DefineGlobal):
             var = insn._value
             if not var.is_referenced:
-                print("Unreferenced global", var)
+                #print("Unreferenced global", var)
                 return None
         return insn
 
@@ -75,7 +75,7 @@ class DeadCodeEliminator(TopVisitor):
 
     def visit_function(self, name, func):
         if not func.extern_visibility and not func.has_usage():
-            print("Dead function", func)
+            #print("Dead function", func)
             self.changed = True
             return None, None
         elim = DeadCodeFuncEliminator()
@@ -98,7 +98,7 @@ class DeadCodeFuncEliminator(FuncVisitor):
         if isinstance(insn, DefineVariable):
             var = insn._value
             if not var.is_referenced:
-                print("Unreferenced local", var)
+                #print("Unreferenced local", var)
                 return None
         return insn
 
@@ -109,7 +109,7 @@ class DeadCodeFuncEliminator(FuncVisitor):
 
     def visit_block(self, name, block):
         if block.use_count() == 0:
-            print("Dead block", block)
+            #print("Dead block", block)
             return None, None
         self.changed |= DeadCodeBlockEliminator().visit(block)
         return name, block
@@ -169,7 +169,7 @@ class DeadCodeBlockEliminator(BlockVisitor):
 
     def kill(self, insn):
         if insn in self.kills:
-            print("Kill", insn)
+            #print("Kill", insn)
             return None
         return insn
 
@@ -189,7 +189,7 @@ class BranchInliner(BlockVisitor):
     def visit_insn(self, insn):
         if isinstance(insn, Branch):
             if insn.label.use_count() == 1:
-                print("inline", insn.label, "into", self._block)
+                #print("inline", insn.label, "into", self._block)
                 return insn.label.insns
         return insn
 
@@ -198,7 +198,7 @@ class BranchEliminator(BlockVisitor):
     def visit_insn(self, insn):
         if isinstance(insn, Branch):
             if insn.label.is_empty():
-                print("Empty", insn.label)
+                #print("Empty", insn.label)
                 return None
         if isinstance(insn, (CmpBr, RangeBr)):
             copy = insn.copy()
@@ -208,7 +208,7 @@ class BranchEliminator(BlockVisitor):
                     changed = True
                     arg.val = None
             if changed:
-                print("Elim br", copy)
+                #print("Elim br", copy)
                 # eliminated whole insn
                 if not copy.if_true and not copy.if_false:
                     return None
@@ -240,7 +240,7 @@ class AliasInliner(FuncVisitor):
                 self.changed |= block not in self.data.aliases \
                                or self.data.aliases[block] != insn.label
                 self.data.aliases[block] = insn.label
-                print("Alias", block, "to", insn.label)
+                #print("Alias", block, "to", insn.label)
             # Attempt to inline invoke
             if self.func._varsfinalized and isinstance(insn, Invoke) \
                and not self.func.get_registers():
@@ -248,14 +248,14 @@ class AliasInliner(FuncVisitor):
                     self.changed |= block not in self.data.aliases \
                                    or self.data.aliases[block] != insn.func
                     self.data.aliases[block] = insn.func
-                    print("Alias", block, "to", insn.func)
+                    #print("Alias", block, "to", insn.func)
 
             # Blocks that have one instruction that generates one command
             # are recorded for exec_run substitution
             if insn.single_command():
                 self.changed |= block not in self.data.cmd_aliases
                 self.data.cmd_aliases.add(block)
-                print("Alias", block, "to insn", insn)
+                #print("Alias", block, "to insn", insn)
         return name, block
 
 class AliasRewriter(BlockVisitor):
@@ -273,13 +273,13 @@ class AliasRewriter(BlockVisitor):
         for arg in new.query(FunctionLike):
             if arg.val in self.data.aliases:
                 changed = True
-                print("Alias re", arg.val, "to", self.data.aliases[arg.val])
+                #print("Alias re", arg.val, "to", self.data.aliases[arg.val])
                 arg.val = self.data.aliases[arg.val]
             # Things like exec_run
             elif arg.val in self.data.cmd_aliases and arg.accepts(CmdFunction):
                 changed = True
                 cmdvar = BlockAsCommand(arg.val)
-                print("Alias cmd", arg.val, "to", cmdvar)
+                #print("Alias cmd", arg.val, "to", cmdvar)
                 arg.val = cmdvar
 
         # Need to update success tracker to new branch
@@ -302,8 +302,8 @@ class ConstantFolding(BlockVisitor):
         for arg in new.query(Variable):
             if arg.access is READ and arg.val in self.varvals:
                 if arg.accepts(int):
-                    print("Const replace", self.n(arg.val),
-                          "with", self.varvals[arg.val], "in", new)
+                    #print("Const replace", self.n(arg.val),
+                    #      "with", self.varvals[arg.val], "in", new)
                     arg.val = self.varvals[arg.val]
                     changed = True
                 # probably wrong place for this, but can't replace var
@@ -427,8 +427,8 @@ class VariableAliasing(BlockVisitor):
         # Replace READs
         for arg in new.query(Variable):
             if arg.access is READ and arg.val in self.aliases:
-                print("Alias replace", self.n(arg.val),
-                      self.n(self.aliases[arg.val]))
+                #print("Alias replace", self.n(arg.val),
+                #      self.n(self.aliases[arg.val]))
                 arg.val = self.aliases[arg.val]
                 changed = True
         # Subtracting own alias equivalent to setting to 0

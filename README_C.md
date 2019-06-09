@@ -16,12 +16,10 @@ Command line parameters:
 ```
 usage: compiler_main.py [-h] [-E] [-S] [--world-dir WORLD_DIR] [--as-zip]
                         [--namespace NAMESPACE] [--rem-existing] [--debug]
-                        [--stack STACK] [--arg ARG]
-                        [--place-location PLACE_LOCATION] [--enable-sync]
-                        [--page-size PAGE_SIZE] [--setup-on-load]
+                        [--dump-ir] [--gen-cleanup] --place-location
+                        PLACE_LOCATION [--page-size PAGE_SIZE]
                         [--spawn-location SPAWN_LOCATION]
                         [--pack-description PACK_DESCRIPTION]
-                        [--extern EXTERN]
                         file
 
 positional arguments:
@@ -38,19 +36,16 @@ optional arguments:
                         Function namespace
   --rem-existing        Remove existing functions in namespace
   --debug               Enable debug output
-  --stack STACK         Stack size
-  --arg ARG             ASM file arguments
+  --dump-ir             Dump Command IR output
+  --gen-cleanup         Generate cleanup function
   --place-location PLACE_LOCATION
                         Location to place command blocks
-  --enable-sync         Enable SYNC opcode
   --page-size PAGE_SIZE
                         Memory page size
-  --setup-on-load       Run setup on minecraft:load
   --spawn-location SPAWN_LOCATION
                         Location to spawn hidden armor stand
   --pack-description PACK_DESCRIPTION
                         Datapack description
-  --extern EXTERN       Specify external symbol
 ```
 
 You will need to generate the standalone parser (from [Lark](https://github.com/lark-parser/lark)) using the `./compiler/rebuild-grammar.sh` script.  

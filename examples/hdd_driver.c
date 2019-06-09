@@ -8,6 +8,9 @@
 
 #define WORD_SIZE 8
 
+#define TAG hdd_ptr
+#define LOCATION 100 60 100
+
 int mar;
 int mbr;
 
@@ -17,7 +20,7 @@ int __hdd_mul;
 void memory_seek();
 
 void read_mem() {
-    CMD(summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker: 1b});
+    CMD(summon armor_stand LOCATION {Tags:["TAG"], NoGravity:1b, Marker: 1b});
     __hdd_addr = mar;
     mbr = 0;
     __hdd_addr /= MEM_SIZE_X;
@@ -26,20 +29,20 @@ void read_mem() {
     __hdd_mul = 1;
 
     while (__hdd_addr) {
-        if(TEST_CMD(execute at @e[tag=$tag:_mem_ptr$] if block ~ ~ ~ stone)) {
+        if(TEST_CMD(execute at @e[tag=TAG] if block ~ ~ ~ stone)) {
             mbr += __hdd_mul;
         }
         __hdd_addr -= 1;
         __hdd_mul *= 2;
-        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~);
+        CMD(execute as @e[tag=TAG] at @s run tp @s ~ ~1 ~);
     }
-    CMD(kill @e[tag=$tag:_mem_ptr$]);
+    CMD(kill @e[tag=TAG]);
 }
 
 int __mem_temp;
 
 void write_mem() {
-    CMD(summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker: 1b});
+    CMD(summon armor_stand LOCATION {Tags:["TAG"], NoGravity:1b, Marker: 1b});
     __hdd_addr = mar;
     __hdd_addr /= MEM_SIZE_X;
     memory_seek();
@@ -52,18 +55,18 @@ void write_mem() {
         __hdd_addr -= 1;
         __hdd_mul /= 2;
         if (__mem_temp == 0) {
-            CMD(execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ air);
+            CMD(execute at @e[tag=TAG] run setblock ~ ~ ~ air);
         } else {
-            CMD(execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ stone);
+            CMD(execute at @e[tag=TAG] run setblock ~ ~ ~ stone);
         }
-        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~);
+        CMD(execute as @e[tag=TAG] at @s run tp @s ~ ~1 ~);
     }
-    CMD(kill @e[tag=$tag:_mem_ptr$]);
+    CMD(kill @e[tag=TAG]);
 }
 
 void memory_seek() {
     while (__hdd_addr) {
-        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~1 ~ ~);
+        CMD(execute as @e[tag=TAG] at @s run tp @s ~1 ~ ~);
         __hdd_addr -= 1;
     }
 
@@ -72,7 +75,7 @@ void memory_seek() {
 
     while (__hdd_addr) {
         __hdd_addr -= 1;
-        CMD(execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~ ~1);
+        CMD(execute as @e[tag=TAG] at @s run tp @s ~ ~ ~1);
     }
 }
 

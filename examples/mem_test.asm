@@ -1,9 +1,6 @@
 ; A simple script that tests the HDD driver
 ; Writes values 0-63 to memory locations 0-63
 
-; The driver requires an argument 'mem_loc' to be the location
-; in the world where memory starts. e.g. --arg "mem_loc=0 0 0"
-
 #include hdd_driver.asm
 
 .count 20
