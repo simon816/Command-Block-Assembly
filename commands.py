@@ -334,9 +334,9 @@ class EntityReference(BlockOrEntityRef):
 class WorldPos(Resolvable):
 
     def __init__(self, x, y, z, block_pos=False):
-        is_anchor = self._check_coord(x, True, block_pos)
-        was_anchor = self._check_coord(y, is_anchor, block_pos)
-        is_anchor = self._check_coord(z, was_anchor, block_pos)
+        is_anchor = self._check_coord(x, True, not block_pos)
+        was_anchor = self._check_coord(y, is_anchor, not block_pos)
+        is_anchor = self._check_coord(z, was_anchor, not block_pos)
         if was_anchor:
             assert is_anchor
         self.x, self.y, self.z = x, y, z
@@ -860,6 +860,30 @@ class ReplaceItem(Command):
         amount = (' %d' % self.amount) if self.amount is not None else ''
         return 'replaceitem %s %s %s%s' % (self.ref.resolve(scope), self.slot,
                                            self.item.resolve(scope), amount)
+
+class GiveItem(Command):
+
+    def __init__(self, targets, item, count=1):
+        assert isinstance(targets, EntityRef)
+        self.targets = targets
+        self.item = item
+        self.count = count
+
+    def resolve(self, scope):
+        return 'give %s %s %d' % (self.targets.resolve(scope),
+                                  self.item.resolve(scope), self.count)
+
+class ClearItem(Command):
+
+    def __init__(self, targets, item, max_count=-1):
+        assert isinstance(targets, EntityRef)
+        self.targets = targets
+        self.item = item
+        self.max_count = max_count
+
+    def resolve(self, scope):
+        return 'clear %s %s %d' % (self.targets.resolve(scope),
+                                   self.item.resolve(scope), self.max_count)
 
 class EffectGive(Command):
 

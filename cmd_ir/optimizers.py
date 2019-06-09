@@ -184,20 +184,19 @@ class DeadCodeBlockEliminator(BlockVisitor):
         for var in remove:
             del self.varwrites[var]
 
-class CallInliner(BlockVisitor):
+class BranchInliner(BlockVisitor):
 
     def visit_insn(self, insn):
-        if isinstance(insn, Call):
-            if isinstance(insn.label, BasicBlock) and \
-               insn.label.use_count() == 1:
+        if isinstance(insn, Branch):
+            if insn.label.use_count() == 1:
                 print("inline", insn.label, "into", self._block)
                 return insn.label.insns
         return insn
 
-class CallEliminator(BlockVisitor):
+class BranchEliminator(BlockVisitor):
 
     def visit_insn(self, insn):
-        if isinstance(insn, Call):
+        if isinstance(insn, Branch):
             if insn.label.is_empty():
                 print("Empty", insn.label)
                 return None
@@ -237,7 +236,7 @@ class AliasInliner(FuncVisitor):
         insns = [insn for insn in block.insns if not insn.is_virtual]
         if len(insns) == 1:
             insn = insns[0]
-            if isinstance(insn, Call) and insn.label != block:
+            if isinstance(insn, Branch) and insn.label != block:
                 self.changed |= block not in self.data.aliases \
                                or self.data.aliases[block] != insn.label
                 self.data.aliases[block] = insn.label
@@ -300,41 +299,39 @@ class ConstantFolding(BlockVisitor):
         changed = False
 
         # More optimal to use non-constants for onlyref
-        # TODO we miss optimisations because it can't take constants
-        if not isinstance(new, OnlyRefOperationInsn):
-            for arg in new.query(Variable):
-                if arg.access is READ and arg.val in self.varvals:
-                    if arg.accepts(int):
-                        print("Const replace", self.n(arg.val),
-                              "with", self.varvals[arg.val], "in", new)
-                        arg.val = self.varvals[arg.val]
-                        changed = True
-                    # probably wrong place for this, but can't replace var
-                    # with int in rangebr
-                    elif isinstance(new, RangeBr):
-                        val = self.varvals[arg.val]
-                        matches = True
-                        if new.min is not None:
-                            matches &= val >= new.min
-                        if new.max is not None:
-                            matches &= val <= new.max
-                        if matches:
-                            return Call(new.if_true) if new.if_true else None
-                        else:
-                            return Call(new.if_false) if new.if_false else None
-                    elif isinstance(new, CmpBr):
-                        val = self.varvals[arg.val]
-                        var = new.left
-                        op = new.op
-                        if arg.name == 'left':
-                            var = new.right
-                            op = {'le': 'ge', 'lt': 'gt', 'ge': 'le',
-                                  'gt': 'lt', 'eq': 'eq'
-                            }[op]
-                        val += 1 if op == 'gt' else -1 if op == 'lt' else 0
-                        min = None if op in ['lt', 'le'] else val
-                        max = None if op in ['gt', 'ge'] else val
-                        return RangeBr(var, min, max, new.if_true, new.if_false)
+        for arg in new.query(Variable):
+            if arg.access is READ and arg.val in self.varvals:
+                if arg.accepts(int):
+                    print("Const replace", self.n(arg.val),
+                          "with", self.varvals[arg.val], "in", new)
+                    arg.val = self.varvals[arg.val]
+                    changed = True
+                # probably wrong place for this, but can't replace var
+                # with int in rangebr
+                elif isinstance(new, RangeBr):
+                    val = self.varvals[arg.val]
+                    matches = True
+                    if new.min is not None:
+                        matches &= val >= new.min
+                    if new.max is not None:
+                        matches &= val <= new.max
+                    if matches:
+                        return Branch(new.if_true) if new.if_true else None
+                    else:
+                        return Branch(new.if_false) if new.if_false else None
+                elif isinstance(new, CmpBr):
+                    val = self.varvals[arg.val]
+                    var = new.left
+                    op = new.op
+                    if arg.name == 'left':
+                        var = new.right
+                        op = {'le': 'ge', 'lt': 'gt', 'ge': 'le',
+                              'gt': 'lt', 'eq': 'eq'
+                        }[op]
+                    val += 1 if op == 'gt' else -1 if op == 'lt' else 0
+                    min = None if op in ['lt', 'le'] else val
+                    max = None if op in ['gt', 'ge'] else val
+                    return RangeBr(var, min, max, new.if_true, new.if_false)
 
         # See if we can perform constant folding on the operation
         if isinstance(new, SimpleOperationInsn):
@@ -649,9 +646,9 @@ class Optimizer:
             DeadCodeEliminator(),
             FuncOptimizers([
                 BlockOptimizers([
-                    CallInliner(),
+                    BranchInliner(),
                     AliasRewriter(alias_data),
-                    CallEliminator(),
+                    BranchEliminator(),
                     ConstantFolding(),
                     VariableAliasing(),
                     ComparisonOptimizer()

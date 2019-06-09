@@ -10,7 +10,9 @@ function: "function" FUNC_NAME "{" function_body "}"
 
 function_body: preamble? block*
 
-block: LABEL NEWLINE instruction*
+block: block_modifier? LABEL NEWLINE instruction*
+
+block_modifier: "[" WORD "]"
 
 instruction: ( assign_insn | normal_insn ) NEWLINE
 
@@ -44,6 +46,7 @@ ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "><" | "<" | ">"
 %import common.SIGNED_FLOAT
 %import common.WS
 %import common.NEWLINE
+%import common.WORD
 
 %ignore WS
 COMMENT: "#" /[^\n]/*

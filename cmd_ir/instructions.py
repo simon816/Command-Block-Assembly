@@ -313,10 +313,13 @@ class SimpleOperationInsn(Insn):
                 with self.src.open_for_read(out) as srcref:
                     out.write(self.with_ref(ref, srcref))
             else:
-                if self.src < 0 and self.with_neg_const is not None:
-                    out.write(self.with_neg_const(ref, -self.src))
-                else:
-                    out.write(self.with_const(ref, self.src))
+                self.apply_const_src(ref, out)
+
+    def apply_const_src(self, ref, out):
+        if self.src < 0 and self.with_neg_const is not None:
+            out.write(self.with_neg_const(ref, -self.src))
+        else:
+            out.write(self.with_const(ref, self.src))
 
     def serialize(self, holder):
         dest, src = self.serialize_args(holder)
@@ -335,7 +338,13 @@ class SimpleOperationInsn(Insn):
 import operator
 
 class OnlyRefOperationInsn(SimpleOperationInsn):
-    args = [Variable, Variable]
+
+    def apply_const_src(self, ref, out):
+        tmp = out.allocate_temp()
+        srcref = Var(tmp)
+        out.write(SetConst(srcref, self.src))
+        out.write(self.with_ref(ref, srcref))
+        out.free_temp(tmp)
 
 class AddScore(SimpleOperationInsn):
     with_ref = OpAdd
@@ -354,12 +363,12 @@ class SubScore(SimpleOperationInsn):
 class MulScore(OnlyRefOperationInsn):
     with_ref = OpMul
     constfunc = operator.mul
-    identitiy = 1
+    identity = 1
 
 class DivScore(OnlyRefOperationInsn):
     with_ref = OpDiv
     constfunc = operator.floordiv
-    identitiy = 1
+    identity = 1
 
 class ModScore(OnlyRefOperationInsn):
     with_ref = OpMod
@@ -377,16 +386,17 @@ class MovGtScore(OnlyRefOperationInsn):
     identity = None
 
 class SwapScore(OnlyRefOperationInsn):
-    with_ref = OpSwap
+    args = [Variable, Variable]
     access = [WRITE, WRITE]
+    with_ref = OpSwap
     constfunc = None
     identity = None
 
-class Call(SingleCommandInsn):
+class Branch(SingleCommandInsn):
 
     args = [BasicBlock]
     argnames = 'label'
-    insn_name = 'call'
+    insn_name = 'branch'
     is_block_terminator = True
     is_branch = True
 
@@ -395,6 +405,15 @@ class Call(SingleCommandInsn):
 
     def get_cmd(self):
         return Function(self.label.global_name)
+
+class Call(Branch):
+
+    is_block_terminator = False
+    insn_name = 'call'
+
+    def get_cmd(self):
+        assert self.label.is_function, self.label
+        return super().get_cmd()
 
 def Opt(optype):
     return (type(None), optype)
@@ -456,7 +475,6 @@ class Invoke(Insn):
     fnargs_type = (int, Variable)
     retvars_type = Opt(Variable)
     insn_name = 'invoke'
-    is_block_terminator = True
     is_branch = True
 
     def single_command(self):
@@ -753,6 +771,55 @@ class NBTSubPath(ConstructorInsn):
 
     def declare(self):
         self.root.usage_read()
+
+class NBTModifyValueInsn(SingleCommandInsn):
+
+    # Should be EntityRef but need to handle @e[limit=1]
+    args = [(BlockRef, EntitySelection), VirtualString, str, NBTBase]
+    argnames = 'target path action source'
+    insn_name = 'nbt_modify_val'
+
+    def activate(self, seq):
+        assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
+        assert self.action != 'insert', "TODO"
+
+    def get_cmd(self):
+        if isinstance(self.target, BlockRef):
+            target = self.target.as_cmdref()
+        elif isinstance(self.target, EntitySelection):
+            target = EntityReference(self.target.as_resolve())
+        else:
+            assert False
+        return DataModifyValue(target, NbtPath(self.path), self.action,
+                               self.source)
+
+class NBTModifyFromInsn(SingleCommandInsn):
+
+    # Should be EntityRef but need to handle @e[limit=1]
+    args = [(BlockRef, EntitySelection), VirtualString, str, (BlockRef,
+                                          EntitySelection), VirtualString]
+    argnames = 'target target_path action source source_path'
+    insn_name = 'nbt_modify_from'
+
+    def activate(self, seq):
+        assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
+        assert self.action != 'insert', "TODO"
+
+    def get_cmd(self):
+        if isinstance(self.target, BlockRef):
+            target = self.target.as_cmdref()
+        elif isinstance(self.target, EntitySelection):
+            target = EntityReference(self.target.as_resolve())
+        else:
+            assert False
+        if isinstance(self.source, BlockRef):
+            source = self.source.as_cmdref()
+        elif isinstance(self.source, EntitySelection):
+            source = EntityReference(self.source.as_resolve())
+        else:
+            assert False
+        return DataModifyFrom(target, NbtPath(str(self.target_path)),
+                          self.action, source, NbtPath(str(self.source_path)))
 
 class CreateSelector(ConstructorInsn):
 
@@ -1238,14 +1305,24 @@ class ExecComponentRotate:
     def apply(self, exec, chain, out):
         chain.rotated(self.y, self.x)
 
+RelPosType = (int, float, RelPosVal)
+
 class ExecRotate(VoidApplicationInsn):
 
-    args = [ExecChain, int, int]
+    args = [ExecChain, RelPosType, RelPosType]
     argnames = 'chain y x'
     insn_name = 'exec_rotate'
 
     def activate(self, seq):
-        self.chain.add(ExecComponentRotate(self.y, self.x))
+        if isinstance(self.y, RelPosVal):
+            y = str(self.y.as_coord)
+        else:
+            y = str(self.y)
+        if isinstance(self.x, RelPosVal):
+            x = str(self.x.as_coord)
+        else:
+            x = str(self.x)
+        self.chain.add(ExecComponentRotate(y, x))
 
 class ExecComponentRotatedAsEntity:
 
@@ -1341,6 +1418,8 @@ class ExecRun(Insn):
     def apply(self, out, func):
         with self.exec.apply(out) as chain:
             if isinstance(self.func, FunctionLike):
+                if isinstance(self.func, BasicBlock):
+                    assert self.func.is_function, self.func
                 cmd = Function(self.func.global_name)
             else:
                 cmd = self.func.as_cmd()
@@ -1367,12 +1446,21 @@ class BlockInsn(ConstructorInsn):
 
 class AddBlockPropInsn(VoidApplicationInsn):
 
-    args = [BlockType, str, str]
+    args = [BlockType, str, VirtualString]
     argnames = 'block key value'
     insn_name = 'add_block_prop'
 
     def activate(self, seq):
         self.block.add_prop(self.key, self.value)
+
+class SetBlockNBT(VoidApplicationInsn):
+
+    args = [BlockType, NBTCompound]
+    argnames = 'block nbt'
+    insn_name = 'set_block_nbt'
+
+    def activate(self, seq):
+        self.block.set_nbt(self.nbt)
 
 class SetBlockInsn(SingleCommandInsn):
 
@@ -1410,6 +1498,34 @@ class ReplaceEntityItem(SingleCommandInsn):
     def get_cmd(self):
         return ReplaceItem(self.target.as_resolve().ref, str(self.slot),
                            self.item, self.amount)
+
+class ReplaceBlockItem(SingleCommandInsn):
+
+    args = [Position, VirtualString, ItemType, Opt(int)]
+    argnames = 'pos slot item amount'
+    insn_name = 'replace_block_item'
+
+    def get_cmd(self):
+        return ReplaceItem(self.pos.as_blockpos().ref, str(self.slot),
+                           self.item, self.amount)
+
+class GiveInsn(SingleCommandInsn):
+
+    args = [EntitySelection, ItemType, int]
+    argnames = 'targets item count'
+    insn_name = 'give'
+
+    def get_cmd(self):
+        return GiveItem(self.targets.as_resolve(), self.item, self.count)
+
+class ClearInsn(SingleCommandInsn):
+
+    args = [EntitySelection, ItemType, int]
+    argnames = 'targets item max_count'
+    insn_name = 'clear'
+
+    def get_cmd(self):
+        return ClearItem(self.targets.as_resolve(), self.item, self.max_count)
 
 class TeleportInsn(SingleCommandInsn):
 
@@ -1572,7 +1688,7 @@ class SetTitleTimes(SingleCommandInsn):
 def make_yield_tick(block, func, callback):
     tr = func.create_block('yield_trampoline')
     tr.add(ClearCommandBlock())
-    tr.add(Call(callback))
+    tr.add(Branch(callback))
     block.add(SetCommandBlock(tr))
 
 class SetCommandBlock(SingleCommandInsn):
@@ -1615,6 +1731,9 @@ class Return(VoidApplicationInsn):
     insn_name = 'ret'
     is_block_terminator = True
     is_branch = True
+
+    def activate(self, seq):
+        assert not seq.is_function, seq
 
 # Direct stack manipulation. Should not be called when stack-based variables
 # may be possible (stack frames will be unaligned)
@@ -1733,16 +1852,13 @@ class TextStyle(VoidApplicationInsn):
         val = self.val
         if self.prop in self._boolean_props:
             assert val in ['true', 'false']
+            val = val == 'true'
         elif self.prop == 'color':
-            assert type(self.val) == str
+            assert type(val) == str
+            # TODO
         elif self.prop == 'insertion':
             assert isinstance(val, VirtualString)
-        if self.prop == 'color':
-            pass # TODO
-        elif self.prop == 'insertion':
             val = str(val)
-        elif self.prop in self._boolean_props:
-            val = val == 'true'
         self.text.set_style(self.prop, val)
 
 _ClickAction = TextClickAction

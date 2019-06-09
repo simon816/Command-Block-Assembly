@@ -181,6 +181,7 @@ class NBTCompound(RecurseMixin):
         self.items[name] = value
 
     def recurse(self, apply):
+        # TODO quote keys
         return '{%s}' % (','.join('%s:%s' % (k, apply(v)) for k, v\
                                              in self.items.items()))
 

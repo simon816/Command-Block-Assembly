@@ -475,6 +475,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         assert not self.finished
         for block in self.blocks:
             block.end()
+        print("%s is closed: %s" % (self, self.is_closed()))
         self._finished = True
 
     def get_func_table(self):
@@ -523,6 +524,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         stackvars = self.add_entry_exit()
         self.configure_parameters(bool(stackvars))
         if self.is_closed():
+            self._entryblock.force = True
             for insn in self._exitblock.insns:
                 self._entryblock.add(insn)
             self._exitblock.insns = []
@@ -533,7 +535,7 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def add_entry_exit(self):
         from .variables import LocalVariable, NbtOffsetVariable
-        from .instructions import PushNewStackFrame, PopStack, Call
+        from .instructions import PushNewStackFrame, PopStack, Branch
         # sorted from head to tail of stack
         vars = sorted([var.var for var in self.scope.values() \
                 if isinstance(var, LocalVariable) \
@@ -549,7 +551,7 @@ class IRFunction(VisibleFunction, VariableHolder):
                                                          in vars[::-1])))
             self._exitblock.add(PopStack())
         # Always branch to real entry point
-        self._entryblock.add(Call(self.blocks[0]))
+        self._entryblock.add(Branch(self.blocks[0]))
         return vars
 
     def add_advancement_revoke(self, event):
@@ -574,6 +576,8 @@ class BasicBlock(FunctionLike, InstructionSeq):
         self._func = func
         self.needs_success_tracker = False
         self.defined = False
+        self.is_function = False
+        self.force = False
         self._use = 0
 
     def usage(self):
@@ -584,6 +588,9 @@ class BasicBlock(FunctionLike, InstructionSeq):
 
     def use_count(self):
         return self._use
+
+    def set_is_function(self):
+        self.is_function = True
 
     @property
     def global_name(self):
@@ -597,14 +604,19 @@ class BasicBlock(FunctionLike, InstructionSeq):
 
     def is_terminated(self):
         assert self.defined
+        if self.is_function:
+            return True
         if not self.insns:
             return False
         return self.insns[-1].terminator()
 
     def add(self, insn):
-        from .instructions import Return, Call
+        if not self.force and self.insns and self.insns[-1].terminator():
+            assert False, "Block %s is terminated by %s. Tried adding %s" % (
+                self, self.insns[-1], insn)
+        from .instructions import Return, Branch
         if isinstance(insn, Return):
-            return super().add(Call(self._func._exitblock))
+            return super().add(Branch(self._func._exitblock))
         return super().add(insn)
 
     def writeout(self, temp_gen):

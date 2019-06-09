@@ -185,15 +185,20 @@ class BlockType(Resolvable, NativeType):
 
     def __init__(self, block_id):
         self.block_id = block_id
+        self.nbt = None
         self.props = {}
 
     def add_prop(self, prop, value):
         self.props[prop] = value
 
+    def set_nbt(self, nbt):
+        self.nbt = nbt
+
     def resolve(self, scope):
         props = ','.join(['%s=%s' % (key, self.props[key]) \
                           for key in sorted(self.props.keys())])
-        return '%s%s' % (self.block_id, '[%s]' % props if props else '')
+        nbt = self.nbt.resolve(scope) if self.nbt is not None else ''
+        return '%s%s%s' % (self.block_id, '[%s]' % props if props else '', nbt)
 
 class ItemType(Resolvable, NativeType):
 
@@ -209,5 +214,5 @@ class ItemType(Resolvable, NativeType):
         if self.nbt_props:
             from .nbt import NBTCompound
             nbt = NBTCompound(self.nbt_props.items())
-            props = '[%s]' % nbt.resolve(scope)
+            props = nbt.resolve(scope)
         return '%s%s' % (self.item_id, props)

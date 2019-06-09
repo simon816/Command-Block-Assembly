@@ -41,11 +41,22 @@ class BuildProgram(Interpreter):
         self.curr_seq = None
 
     def block(self, node):
-        name = node.children[0].value[:-1]
+        if not isinstance(node.children[0], Token):
+            # Modifier is first child
+            name = node.children[1].value[:-1]
+        else:
+            name = node.children[0].value[:-1]
         self.curr_seq = self.func.get_or_create_block(name)
         self.visit_children(node)
         self.curr_seq.defined = True
         self.curr_seq = None
+
+    def block_modifier(self, node):
+        modifier = str(node.children[0].value)
+        if modifier == 'function':
+            self.curr_seq.set_is_function()
+        else:
+            assert False, modifier
 
     def instruction(self, node):
         insn, newline = self.visit_children(node)

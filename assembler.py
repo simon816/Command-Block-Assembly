@@ -255,7 +255,7 @@ class Assembler:
     def callinsn(self, dest):
         if isinstance(dest, VisibleFunction):
             return Invoke(dest, None, None)
-        return Call(dest)
+        return Branch(dest)
 
     def get_src_dest(self, src, dest):
         src, dest = self.resolve_ref(*src), self.resolve_ref(*dest)
