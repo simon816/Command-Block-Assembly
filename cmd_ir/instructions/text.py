@@ -1,3 +1,5 @@
+"""Text Instructions"""
+
 from ._core import Insn, ConstructorInsn, VoidApplicationInsn, MultiOpen
 from ..core_types import (NativeType,
                           VirtualString,
@@ -54,16 +56,20 @@ class TextObject(NativeType):
         assert False
 
 class CreateText(ConstructorInsn):
+    """Creates a text object."""
 
+    rettype = TextObject
     insn_name = 'text'
 
     def construct(self):
         return TextObject()
 
 class TextAppend(VoidApplicationInsn):
+    """Appends the given value to the text object."""
 
     args = [TextObject, (VirtualString, int, Variable, TextObject)]
     argnames = 'text value'
+    argdocs = ["Text to append to", "Value to append"]
     insn_name = 'text_append'
     preamble_safe = True
 
@@ -86,12 +92,14 @@ class TextAppend(VoidApplicationInsn):
             self.text.set(self._index, self.value)
 
 class TextStyle(VoidApplicationInsn):
+    """Sets a style property of a text object."""
 
     _boolean_props = ['bold', 'italic', 'underlined',
                         'strikethrough', 'obfuscated']
 
     args = [TextObject, str, (str, VirtualString)]
     argnames = 'text prop val'
+    argdocs = ["Text to change the style of", "Style property", "Style value"]
     insn_name = 'text_style'
     preamble_safe = True
 
@@ -109,9 +117,12 @@ class TextStyle(VoidApplicationInsn):
         self.text.set_style(self.prop, val)
 
 class TextClickAction(VoidApplicationInsn):
+    """Sets the click action on a text object."""
 
     args = [TextObject, str, VirtualString]
     argnames = 'text action value'
+    argdocs = ["Text object", "Action, one of: open_url|open_file|change_page",
+               "Value of the action"]
     insn_name = 'text_click_action'
     preamble_safe = True
 
@@ -121,9 +132,12 @@ class TextClickAction(VoidApplicationInsn):
                                                           str(self.value)))
 
 class TextClickFunc(VoidApplicationInsn):
+    """Sets the click action of a text object to run or suggest a function or
+    command."""
 
     args = [TextObject, str, (FunctionLike, CmdFunction)]
     argnames = 'text action func'
+    argdocs = ["Text object", "Either run or suggest", "Function or command"]
     insn_name = 'text_click_func'
     preamble_safe = True
 
@@ -141,9 +155,11 @@ class TextClickFunc(VoidApplicationInsn):
         self.text.set_style('clickEvent', c.TextClickAction(action, cmd))
 
 class TextSend(Insn):
+    """Sends a text object to target players."""
 
     args = [TextObject, EntitySelection]
     argnames = 'text target'
+    argdocs = ["Text to send", "Players to send the text to"]
     insn_name = 'text_send'
 
     def apply(self, out, func):

@@ -251,6 +251,7 @@ class TopLevel(VariableHolder):
         return IRFunction(name, self)
 
     def create_global(self, namehint, vartype):
+        from .instructions import DefineGlobal
         def create(name):
             return self.preamble.add(DefineGlobal(vartype))
         return self.uniq(namehint, create)
@@ -470,6 +471,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         return block
 
     def create_var(self, namehint, vartype):
+        from .instructions import DefineVariable
         def create(name):
             return self.preamble.add(DefineVariable(vartype))
         return self.uniq(namehint, create)
@@ -535,6 +537,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._varsfinalized = True
 
     def add_entry_exit(self):
+        from .instructions import PushNewStackFrame, PopStack, Branch
         # sorted from head to tail of stack
         vars = sorted([var.var for var in self.scope.values() \
                 if isinstance(var, LocalVariable) \
@@ -554,6 +557,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         return vars
 
     def add_advancement_revoke(self, event):
+        from instructions import RevokeEventAdvancement
         self._entryblock.add(RevokeEventAdvancement(self))
 
     def serialize(self):
@@ -609,6 +613,7 @@ class BasicBlock(FunctionLike, InstructionSeq):
         return self.insns[-1].terminator()
 
     def add(self, insn):
+        from .instructions import Branch, Return
         if not self.force and self.insns and self.insns[-1].terminator():
             assert False, "Block %s is terminated by %s. Tried adding %s" % (
                 self, self.insns[-1], insn)
@@ -663,9 +668,3 @@ class SuperBlock(BasicBlock):
     def reset(self):
         if self._clear:
             super().reset()
-
-# Load these after everything has been defined - otherwise it is a recursive
-# dependency
-from .instructions import (DefineGlobal, DefineVariable, PushNewStackFrame,
-                           PopStack, Branch, RevokeEventAdvancement, Return,
-                           Branch)

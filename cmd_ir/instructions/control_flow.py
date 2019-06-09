@@ -1,3 +1,5 @@
+"""Control Flow"""
+
 from ._core import (Insn, SingleCommandInsn, READ, WRITE, VoidApplicationInsn,
                     TupleQueryResult, STACK_HEAD)
 from ..core import BasicBlock, VisibleFunction, FunctionLike
@@ -9,9 +11,11 @@ from ..nbt import NBTList, NBTType, NBTCompound, FutureNBTString
 import commands as c
 
 class Branch(SingleCommandInsn):
+    """Unconditionally branch to the given label."""
 
     args = [BasicBlock]
     argnames = 'label'
+    argdocs = ["Destination to branch to"]
     insn_name = 'branch'
     is_block_terminator = True
     is_branch = True
@@ -23,8 +27,12 @@ class Branch(SingleCommandInsn):
         return c.Function(self.label.global_name)
 
 class Call(Branch):
+    """'calls' a label instead of branching. The label must be tagged with the
+    'function' modifier. Control will resume to the next instruction after the
+    label has been executed."""
 
     is_block_terminator = False
+    argdocs = ["Label tagged as a function"]
     insn_name = 'call'
 
     def get_cmd(self):
@@ -61,10 +69,13 @@ def make_stack_frame_from(values, out):
             val.realign_frame(-1)
 
 class Invoke(Insn):
+    """Invokes a function."""
 
     args = [VisibleFunction, Opt(tuple), Opt(tuple)]
     access = [READ, READ, WRITE]
     argnames = 'func fnargs retvars'
+    argdocs = ["Function to invoke", "Parameters to pass to the function",
+               "Tuple of `Variable`s to place return values into"]
     fnargs_type = (int, Variable)
     retvars_type = Opt(Variable)
     insn_name = 'invoke'
@@ -179,8 +190,13 @@ def _branch_apply(out, if_true, if_false, apply):
                   .run(false_fn))
 
 class RangeBr(Insn):
+    """Branch to a label depending on the value of a variable."""
 
     args = [Variable, Opt(int), Opt(int), Opt(FunctionLike), Opt(FunctionLike)]
+    argdocs = ["Variable to test", "Minimum value, or NULL for negative " \
+               + "infinity", "Maximum value, or NULL for positive infinity",
+               "Label to jump to if min <= var <= max",
+               "Label to jump to otherwise"]
     argnames = 'var min max if_true if_false'
     insn_name = 'rangebr'
     is_branch = True
@@ -209,9 +225,13 @@ class RangeBr(Insn):
                           cond.score_range(var, range))
 
 class CmpBr(Insn):
+    """Compare two variables and jump depending on the comparison."""
 
     args = [Variable, str, Variable, Opt(FunctionLike), Opt(FunctionLike)]
     argnames = 'left op right if_true if_false'
+    argdocs = ["Left variable", "Operator for comparison, one of: " \
+               + "lt|le|eq|ge|gt", "Right variable", "Label to branch if true",
+               "Label to branch to otherwise"]
     insn_name = 'cmpbr'
     is_branch = True
 
@@ -250,8 +270,11 @@ def make_yield_tick(block, func, callback):
     block.add(SetCommandBlock(tr))
 
 class SetCommandBlock(SingleCommandInsn):
+    """Sets the special command block to run the given function on the next
+    tick."""
     args = [FunctionLike]
     argnames = 'func'
+    argdocs = ["Function to run"]
     insn_name = 'set_command_block'
 
     def declare(self):
@@ -263,6 +286,7 @@ class SetCommandBlock(SingleCommandInsn):
         return c.DataMerge(c.UtilBlockPos.ref, tag)
 
 class ClearCommandBlock(SingleCommandInsn):
+    """Remove any value from the special command block."""
 
     args = []
     argnames = ''
@@ -272,6 +296,8 @@ class ClearCommandBlock(SingleCommandInsn):
         return c.DataRemove(c.UtilBlockPos.ref, c.NbtPath('Command'))
 
 class SetCommandBlockFromStack(SingleCommandInsn):
+    """Copies the value from the top of the stack into the special command
+    block."""
 
     args = []
     argnames = ''
@@ -283,6 +309,7 @@ class SetCommandBlockFromStack(SingleCommandInsn):
 
 # application defined in IRFunction
 class Return(VoidApplicationInsn):
+    """Return from a function."""
 
     args = []
     argnames = ''
@@ -298,6 +325,8 @@ class Return(VoidApplicationInsn):
 # Only used by cmd_ir internals and assembler.py
 
 class PopStack(SingleCommandInsn):
+    """Removes the head of the global stack. Do not use in normal circumstances,
+    instead use parameter passing."""
 
     args = []
     argnames = ''
@@ -307,10 +336,13 @@ class PopStack(SingleCommandInsn):
         return c.DataRemove(c.GlobalEntity.ref, c.StackPath(STACK_HEAD))
 
 class GetStackHead(Insn):
+    """Copies the head of the global stack into the given variable. Do not use
+    in normal circumstances, instead use paramteter passing."""
 
     args = [Variable]
     access = [WRITE]
     argnames = 'dest'
+    argdocs = ["Variable to copy into"]
     insn_name = 'get_stack_head'
 
     def declare(self):
@@ -323,9 +355,11 @@ class GetStackHead(Insn):
         VirtualStackPointer(self.dest.type, STACK_HEAD).clone_to(self.dest, out)
 
 class PushStackVal(Insn):
+    """Push a value to the top of the global stack."""
 
     args = [(Variable, int)]
     argnames = 'value'
+    argdocs = ["Value to push"]
     insn_name = 'push_stack_val'
 
     def declare(self):
@@ -342,9 +376,11 @@ class PushStackVal(Insn):
             self.value.push_to_stack(out)
 
 class PushFunction(SingleCommandInsn):
+    """Push a function pointer to the top of the global stack."""
 
     args = [FunctionLike]
     argnames = 'func'
+    argdocs = ["Function to push"]
     insn_name = 'push_function'
 
     def declare(self):
@@ -356,9 +392,11 @@ class PushFunction(SingleCommandInsn):
         return c.DataModifyStack(None, None, 'append', tag, c.StackFrameHead)
 
 class PushNewStackFrame(Insn):
+    """(Internal) Create a new stackframe."""
 
     args = [tuple]
     argnames = 'framevals'
+    argdocs = ["Frame content"]
     insn_name = 'push_stack_frame'
 
     def apply(self, out, func):

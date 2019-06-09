@@ -1,3 +1,5 @@
+"""Variable Arithmetic Instructions"""
+
 from ._core import Insn, READ, WRITE, get_subclasses
 from ..variables import Variable
 
@@ -8,7 +10,8 @@ class SetScore(Insn):
     args = [Variable, (int, Variable)]
     access = [WRITE, READ]
     argnames = 'var value'
-    insn_name = '#invalid'
+    argdocs = ["Variable to set the value on", "Value to set"]
+    insn_name = '#invalid_setscore'
 
     def activate(self, seq):
         assert self.var.type.isnumeric
@@ -32,7 +35,8 @@ class SimpleOperationInsn(Insn):
     args = [Variable, (int, Variable)]
     access = [WRITE, READ]
     argnames = 'dest src'
-    insn_name = '#invalid'
+    argdocs = ["Destination for the operation", "Source for the operation"]
+    insn_name = '#invalid_operation'
     with_neg_const = None
 
     def activate(self, seq):

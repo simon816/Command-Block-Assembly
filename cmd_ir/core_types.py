@@ -9,7 +9,10 @@ class InsnArg:
         return value
 
 class NativeType(InsnArg):
-    pass
+
+    @classmethod
+    def typename(cls):
+        return cls.__name__
 
 class EntitySelection(NativeType, metaclass=abc.ABCMeta):
 
