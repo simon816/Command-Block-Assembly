@@ -4,7 +4,7 @@ preamble: "preamble" "{" instruction* "}"
 
 ?body: function | extern_func
 
-extern_func: "extern" "function" FUNC_NAME NEWLINE
+extern_func: "extern" "function" FUNC_NAME (typelist|NULL) (typelist|NULL) NEWLINE
 
 function: "function" FUNC_NAME "{" function_body "}"
 
@@ -25,6 +25,7 @@ operand: IDENT | atom | tuple
 
 tuple: "(" atom ["," atom] ")"
 
+typelist: "(" IDENT ["," IDENT] ")"
 
 LABEL: CNAME ":"
 IDENT: CNAME

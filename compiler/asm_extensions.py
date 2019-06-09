@@ -1,7 +1,11 @@
 from session import Session
 from assembler import Assembler
-from commands import *
-from cmd_ir.instructions import *
+
+from cmd_ir.core_types import CmdFunction
+from cmd_ir.instructions import RunCommand, SetScore, AddScore, SubScore
+from cmd_ir.variables import VarType, GlobalScoreVariable
+
+import commands as c
 
 class CompilerSession(Session):
 
@@ -13,8 +17,8 @@ class CompilerSession(Session):
             self.add_page()
 
     def add_page(self):
-        mbr = Var('memory_buffer')
-        mar = Var('memory_address')
+        mbr = c.Var('memory_buffer')
+        mar = c.Var('memory_address')
         self.define_objective('memory_buffer', None)
         self.define_objective('memory_address', None)
 
@@ -25,17 +29,17 @@ class CompilerSession(Session):
             getter = []
             setter = []
             def gen_fn(fn, p):
-                return ExecuteChain() \
+                return c.ExecuteChain() \
                        .cond('if') \
-                       .score_range(mar, ScoreRange(p.min, p.max)) \
-                       .run(Function(pair_name(fn, p)))
+                       .score_range(mar, c.ScoreRange(p.min, p.max)) \
+                       .run(c.Function(pair_name(fn, p)))
             def gen_assign(n, g=True):
-                slot = Var('memory_slot_%d' % n)
+                slot = c.Var('memory_slot_%d' % n)
                 self.define_objective('memory_slot_%d' % n, None)
-                return ExecuteChain() \
+                return c.ExecuteChain() \
                         .cond('if') \
-                        .score_range(mar, ScoreRange(n, n)) \
-                        .run(OpAssign(mbr if g else slot, slot if g else mbr))
+                        .score_range(mar, c.ScoreRange(n, n)) \
+                        .run(c.OpAssign(mbr if g else slot, slot if g else mbr))
 
             if pair.left and pair.left.left:
                 getter.append(gen_fn('mem_get', pair.left))
@@ -66,8 +70,8 @@ class CompilerSession(Session):
             create_function(entry_point, force=True)
 
         # Redirect mem_get and mem_set to the actual entry point
-        getter = [Function(pair_name('mem_get', entry_point))]
-        setter = [Function(pair_name('mem_set', entry_point))]
+        getter = [c.Function(pair_name('mem_get', entry_point))]
+        setter = [c.Function(pair_name('mem_set', entry_point))]
         self.scope.add_function_names(('mem_get', 'mem_set'))
         self.add_function('mem_get', getter)
         self.add_function('mem_set', setter)
@@ -104,8 +108,8 @@ class CompilerSession(Session):
 
     def extended_setup(self, up, down):
         for i in range(self.page_size):
-            slot = Var('memory_slot_%d' % i)
-            up.append(SetConst(slot, 0).resolve(self.scope))
+            slot = c.Var('memory_slot_%d' % i)
+            up.append(c.SetConst(slot, 0).resolve(self.scope))
 
 class FunctionRef(CmdFunction):
 
@@ -113,7 +117,7 @@ class FunctionRef(CmdFunction):
         self.name = name
 
     def as_cmd(self):
-        return Function(self.name)
+        return c.Function(self.name)
 
 class MemGetFn(RunCommand):
 
@@ -156,9 +160,9 @@ class ExtendedAssembler(Assembler):
         self.mem_addr = self.top.create_global('mem_addr', VarType.i32)
         self.mem_buf = self.top.create_global('mem_buf', VarType.i32)
         self.mem_addr.set_proxy(GlobalScoreVariable(VarType.i32,
-                                                    Var('memory_address')))
+                                                    c.Var('memory_address')))
         self.mem_buf.set_proxy(GlobalScoreVariable(VarType.i32,
-                                                   Var('memory_buffer')))
+                                                   c.Var('memory_buffer')))
 
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""

@@ -1,9 +1,9 @@
 import abc
 
-from commands import *
-
 from .core_types import InsnArg, NativeType
 from .nbt import NBTType
+
+import commands as c
 
 class VarType(InsnArg):
 
@@ -43,7 +43,7 @@ class OpenVar:
         self.ref = self.var._direct_ref()
         if self.ref is None:
             self.using_temp = self.out.allocate_temp()
-            self.ref = Var(self.using_temp)
+            self.ref = c.Var(self.using_temp)
             if self.read:
                 self.var._write_to_reference(self.ref, self.out)
         return self.ref
@@ -123,13 +123,13 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
         pass
 
     def _write_to_reference(self, ref, out):
-        out.write(ExecuteChain()
+        out.write(c.ExecuteChain()
                   .store('result')
                   .score(ref)
                   .run(self.read()))
 
     def _read_from_reference(self, ref, out):
-        self._store_from_cmd(GetValue(ref), out)
+        self._store_from_cmd(c.GetValue(ref), out)
 
     def _direct_ref(self):
         return None
@@ -154,21 +154,21 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
         pass
 
     def set_const_val(self, value, out):
-        out.write(DataModifyValue(GlobalEntity.ref, self.path, 'set',
+        out.write(c.DataModifyValue(c.GlobalEntity.ref, self.path, 'set',
                                   self.nbt_val(value)))
 
     def nbt_val(self, value):
         return self.type.nbt_type.new(value)
 
     def _store_from_cmd(self, cmd, out):
-        out.write(ExecuteChain()
+        out.write(c.ExecuteChain()
                   .store('result')
-                  .entity(GlobalEntity, self.path, self.type.nbt_type.
+                  .entity(c.GlobalEntity, self.path, self.type.nbt_type.
                           exec_store_name)
                   .run(cmd))
 
     def read(self):
-        return DataGetGlobal(self.path)
+        return c.DataGetGlobal(self.path)
 
     def _direct_nbt(self):
         return self.path
@@ -177,15 +177,16 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
         other_path = other._direct_nbt()
         if other_path is not None:
             # Optimize here - can copy NBT directly
-            out.write(DataModifyFrom(GlobalEntity.ref, other_path, 'set',
-                                     GlobalEntity.ref, self.path))
+            out.write(c.DataModifyFrom(c.GlobalEntity.ref, other_path, 'set',
+                                     c.GlobalEntity.ref, self.path))
         else:
             super().clone_to(other, out)
 
     def push_to_stack(self, out):
         # out-of-bounds stack path
-        out.write(DataModifyFrom(GlobalEntity.ref, StackPath(None), 'append',
-                                 GlobalEntity.ref, self.root_path))
+        out.write(c.DataModifyFrom(c.GlobalEntity.ref, c.StackPath(None),
+                                   'append', c.GlobalEntity.ref,
+                                   self.root_path))
 
 class NbtOffsetVariable(NbtStorableVariable):
 
@@ -208,16 +209,16 @@ class ScoreStorableVariable(Variable):
         self.ref = ref
 
     def set_const_val(self, value, out):
-        out.write(SetConst(self.ref, value))
+        out.write(c.SetConst(self.ref, value))
 
     def _read_from_reference(self, ref, out):
-        out.write(OpAssign(self.ref, ref))
+        out.write(c.OpAssign(self.ref, ref))
 
     def _write_to_reference(self, ref, out):
-        out.write(OpAssign(ref, self.ref))
+        out.write(c.OpAssign(ref, self.ref))
 
     def _store_from_cmd(self, cmd, out):
-        out.write(ExecuteChain()
+        out.write(c.ExecuteChain()
                   .store('result')
                   .score(self.ref)
                   .run(cmd))
@@ -226,7 +227,7 @@ class ScoreStorableVariable(Variable):
         return self.ref
 
     def read(self):
-        return GetValue(self.ref)
+        return c.GetValue(self.ref)
 
 class ProxyEmptyException(Exception):
     pass
@@ -300,14 +301,14 @@ class LocalStackVariable(NbtOffsetVariable):
 
     @property
     def path_type(self):
-        return StackFrameHead if self.frame_depth == 0 \
-               else StackFrame(self.frame_depth)
+        return c.StackFrameHead if self.frame_depth == 0 \
+               else c.StackFrame(self.frame_depth)
 
     def realign_frame(self, shift):
         self.frame_depth += shift
 
 class GlobalNbtVariable(NbtOffsetVariable):
-    path_type = GlobalPath
+    path_type = c.GlobalPath
 
 # Registers
 class LocalScoreVariable(ScoreStorableVariable):
@@ -318,7 +319,7 @@ class GlobalScoreVariable(ScoreStorableVariable):
     pass
 
 class VirtualStackPointer(LocalStackVariable):
-    path_type = StackPath # out-of-bounds stack path
+    path_type = c.StackPath # out-of-bounds stack path
 
 class VirtualNbtVariable(NbtStorableVariable):
 
@@ -341,16 +342,16 @@ class WorkingNbtVariable(NbtStorableVariable):
 
     @property
     def path(self):
-        return Path('working.%s' % self.type.nbt_path_key)
+        return c.Path('working.%s' % self.type.nbt_path_key)
 
     @property
     def root_path(self):
-        return Path('working')
+        return c.Path('working')
 
 class EntityLocalAccess(ScoreStorableVariable):
 
     def __init__(self, local, target):
-        super().__init__(VarType.i32, ScoreRef(target.as_resolve(),
+        super().__init__(VarType.i32, c.ScoreRef(target.as_resolve(),
                                                local.obj_ref))
 
     @property

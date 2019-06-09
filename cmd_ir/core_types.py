@@ -1,6 +1,6 @@
 import abc
 
-from commands import *
+import commands as c
 
 class InsnArg:
 
@@ -39,7 +39,7 @@ class EntityLocal(NativeType):
 
     def __init__(self, name):
         self.name = name
-        self.obj_ref = ObjectiveRef(name)
+        self.obj_ref = c.ObjectiveRef(name)
 
 class VirtualString(NativeType):
 
@@ -65,7 +65,7 @@ class PlayerRef(EntityRef):
         self.player = name
 
     def as_resolve(self):
-        return NameRef(self.player)
+        return c.NameRef(self.player)
 
 class SelectorType(InsnArg):
 
@@ -96,8 +96,7 @@ SelectorType.SENDER = SelectorType('s', 1)
 SelectorType.NEAREST_PLAYER = SelectorType('p', 1)
 SelectorType.RANDOM_PLAYER = SelectorType('r', 1)
 
-# Name conflict with commands.Selector
-class SelectorTy(EntitySelection):
+class Selector(EntitySelection):
 
     def __new__(cls, type):
         if type.max_limit == 1:
@@ -114,24 +113,24 @@ class SelectorTy(EntitySelection):
         self.simple_args[key] = value
 
     def set_score_range(self, objective, min, max):
-        self.other_args.append(SelRange(objective, min, max))
+        self.other_args.append(c.SelRange(objective, min, max))
 
     def set_nbt(self, path, value):
         parts = path.split('.') if path else []
-        self.other_args.append(SelNbt(parts, value))
+        self.other_args.append(c.SelNbt(parts, value))
 
     @property
     def is_only_one(self):
         return 'limit' in self.simple_args and self.simple_args['limit'] == '1'
 
     def as_resolve(self):
-        args = SimpleSelectorArgs(self.simple_args)
+        args = c.SimpleSelectorArgs(self.simple_args)
         for other in self.other_args:
-            args = ComboSelectorArgs.new(args, other)
-        return Selector(self.type.letter, args)
+            args = c.ComboSelectorArgs.new(args, other)
+        return c.Selector(self.type.letter, args)
 
 # Same as Selector but is also an EntityRef so can be used in more places
-class SingleEntitySelector(SelectorTy, EntityRef):
+class SingleEntitySelector(Selector, EntityRef):
 
     def __new__(cls, type):
         return object.__new__(cls)
@@ -143,7 +142,7 @@ class SingleEntitySelector(SelectorTy, EntityRef):
 class PosUtilEntity(EntityRef):
 
     def as_resolve(self):
-        return PosUtil
+        return c.PosUtil
 
 class Position(NativeType):
 
@@ -158,22 +157,22 @@ class Position(NativeType):
         self._x, self._y, self._z = map(internal, (x, y, z))
 
     def as_blockpos(self):
-        return WorldPos(self._x, self._y, self._z, block_pos=True)
+        return c.WorldPos(self._x, self._y, self._z, block_pos=True)
 
     def as_worldpos(self):
-        return WorldPos(self._x, self._y, self._z)
+        return c.WorldPos(self._x, self._y, self._z)
 
 class RelPosVal(NativeType):
 
     def __init__(self, val):
         self.val = val
-        self.as_coord = WorldRelCoord(val)
+        self.as_coord = c.WorldRelCoord(val)
 
 class AncPosVal(NativeType):
 
     def __init__(self, val):
         self.val = val
-        self.as_coord = AnchorRelCoord(val)
+        self.as_coord = c.AnchorRelCoord(val)
 
 class CmdFunction(NativeType, metaclass=abc.ABCMeta):
 
@@ -181,7 +180,7 @@ class CmdFunction(NativeType, metaclass=abc.ABCMeta):
     def as_cmd(self):
         pass
 
-class BlockType(Resolvable, NativeType):
+class BlockType(c.Resolvable, NativeType):
 
     def __init__(self, block_id):
         self.block_id = block_id
@@ -200,7 +199,7 @@ class BlockType(Resolvable, NativeType):
         nbt = self.nbt.resolve(scope) if self.nbt is not None else ''
         return '%s%s%s' % (self.block_id, '[%s]' % props if props else '', nbt)
 
-class ItemType(Resolvable, NativeType):
+class ItemType(c.Resolvable, NativeType):
 
     def __init__(self, item_id):
         self.item_id = item_id
@@ -216,3 +215,79 @@ class ItemType(Resolvable, NativeType):
             nbt = NBTCompound(self.nbt_props.items())
             props = nbt.resolve(scope)
         return '%s%s' % (self.item_id, props)
+
+class TeamRef(NativeType):
+
+    def __init__(self, name):
+        self.name = name
+        self.ref = c.TeamName(name)
+
+class TextColor(InsnArg):
+
+    __lookup = {}
+
+    def __init__(self, name):
+        self.name = name
+        self.__lookup[name] = self
+
+    @classmethod
+    def _init_from_parser(cls, value):
+        return cls.__lookup[value]
+
+    black = None
+    dark_blue = None
+    dark_green = None
+    dark_aqua = None
+    dark_red = None
+    dark_purple = None
+    gold = None
+    gray = None
+    dark_gray = None
+    blue = None
+    green = None
+    aqua = None
+    red = None
+    light_purple = None
+    yellow = None
+    white = None
+    reset = None
+
+TextColor.black = TextColor('black')
+TextColor.dark_blue = TextColor('dark_blue')
+TextColor.dark_green = TextColor('dark_green')
+TextColor.dark_aqua = TextColor('dark_aqua')
+TextColor.dark_red = TextColor('dark_red')
+TextColor.dark_purple = TextColor('dark_purple')
+TextColor.gold = TextColor('gold')
+TextColor.gray = TextColor('gray')
+TextColor.dark_gray = TextColor('dark_gray')
+TextColor.blue = TextColor('blue')
+TextColor.green = TextColor('green')
+TextColor.aqua = TextColor('aqua')
+TextColor.red = TextColor('red')
+TextColor.light_purple = TextColor('light_purple')
+TextColor.yellow = TextColor('yellow')
+TextColor.white = TextColor('white')
+TextColor.reset = TextColor('reset')
+
+class BossbarRef(NativeType):
+
+    def __init__(self, name):
+        self.name = name
+        self.ref = c.Bossbar(name)
+
+PosType = (int, float, RelPosVal, AncPosVal)
+
+def Opt(optype):
+    return (type(None), optype)
+
+class EventRef(NativeType):
+
+    def __init__(self, name):
+        self.name = name
+        self.conditions = {}
+
+    def add_condition(self, path, value):
+        self.conditions[path] = value
+
+RelPosType = (int, float, RelPosVal)

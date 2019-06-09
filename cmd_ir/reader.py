@@ -26,8 +26,18 @@ class BuildProgram(Interpreter):
         self.curr_seq = None
 
     def extern_func(self, node):
-        name = node.children[0].value
-        self.top.store(name, ExternFunction(name))
+        name, params, returns, newline = self.visit_children(node)
+        name = name.value
+        if isinstance(params, Token):
+            params = self.token_to_val(params)
+        if isinstance(returns, Token):
+            returns = self.token_to_val(returns)
+        from .variables import VarType
+        if params is not None:
+            params = tuple(VarType._init_from_parser(p) for p in params)
+        if returns is not None:
+            returns = tuple(VarType._init_from_parser(r) for r in returns)
+        self.top.store(name, ExternFunction(name, params, returns))
 
     def function(self, node):
         name = node.children[0].value
@@ -111,6 +121,9 @@ class BuildProgram(Interpreter):
     def tuple(self, node):
         tokens = self.visit_children(node)
         return tuple(map(self.token_to_val, tokens))
+
+    def typelist(self, node):
+        return self.tuple(node)
 
     def atom(self, node):
         token, = node.children

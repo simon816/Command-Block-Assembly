@@ -5,6 +5,9 @@ from commands import SetConst, Var
 
 from .core_types import FunctionLike, PosUtilEntity
 
+from .variables import (Variable, VarType, ParameterVariable, ReturnVariable,
+                        LocalStackVariable, LocalVariable, NbtOffsetVariable)
+
 class FuncWriter(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
@@ -229,7 +232,6 @@ class VariableHolder:
         return changed
 
     def reset_var_usage(self):
-        from .variables import Variable
         for var in self.scope.values():
             if isinstance(var, Variable):
                 var.reset_usage()
@@ -250,7 +252,6 @@ class TopLevel(VariableHolder):
 
     def create_global(self, namehint, vartype):
         def create(name):
-            from .instructions import DefineGlobal
             return self.preamble.add(DefineGlobal(vartype))
         return self.uniq(namehint, create)
 
@@ -315,7 +316,6 @@ class VisibleFunction(FunctionLike):
 
     def validate_args(self, args, retvars):
         assert self.finished
-        from .variables import Variable, VarType
         if self.params:
             assert args is not None
             assert len(args) == len(self.params)
@@ -345,11 +345,10 @@ class VisibleFunction(FunctionLike):
 
 class ExternFunction(VisibleFunction):
 
-    def __init__(self, global_name):
+    def __init__(self, global_name, params=None, returns=None):
         self._gname = global_name
-        # TODO
-        self.params = []
-        self.returns = []
+        self.params = params or []
+        self.returns = returns or []
 
     @property
     def finished(self):
@@ -373,7 +372,13 @@ class ExternFunction(VisibleFunction):
         return False
 
     def serialize(self):
-        return 'extern function %s\n' % self._gname
+        def serialize(typelist):
+            if not typelist:
+                return 'NULL'
+            return '(%s)' % ', '.join(t.name for t in typelist)
+        return 'extern function %s %s %s\n' % (self._gname,
+                                               serialize(self.params),
+                                               serialize(self.returns))
 
 class IRFunction(VisibleFunction, VariableHolder):
 
@@ -466,7 +471,6 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def create_var(self, namehint, vartype):
         def create(name):
-            from .instructions import DefineVariable
             return self.preamble.add(DefineVariable(vartype))
         return self.uniq(namehint, create)
 
@@ -490,7 +494,6 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def get_registers(self):
         assert self._varsfinalized
-        from .variables import Variable
         return [var for var in self.scope.values() \
                 if isinstance(var, Variable) and var._direct_ref() \
                 and not var.is_entity_local]
@@ -499,8 +502,6 @@ class IRFunction(VisibleFunction, VariableHolder):
         return all(b.is_terminated() for b in self.blocks)
 
     def configure_parameters(self, hasownstackframe):
-        from .variables import ParameterVariable, ReturnVariable, \
-                                 LocalStackVariable
         # Linked to InvokeInsn
         offset = 0
         rets = []
@@ -534,8 +535,6 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._varsfinalized = True
 
     def add_entry_exit(self):
-        from .variables import LocalVariable, NbtOffsetVariable
-        from .instructions import PushNewStackFrame, PopStack, Branch
         # sorted from head to tail of stack
         vars = sorted([var.var for var in self.scope.values() \
                 if isinstance(var, LocalVariable) \
@@ -555,7 +554,6 @@ class IRFunction(VisibleFunction, VariableHolder):
         return vars
 
     def add_advancement_revoke(self, event):
-        from .instructions import RevokeEventAdvancement
         self._entryblock.add(RevokeEventAdvancement(self))
 
     def serialize(self):
@@ -614,7 +612,6 @@ class BasicBlock(FunctionLike, InstructionSeq):
         if not self.force and self.insns and self.insns[-1].terminator():
             assert False, "Block %s is terminated by %s. Tried adding %s" % (
                 self, self.insns[-1], insn)
-        from .instructions import Return, Branch
         if isinstance(insn, Return):
             return super().add(Branch(self._func._exitblock))
         return super().add(insn)
@@ -666,3 +663,9 @@ class SuperBlock(BasicBlock):
     def reset(self):
         if self._clear:
             super().reset()
+
+# Load these after everything has been defined - otherwise it is a recursive
+# dependency
+from .instructions import (DefineGlobal, DefineVariable, PushNewStackFrame,
+                           PopStack, Branch, RevokeEventAdvancement, Return,
+                           Branch)
