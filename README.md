@@ -41,6 +41,11 @@ void main() {
 }
 ```
 
+# Command IR
+
+A new intermediate representation has been developed that the assembly language builds on top of. 
+To find out more see [Command IR](https://github.com/simon816/Command-Block-Assembly/wiki/Command-IR).
+
 # The Assembly Language
 
 It is a simple language with instructions similar to that of x86.
@@ -230,10 +235,10 @@ The assembler is invoked by calling `main.py`.
 
 Command line parameters:
 ```
-usage: main.py [-h] [--world-dir WORLD_DIR] [--as_zip] [--namespace NAMESPACE]
-               [--rem-existing] [--debug] [--stack STACK] [--arg ARG]
-               [--jump JUMP] [--place-location PLACE_LOCATION] [--enable-sync]
-               [--setup-on-load] [--spawn-location SPAWN_LOCATION]
+usage: main.py [-h] [--world-dir WORLD_DIR] [--as-zip] [--namespace NAMESPACE]
+               [--rem-existing] [--debug] [--dump-ir] [--gen-cleanup]
+               [--jump JUMP] --place-location PLACE_LOCATION [--setup-on-load]
+               [--spawn-location SPAWN_LOCATION]
                [--pack-description PACK_DESCRIPTION]
                file
 
@@ -244,17 +249,16 @@ optional arguments:
   -h, --help            show this help message and exit
   --world-dir WORLD_DIR
                         World Directory
-  --as_zip              Write datapack as zip file
+  --as-zip              Write datapack as zip file
   --namespace NAMESPACE
                         Function namespace
   --rem-existing        Remove existing functions in namespace
   --debug               Enable debug output
-  --stack STACK         Stack size
-  --arg ARG             ASM file arguments
+  --dump-ir             Dump Command IR output
+  --gen-cleanup         Generate cleanup function
   --jump JUMP           Output subroutine jump instruction
   --place-location PLACE_LOCATION
                         Location to place command blocks
-  --enable-sync         Enable SYNC opcode
   --setup-on-load       Run setup on minecraft:load
   --spawn-location SPAWN_LOCATION
                         Location to spawn hidden armor stand
@@ -267,21 +271,9 @@ Notes:
 If `--world-dir` is not provided, no functions are written.
 This can be useful in combination with `--debug`.
 
-`--place-location` is where to start laying out command blocks, should they be needed.
-Defaults to `~1,~,~1`
+`--place-location` is where to place a utility command block. It has to be an absolute position e.g. '0,56,0'
 
-`--arg` is used to pass values in to a program that get replaced in the output. They are currently
-only applicable in CMD and TEST instructions.
-e.g.
-```asm
-main: CMD say Hello $arg:name$! This was generated on $arg:date$
-```
-Running `python main.py test.asm --debug --arg "name=Simon" --arg "date=24/10/2017"`
-produces:
-```
-Function sub_main
-  say Hello Simon! This was generated on 24/10/2017
-```
+You may want `--gen-cleanup` which creates a function to remove all scoreboard objectives and the global entity.
 
 ### Running a program
 
@@ -316,44 +308,13 @@ The value is then WORD_SIZE bits in the y axis. i.e. for an 8-bit word, y=0 is t
 `hdd_driver.asm` is a library file, and exports the `read_mem`, `write_mem` subroutines along with
 its constants.
 
-The location where the memory region is defined must be passed in to the assembler:  
-`--arg "mem_loc=0 0 0"`
+The location where the memory region is hardcoded to be `100 60 100`.
 
 #### `mem_test.asm`
 
 A simple test of the hdd_driver library. See description at the top of the file.
 
 # Issues and nuances
-
-## The SYNC instruction (and how it affects CALL and RET)
-
-Command Block Assembly is designed to produce fast and efficient functions,
-avoiding expensive operations wherever possible.  
-As such, some features are optimized unless it is not possible.
-
-By default, a CALL instruction will add a `/function` command to run the subroutine.  
-This means that once the function finishes, execution continues at the next command.  
-This behaviour is the anticipated use of CALL, however the implication is that RET has no effect.
-
-Originally, there was going to be an _implied_ return after a subroutine. i.e. always return to caller if CALL
-is ran.  
-But the RET instruction is required for SYNC to work, so it was added.
-
-As stated in the instruction description, SYNC effectively "pauses" the current execution until one tick later.
-
-The current calling stack (nested `/function` calls) will always return to the caller and continue on the next line.  
-SYNC must nullify the next call so the calling stack returns and the game runs a tick.  
-However, this is not possible with CALL's guarantee to return to caller.
-
-Therefore, CALL must push the address of the next instruction onto the stack, letting RET pop it off later.  
-With that, it is now possible to cause an interrupt between CALL and the subsequent RET.  
-This is how you would expect CALL and RET to function, but doing so is less efficient for the common use-case.
-
-By default, SYNC is disabled. The use of RET prints a warning to stderr saying how it doesn't have any effect.
-If the program is anticipated to use SYNC, you should defensively use RET anyway. Just keep in mind
-how the optimization works.
-
-To use SYNC, enable it with `--enable-sync`.
 
 ## CMP and jumping
 

@@ -4,4 +4,5 @@ env/
 
 # License incompatible
 compiler/parser_gen.py
+cmd_ir/parser_gen.py
 

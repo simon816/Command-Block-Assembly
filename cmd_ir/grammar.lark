@@ -1,0 +1,54 @@
+start: preamble? body*
+
+preamble: "preamble" "{" instruction* "}"
+
+?body: function | extern_func
+
+extern_func: "extern" "function" FUNC_NAME (typelist|NULL) (typelist|NULL) NEWLINE
+
+function: "function" FUNC_NAME "{" function_body "}"
+
+function_body: preamble? block*
+
+block: block_modifier? LABEL NEWLINE instruction*
+
+block_modifier: "[" WORD "]"
+
+instruction: ( assign_insn | normal_insn ) NEWLINE
+
+assign_insn: VAR_NAME ASSIGN_OP ( normal_insn | atom )
+normal_insn: IDENT operand_list
+
+operand_list: (operand ("," operand)*)?
+operand: IDENT | atom | tuple
+?atom: ESCAPED_STRING | SIGNED_INT | VAR_NAME | FUNC_REF | BLOCK_REF | NULL | SIGNED_FLOAT
+
+tuple: "(" atom ["," atom] ")"
+
+typelist: "(" IDENT ["," IDENT] ")"
+
+LABEL: CNAME ":"
+IDENT: CNAME
+FUNC_NAME: PATH_COMPONENT ("/" PATH_COMPONENT)*
+VAR_NAME: "$" CNAME
+BLOCK_REF: ":" CNAME
+FUNC_REF: "@" FUNC_NAME
+NULL: "NULL"
+
+PATH_COMPONENT: ("-"|"_"|"."|LCASE_LETTER|DIGIT)+
+
+ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "><" | "<" | ">"
+
+%import common.ESCAPED_STRING
+%import common.CNAME
+%import common.LCASE_LETTER
+%import common.DIGIT
+%import common.SIGNED_INT
+%import common.SIGNED_FLOAT
+%import common.WS
+%import common.NEWLINE
+%import common.WORD
+
+%ignore WS
+COMMENT: "#" /[^\n]/*
+%ignore COMMENT

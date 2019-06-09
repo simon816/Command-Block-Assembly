@@ -1,15 +1,13 @@
 import argparse
 import os
 
-from datapack import DataPackWriter, DummyWriter
+from datapack import DataPackWriter, DummyWriter, DebugWriterWrapper
 from placer import Rel
 
 from compiler.asm_extensions import CompilerSession, ExtendedAssembler
 from compiler.compiler import Compiler
 from compiler.preprocessor import Preprocessor
 from compiler.parser_ import Parser
-
-import time
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -24,18 +22,13 @@ if __name__ == '__main__':
     parser.add_argument('--rem-existing', help="Remove existing functions in namespace",
                         action='store_true')
     parser.add_argument('--debug', action='store_true', help="Enable debug output")
-    parser.add_argument('--stack', help="Stack size", type=int, default=8)
-    parser.add_argument('--arg', help="ASM file arguments", action='append')
-    parser.add_argument('--place-location', default="~1,~,~1",
-                        help="Location to place command blocks")
-    parser.add_argument('--enable-sync', help="Enable SYNC opcode", action='store_true')
+    parser.add_argument('--dump-ir', action='store_true', help="Dump Command IR output")
+    parser.add_argument('--gen-cleanup', action='store_true', help="Generate cleanup function")
+    parser.add_argument('--place-location', help="Location to place command blocks", required=True)
     parser.add_argument('--page-size', type=int, default=64, help="Memory page size")
-    parser.add_argument('--setup-on-load', action='store_true',
-                        help="Run setup on minecraft:load")
     parser.add_argument('--spawn-location', default='~ ~2 ~',
                         help="Location to spawn hidden armor stand")
     parser.add_argument('--pack-description', help="Datapack description")
-    parser.add_argument('--extern', action='append', help="Specify external symbol")
 
     args = parser.parse_args()
 
@@ -68,14 +61,13 @@ if __name__ == '__main__':
             return iter(self.output)
 
     assembler = ExtendedAssembler()
-    assembler.enable_sync = args.enable_sync
     assembler.consume_reader(OutputReader(compile_output))
 
-    sargs = {}
-    if args.arg:
-        for arg in args.arg:
-            k, v = arg.split('=', 2)
-            sargs[k] = v
+    assembler.finish()
+
+    if args.dump_ir:
+        print(assembler.top.serialize())
+
     parse_pos = lambda p: Rel(int(p[1:]) if p[1:] else 0) if p[0] == '~' else int(p)
 
     x, y, z = map(parse_pos, args.place_location.split(',', 3))
@@ -89,25 +81,28 @@ if __name__ == '__main__':
             writer.set_description(args.pack_description)
     else:
         writer = DummyWriter()
+    if args.debug:
+        writer = DebugWriterWrapper(writer)
     writer.open()
 
     page_size = args.page_size
     # don't bother with memory if not used
     if not assembler.use_mem:
         page_size = 0
-    session = CompilerSession((x, y, z), writer, args.namespace, stack_size=args.stack,
-                      args=sargs, setup_on_load=args.setup_on_load, debug=args.debug,
-                      page_size=page_size, extern=args.extern)
-    assembler.write_to_session(session)
-    setup, cleanup = session.create_up_down_functions(args.spawn_location)
+
+    session = CompilerSession((x, y, z), writer, args.namespace,
+                              args.spawn_location, args.gen_cleanup, page_size)
+    cleanup_func = assembler.write_to_session(session)
+
     writer.close()
+
     print('Generated', writer.command_count, 'commands in',
           writer.func_count, 'functions')
-    print('== Setup command ==')
-    print ('/' + setup)
-    print('== Cleanup command ==')
-    print('/' + cleanup)
-    if 'main' in assembler.subroutines:
+
+    if cleanup_func:
+        print("Cleanup function:", cleanup_func)
+
+    if assembler.top.lookup_func('sub_main') is not None:
         print('== Run main() ==')
         print('/' + assembler.get_sub_jump_command('main').resolve(session.scope))
     else:

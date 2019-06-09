@@ -2,7 +2,7 @@
 #include "mclib.h"
 
 #define LOCATION 202 56 -33
-#define TAG $tag:_pos$
+#define TAG tetris_pos
 
 #define WIDTH 10
 #define HEIGHT 20
@@ -96,7 +96,7 @@ void draw_shape() {
             set(); MOVE(0,0,1);
             set();
             break;
-        case 4:
+        case 3:
             MOVE(0,0,2);
         case 1:
             set(); MOVE(1,0,0);
@@ -120,14 +120,14 @@ void draw_shape() {
             set(); MOVE(-2,0,1);
             set();
             break;
-        case 3:
+        case 2:
             MOVE(1,0,0);
             set(); MOVE(1,0,0);
             set(); MOVE(0,0,1);
             set(); MOVE(0,0,1);
             set();
             break;
-        case 4:
+        case 3:
             MOVE(0,0,2);
             set(); MOVE(1,0,0);
             set(); MOVE(1,0,0);

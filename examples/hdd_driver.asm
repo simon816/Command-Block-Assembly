@@ -19,7 +19,7 @@
 ; Set mar to the address to read
 ; mbr will contain the value once read
 read_mem:
-    CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
+    CMD summon armor_stand 100 60 100 {Tags:["hdd_ptr"], NoGravity:1b, Marker:1b}
     MOV mar, hdd_addr
     MOV #0, mbr
     DIV MEM_SIZE_X, hdd_addr
@@ -31,15 +31,15 @@ read_mem:
     _read_loop:
     CMP hdd_addr, #0
     JE _finish
-    TEST execute at @e[tag=$tag:_mem_ptr$] if block ~ ~ ~ stone
+    TEST execute at @e[tag=hdd_ptr] if block ~ ~ ~ stone
     ADD hdd_mul, mbr
     SUB #1, hdd_addr
     MUL #2, hdd_mul
-    CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~
+    CMD execute as @e[tag=hdd_ptr] at @s run tp @s ~ ~1 ~
     JMP _read_loop
 
     _finish:
-    CMD kill @e[tag=$tag:_mem_ptr$]
+    CMD kill @e[tag=hdd_ptr]
     RET
 
 
@@ -47,7 +47,7 @@ read_mem:
 ; Set mar to the address to write
 ; set mbr to the value that will be written
 write_mem:
-    CMD summon armor_stand $arg:mem_loc$ {Tags:["$tag:_mem_ptr$"], NoGravity:1b, Marker:1b}
+    CMD summon armor_stand 100 60 100 {Tags:["hdd_ptr"], NoGravity:1b, Marker:1b}
     MOV mar, hdd_addr
     DIV MEM_SIZE_X, hdd_addr
     CALL memory_seek
@@ -65,14 +65,14 @@ write_mem:
     CMP _mem_temp, #0
     JE _write_zero
     ; If not zero, write 1. note: this captures -1 and 1
-    CMD execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ stone
+    CMD execute at @e[tag=hdd_ptr] run setblock ~ ~ ~ stone
     JMP _continue
-    _write_zero: CMD execute at @e[tag=$tag:_mem_ptr$] run setblock ~ ~ ~ air
-    _continue:   CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~1 ~
+    _write_zero: CMD execute at @e[tag=hdd_ptr] run setblock ~ ~ ~ air
+    _continue:   CMD execute as @e[tag=hdd_ptr] at @s run tp @s ~ ~1 ~
     JMP _write_loop
 
     _finish:
-    CMD kill @e[tag=$tag:_mem_ptr$]
+    CMD kill @e[tag=hdd_ptr]
     RET
 
 
@@ -82,7 +82,7 @@ memory_seek:
     CMP hdd_addr, #0
     JE _seek_z
 
-    CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~1 ~ ~
+    CMD execute as @e[tag=hdd_ptr] at @s run tp @s ~1 ~ ~
     SUB #1, hdd_addr
     JMP memory_seek
 
@@ -95,7 +95,7 @@ memory_seek:
     JE _end
 
     SUB #1, hdd_addr
-    CMD execute as @e[tag=$tag:_mem_ptr$] at @s run tp @s ~ ~ ~1
+    CMD execute as @e[tag=hdd_ptr] at @s run tp @s ~ ~ ~1
     JMP _seek_z_loop
 
     _end: RET

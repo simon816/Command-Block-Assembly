@@ -73,7 +73,7 @@ class CommandPlacer:
 
         state_str = '[' + ','.join([k+'='+v for k,v in state.items()]) + ']'
 
-        data = '{TrackOutput:0,auto:%db,Command:"%s"}' % (
+        data = '{TrackOutput:0b,auto:%db,Command:"%s"}' % (
             1 if block.auto else 0, escape(command))
 
         block = block_type + state_str + data

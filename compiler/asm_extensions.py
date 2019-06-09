@@ -1,74 +1,80 @@
 from session import Session
 from assembler import Assembler
-from commands import *
+
+from cmd_ir.core_types import CmdFunction
+from cmd_ir.instructions import RunCommand, SetScore, AddScore, SubScore
+from cmd_ir.variables import VarType, GlobalScoreVariable
+
+import commands as c
 
 class CompilerSession(Session):
 
-    def __init__(self, pos, writer, namespace, page_size=64, **kwargs):
+    def __init__(self, pos, writer, namespace, entity_pos, create_cleanup,
+                 page_size=64):
+        super().__init__(pos, writer, namespace, entity_pos, create_cleanup)
         self.page_size = page_size
-        super(CompilerSession, self).__init__(pos, writer, namespace, **kwargs)
-        self.scope.variables.update({
-            'memory_address': 'ma',
-            'memory_buffer': 'mb',
-            'memory_slot': ('ms_%d', range(self.page_size))
-        })
         if page_size > 0:
             self.add_page()
 
     def add_page(self):
-        mbr = Var('memory_buffer')
-        mar = Var('memory_address')
+        mbr = c.Var('memory_buffer')
+        mar = c.Var('memory_address')
+        self.define_objective('memory_buffer', None)
+        self.define_objective('memory_address', None)
 
         def pair_name(fn, pair):
             return 'memory/%s_%d_%d' % (fn, pair.min, pair.max)
 
         def create_function(pair, force=False):
-            getter = Subsequence()
-            setter = Subsequence()
+            getter = []
+            setter = []
             def gen_fn(fn, p):
-                return Execute.If(SelRange(mar, min=p.min, max=p.max),
-                                  Function(pair_name(fn, p)))
+                return c.ExecuteChain() \
+                       .cond('if') \
+                       .score_range(mar, c.ScoreRange(p.min, p.max)) \
+                       .run(c.Function(pair_name(fn, p)))
             def gen_assign(n, g=True):
-                slot = Var('memory_slot', n)
-                return OpAssign(mbr if g else slot, slot if g else mbr,
-                                where=SelEquals(mar, n))
+                slot = c.Var('memory_slot_%d' % n)
+                self.define_objective('memory_slot_%d' % n, None)
+                return c.ExecuteChain() \
+                        .cond('if') \
+                        .score_range(mar, c.ScoreRange(n, n)) \
+                        .run(c.OpAssign(mbr if g else slot, slot if g else mbr))
 
             if pair.left and pair.left.left:
-                getter.add_command(gen_fn('mem_get', pair.left))
-                setter.add_command(gen_fn('mem_set', pair.left))
+                getter.append(gen_fn('mem_get', pair.left))
+                setter.append(gen_fn('mem_set', pair.left))
             if pair.right and pair.right.right:
-                getter.add_command(gen_fn('mem_get', pair.right))
-                setter.add_command(gen_fn('mem_set', pair.right))
+                getter.append(gen_fn('mem_get', pair.right))
+                setter.append(gen_fn('mem_set', pair.right))
 
             if not pair.left and not pair.right and not force:
                 # Don't do anything here, it's done in the next level up
                 return
 
             if pair.left and not pair.left.left or force:
-                getter.add_command(gen_assign(pair.min))
-                setter.add_command(gen_assign(pair.min, False))
+                getter.append(gen_assign(pair.min))
+                setter.append(gen_assign(pair.min, False))
             if pair.right and not pair.right.right:
-                getter.add_command(gen_assign(pair.max))
-                setter.add_command(gen_assign(pair.max, False))
+                getter.append(gen_assign(pair.max))
+                setter.append(gen_assign(pair.max, False))
 
             name_get = pair_name('mem_get', pair)
             name_set = pair_name('mem_set', pair)
             self.scope.add_function_names((name_get, name_set))
-            self.add_subsequence(name_get, getter)
-            self.add_subsequence(name_set, setter)
+            self.add_function(name_get, getter)
+            self.add_function(name_set, setter)
 
         entry_point = self.generate_bin_tree(self.page_size, create_function)
         if not entry_point.left and not entry_point.right:
             create_function(entry_point, force=True)
 
         # Redirect mem_get and mem_set to the actual entry point
-        getter = Subsequence()
-        setter = Subsequence()
-        getter.add_command(Function(pair_name('mem_get', entry_point)))
-        setter.add_command(Function(pair_name('mem_set', entry_point)))
+        getter = [c.Function(pair_name('mem_get', entry_point))]
+        setter = [c.Function(pair_name('mem_set', entry_point))]
         self.scope.add_function_names(('mem_get', 'mem_set'))
-        self.add_subsequence('mem_get', getter)
-        self.add_subsequence('mem_set', setter)
+        self.add_function('mem_get', getter)
+        self.add_function('mem_set', setter)
 
 
     def generate_bin_tree(self, size, callback):
@@ -102,8 +108,42 @@ class CompilerSession(Session):
 
     def extended_setup(self, up, down):
         for i in range(self.page_size):
-            slot = Var('memory_slot', i)
-            up.append(SetConst(slot, 0).resolve(self.scope))
+            slot = c.Var('memory_slot_%d' % i)
+            up.append(c.SetConst(slot, 0).resolve(self.scope))
+
+class FunctionRef(CmdFunction):
+
+    def __init__(self, name):
+        self.name = name
+
+    def as_cmd(self):
+        return c.Function(self.name)
+
+class MemGetFn(RunCommand):
+
+    def __init__(self, ass):
+        super().__init__(ass.mem_get)
+        self._ass = ass
+
+    def declare(self):
+        self._ass.mem_addr.usage_read()
+        self._ass.mem_buf.usage_write()
+
+    def copy(self):
+        return MemGetFn(self._ass)
+
+class MemSetFn(RunCommand):
+
+    def __init__(self, ass):
+        super().__init__(ass.mem_set)
+        self._ass = ass
+
+    def declare(self):
+        self._ass.mem_addr.usage_read()
+        self._ass.mem_buf.usage_read()
+
+    def copy(self):
+        return MemSetFn(self._ass)
 
 class ExtendedAssembler(Assembler):
 
@@ -115,12 +155,14 @@ class ExtendedAssembler(Assembler):
             'MOVINDS': self.handle_mov_ind_s
         })
         self.use_mem = False
-
-    def handle_ret(self):
-        if not self.enable_sync:
-            # No need to warn here, the compiler is safe with CALL/RET
-            return
-        super().handle_ret()
+        self.mem_get = self.top.generate_name('mem_get', FunctionRef('mem_get'))
+        self.mem_set = self.top.generate_name('mem_set', FunctionRef('mem_set'))
+        self.mem_addr = self.top.create_global('mem_addr', VarType.i32)
+        self.mem_buf = self.top.create_global('mem_buf', VarType.i32)
+        self.mem_addr.set_proxy(GlobalScoreVariable(VarType.i32,
+                                                    c.Var('memory_address')))
+        self.mem_buf.set_proxy(GlobalScoreVariable(VarType.i32,
+                                                   c.Var('memory_buffer')))
 
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""
@@ -130,16 +172,16 @@ class ExtendedAssembler(Assembler):
         d_off = self.resolve_ref(*d_off)
         assert type(s_off) == int
         assert type(d_off) == int
-        self.add_command(OpAssign(Var('memory_address'), src))
+        self.block.add(SetScore(self.mem_addr, src))
         if s_off != 0:
-            AddFn = AddConst if s_off > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(s_off)))
-        self.add_command(Function('mem_get'))
-        self.add_command(OpAssign(Var('memory_address'), dest))
+            AddFn = AddScore if s_off > 0 else SubScore
+            self.block.add(AddFn(self.mem_addr, abs(s_off)))
+        self.block.add(MemGetFn(self))
+        self.block.add(SetScore(self.mem_addr, dest))
         if d_off != 0:
-            AddFn = AddConst if d_off > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(d_off)))
-        self.add_command(Function('mem_set'))
+            AddFn = AddScore if d_off > 0 else SubScore
+            self.block.add(AddFn(self.mem_addr, abs(d_off)))
+        self.block.add(MemSetFn(self))
 
     def handle_mov_ind_d(self, src, dest, d_off):
         """Move src to indirect dest"""
@@ -147,12 +189,12 @@ class ExtendedAssembler(Assembler):
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*d_off)
         assert type(offset) == int
-        self.add_command(self.assign_op(Var('memory_buffer'), src))
-        self.add_command(OpAssign(Var('memory_address'), dest))
+        self.block.add(SetScore(self.mem_buf, src))
+        self.block.add(SetScore(self.mem_addr, dest))
         if offset != 0:
-            AddFn = AddConst if offset > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(offset)))
-        self.add_command(Function('mem_set'))
+            AddFn = AddScore if offset > 0 else SubScore
+            self.block.add(AddFn(self.mem_addr, abs(offset)))
+        self.block.add(MemSetFn(self))
 
     def handle_mov_ind_s(self, src, s_off, dest):
         """Move indirect src to dest"""
@@ -160,10 +202,10 @@ class ExtendedAssembler(Assembler):
         src, dest = self.get_src_dest(src, dest)
         offset = self.resolve_ref(*s_off)
         assert type(offset) == int
-        self.add_command(self.assign_op(Var('memory_address'), src))
+        self.block.add(SetScore(self.mem_addr, src))
         if offset != 0:
-            AddFn = AddConst if offset > 0 else RemConst
-            self.add_command(AddFn(Var('memory_address'), abs(offset)))
-        self.add_command(Function('mem_get'))
-        self.add_command(OpAssign(dest, Var('memory_buffer')))
+            AddFn = AddScore if offset > 0 else SubScore
+            self.block.add(AddFn(self.mem_addr, abs(offset)))
+        self.block.add(MemGetFn(self))
+        self.block.add(SetScore(dest, self.mem_buf))
 
