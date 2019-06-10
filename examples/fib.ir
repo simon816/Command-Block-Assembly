@@ -1,0 +1,39 @@
+preamble {
+    $all_players = selector a
+}
+
+function main {
+    preamble {
+        $x = define i32
+        $y = define i32
+        $old_x = define i32
+        $counter = define i32
+        extern
+    }
+
+    entry:
+    $x = 0
+    $y = 1
+    $counter = 1
+    branch :loop
+
+    loop:
+    $msg = text
+    text_append $msg, "fib("
+    text_append $msg, $counter
+    text_append $msg, ") = "
+    text_append $msg, $x
+    text_send $msg, $all_players
+    set_command_block :post_tick
+
+    post_tick:
+    clear_command_block
+    $counter += 1
+    $old_x = $x
+    $x = $y
+    $y += $old_x
+    rangebr $x, 0, NULL, :loop, :end
+    
+    end:
+    ret
+}
