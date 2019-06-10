@@ -679,8 +679,9 @@ void OP(int src, int *dest) {
         self.block = callback
 
     def finish(self):
-        self.func.end()
-        self.func.variables_finalized()
+        if self.func is not None:
+            self.func.end()
+            self.func.variables_finalized()
         self.top.end()
         Optimizer().optimize(self.top)
 

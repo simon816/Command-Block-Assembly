@@ -1,0 +1,46 @@
+from .variables import (GlobalScoreVariable, LocalScoreVariable,
+                              LocalStackVariable)
+from .optimizers import Optimizer, TopVisitor, FuncVisitor
+from commands import Var
+
+class Allocator(TopVisitor):
+
+    def visit(self, top):
+        self.offset = 0
+        return super().visit(top)
+
+    def visit_global(self, name, var):
+        var.set_proxy(GlobalScoreVariable(var.type, Var('g%d_%s' % (
+            self.offset, name))))
+        self.offset += 1
+        return name, var
+
+    def visit_function(self, name, func):
+        FuncAllocator().visit(func)
+        return name, func
+
+class FuncAllocator(FuncVisitor):
+
+    def visit(self, func):
+        self.offset = 0
+        self.use_scores = True
+        super().visit(func)
+        func.variables_finalized()
+
+    def visit_local_var(self, name, var):
+        if self.use_scores and var.type.isnumeric:
+            var.set_proxy(LocalScoreVariable(var.type,
+                                             Var('reg_%d' % self.offset)))
+            if self.offset >= 4:
+                self.use_scores = False
+                self.offset = -1
+        else:
+            var.set_proxy(LocalStackVariable(var.type, self.offset))
+        self.offset += 1
+        return name, var
+
+def default_allocation(top):
+    optimizer = Optimizer()
+    optimizer.optimize(top)
+    Allocator().visit(top)
+    optimizer.optimize(top)
