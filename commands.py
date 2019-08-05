@@ -138,6 +138,10 @@ class NbtPath(Resolvable):
     def __init__(self, path):
         self.path = path
 
+    def subpath(self, childpath):
+        # TODO path validation
+        return self.__class__(self.path + childpath)
+
     def resolve(self, scope):
         return self.path
 
@@ -153,6 +157,10 @@ class ArrayPath(Path):
         assert key is None or index is not None
         sub += '.%s' % key if key else ''
         super().__init__('%s%s' % (self.name, sub))
+
+    def subpath(self, childpath):
+        # Don't use our constructor
+        return Path(self.path).subpath(childpath)
 
 class StackPath(ArrayPath):
     name = 'stack'
@@ -294,6 +302,7 @@ class ExecuteChain:
             return self.add('blocks', begin, end, dest, type)
 
     def store(self, store_type):
+        assert store_type in ['result', 'success']
         self.can_terminate = False
         return ExecuteChain.Store(self, store_type)
 
@@ -417,11 +426,6 @@ class DataGet(Command):
     def resolve(self, scope):
         return 'data get %s %s %s' % (self.target.resolve(scope),
                                       self.path.resolve(scope), self.scale)
-
-class DataGetGlobal(DataGet):
-
-    def __init__(self, path):
-        super().__init__(GlobalEntity.ref, path)
 
 class DataMerge(Command):
 
@@ -552,13 +556,16 @@ class TextStringComponent(TextComponent):
 
 class TextNBTComponent(TextComponent):
 
-    def __init__(self, path):
+    def __init__(self, entity, path):
+        assert isinstance(entity, EntityRef)
         assert isinstance(path, Path)
+        self.entity = entity
         self.path = path
 
     def resolve(self, scope):
+        assert self.entity.is_single_entity(scope)
         return {'nbt': self.path.resolve(scope),
-                'entity': GlobalEntity.resolve(scope)}
+                'entity': self.entity.resolve(scope)}
 
 class TextScoreComponent(TextComponent):
 

@@ -55,6 +55,7 @@ class ExecStoreVar(ConstructorInsn):
 
     def construct(self):
         assert self.var.type.isnumeric
+        assert self.var.type.scale == 1
         return ExecStoreVarSpec(self.var)
 
     def declare(self):
@@ -138,6 +139,7 @@ class ExecCondVar(VoidApplicationInsn):
     def activate(self, seq):
         assert self.max is not None or self.min is not None, self
         assert self.var.type.isnumeric, self
+        assert self.var.type.scale == 1, "TODO"
         self._index = self.chain.add(ExecComponentCondVar(self.cond, self.var,
                                                           self.min, self.max))
 
@@ -197,6 +199,7 @@ class ExecCondCmp(VoidApplicationInsn):
         assert self.op in ['lt', 'le', 'eq', 'ge', 'gt']
         assert self.left.type.isnumeric
         assert self.right.type.isnumeric
+        assert self.left.type.scale == self.right.type.scale, "TODO"
         self._index = self.chain.add(ExecComponentCondCmp(self.cond, self.left,
                                                           self.op, self.right))
 
@@ -366,6 +369,11 @@ class ExecRun(Insn):
     def declare(self):
         if isinstance(self.func, FunctionLike):
             self.func.usage()
+        else:
+            # Special case to allow nested declares from this block-as-command
+            from .basic import BlockAsCommand
+            if isinstance(self.func, BlockAsCommand):
+                self.func.do_declare()
 
     def apply(self, out, func):
         with self.exec.apply(out) as chain:

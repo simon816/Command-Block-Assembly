@@ -47,6 +47,9 @@ def make_stack_frame_from(values, out):
         if type(val) == int:
             default = val
             vtype = VarType.i32
+        elif type(val) == float:
+            default = val
+            vtype = VarType.decimal
         elif isinstance(val, Variable):
             vtype = val.type
             default = vtype.default_val
@@ -130,7 +133,7 @@ class Invoke(Insn):
         ret_start = len(allargs)
         if self.retvars:
             # default return variable = default for the type
-            allargs.extend([var.type.default_val for var in self.retvars])
+            allargs.extend([var.type for var in self.retvars])
 
         # Save registers
         reg_start = len(allargs)
@@ -203,6 +206,7 @@ class RangeBr(Insn):
 
     def activate(self, seq):
         assert self.var.type.isnumeric
+        assert self.var.type.scale == 1, "TODO"
         assert self.min is not None or self.max is not None
         assert self.if_true is not None or self.if_false is not None
         if self.if_false and self.if_true:
@@ -238,6 +242,7 @@ class CmpBr(Insn):
     def activate(self, seq):
         assert self.left.type.isnumeric
         assert self.right.type.isnumeric
+        assert self.left.type.scale == self.right.type.scale, "TODO"
         assert self.op in ['lt', 'le', 'eq', 'ge', 'gt']
         assert self.if_true is not None or self.if_false is not None
         if self.if_false and self.if_true:

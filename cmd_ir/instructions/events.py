@@ -86,6 +86,19 @@ class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
     def activate(self, seq):
         seq.holder.set_extern(True)
 
+class PureInsn(PreambleOnlyInsn, VoidApplicationInsn):
+    """Marks the function as a pure function (i.e. no side-effects). No checks
+    are done to ensure it is side-effect free, allowing for functions with
+    irrelevant side-effects (e.g. caching) to be marked as pure."""
+
+    args = []
+    argnames = ''
+    func_preamble_only = True
+    insn_name = 'pure_func'
+
+    def activate(self, seq):
+        seq.holder.set_pure()
+
 class SetupInsn(PreambleOnlyInsn, Insn):
     """Tags a function as being part of the setup phase. It is called whenever
     the datapack is reloaded."""

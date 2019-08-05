@@ -371,7 +371,7 @@ void OP(int src, int *dest) {
         w = self.get_working()
         self.block.add(SetScore(w, -1))
         self.block.add(SubScore(w, ref))
-        self.block.add(SetScore(ref, work))
+        self.block.add(SetScore(ref, w))
 
     def handle_shl(self, src, dest):
         self.shift_op('shl', src, dest, True)

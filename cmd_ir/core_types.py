@@ -14,6 +14,9 @@ class NativeType(InsnArg):
     def typename(cls):
         return cls.__name__
 
+    def clone(self):
+        raise TypeError(self.typename() + ' does not support cloning')
+
 class EntitySelection(NativeType, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
@@ -112,6 +115,13 @@ class Selector(EntitySelection):
         self.simple_args = {}
         self.var_ranges = []
 
+    def clone(self):
+        copy = Selector(self.type)
+        copy.other_args.extend(self.other_args)
+        copy.simple_args.update(self.simple_args)
+        copy.var_ranges.extend(self.var_ranges)
+        return copy
+
     def set(self, key, value):
         self.simple_args[key] = value
 
@@ -146,6 +156,11 @@ class PosUtilEntity(EntityRef):
 
     def as_resolve(self):
         return c.PosUtil
+
+class GlobalEntity(EntityRef):
+
+    def as_resolve(self):
+        return c.GlobalEntity
 
 class Position(NativeType):
 

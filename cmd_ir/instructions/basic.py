@@ -14,12 +14,24 @@ from ..core_types import (CmdFunction,
                           BossbarRef,
                           RelPosVal,
                           AncPosVal,
+                          NativeType,
                           )
 from ..variables import Variable
 from ..nbt import NBTCompound
 from .text import TextObject
 
 import commands as c
+
+class CopyInsn(ConstructorInsn):
+
+    args = [NativeType]
+    argnames = 'any'
+    argdocs = ["Any object that supports copying"]
+    insn_name = 'copy'
+    rettype = NativeType
+
+    def construct(self):
+        return self.any.clone()
 
 class RunCommand(SingleCommandInsn):
     """Runs the command given in the command variable."""
@@ -63,12 +75,18 @@ class BlockAsCommand(CmdFunction):
     def __init__(self, block):
         self.block = block
 
-    def as_cmd(self):
+    def _get_insn(self):
         insns = [insn for insn in self.block.insns if not insn.is_virtual]
         assert len(insns) == 1
         insn = insns[0]
         assert insn.single_command()
-        return insn.as_single_cmd()
+        return insn
+
+    def do_declare(self):
+        self._get_insn().declare()
+
+    def as_cmd(self):
+        return self._get_insn().as_single_cmd()
 
 class AsSingleCmdInsn(ConstructorInsn):
     """Forces a basic block to become a single command, the command is returned

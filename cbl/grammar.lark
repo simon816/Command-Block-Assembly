@@ -1,0 +1,171 @@
+start: top_level
+
+top_level: (scoped_declaration | function_definition | type_definition | namespace_definition
+            | intrinsic)*
+
+?scoped_declaration: (var_declaration | array_declaration | func_declaration) ";"
+
+var_declaration: type_name IDENT
+
+?func_declaration: async_func_decl
+?async_func_decl: ASYNC? inline_func_decl
+?inline_func_decl: INLINE? func_declaration_
+?func_declaration_: type_name (IDENT | "operator" OPERATORS) "(" param_list? ")"
+ASYNC: "async"
+INLINE: "inline"
+
+array_declaration: type_name IDENT "[" INT_CONSTANT "]"
+
+param_list: param_declaration ("," param_declaration)*
+param_declaration: type_name IDENT
+
+function_definition: event_handler? func_declaration block_statement
+
+event_handler: "[" "Event" conditional_expression [":" "{" (event_condition ("," event_condition)*)? "}"] "]"
+event_condition: IDENT ("." IDENT)* ":" conditional_expression
+
+var_init_declaration: (var_declaration | array_declaration) ["=" assignment_expression] ";"
+
+// TODO change to type_name and support type parameters
+type_definition: "type" IDENT "{" (scoped_declaration | function_definition)* "}"
+    | "type" IDENT ";" -> type_declaration
+
+type_name: IDENT 
+    | ident_less_than IDENT ("," IDENT)* ">"
+
+// Hack to get around conflict with less-than operator
+?ident_less_than: IDENT "<"
+
+namespace_definition: "namespace" IDENT "{" (scoped_declaration | function_definition)* "}"
+
+// TODO
+intrinsic: "intrinsic_extension" "{" "}"
+
+block_statement: "{" statement* "}"
+
+?statement: block_statement | statement_no_block
+
+?statement_no_block: var_init_declaration
+    | expression? ";" -> expression_statement
+    | "if" "(" expression ")" statement ["else" statement] -> if_statement
+    | "while" "(" expression ")" statement -> while_statement
+    | "do" statement "while" "(" expression ")" ";" -> do_while_statement
+    | "for" "(" opt_expression ";" opt_expression ";" opt_expression ")" statement -> for_statement
+    | "for" "(" IDENT "in" expression ")" statement -> for_in_statement
+    | "at" "(" expression ")" statement -> at_statement
+    | "continue" ";" -> continue_statement
+    | "break" ";" -> break_statement
+    | "return" expression? ";" -> return_statement
+
+// Needed so for_statement always keeps child nodes
+?opt_expression: expression?
+
+?expression: assignment_expression
+
+?assignment_expression: filter_expression
+    | unary_expression (ASSIGN | ASSIGN_OP) assignment_expression
+
+?filter_expression: conditional_expression
+    | "filter" "(" IDENT "in" expression ")" "{" (expression ";")* "}"
+
+?conditional_expression: logical_or_expression ["?" expression ":" conditional_expression]
+
+?logical_or_expression: logical_and_expression
+    | logical_or_expression LOG_OR_OP logical_and_expression -> binop_expr
+
+?logical_and_expression: inclusive_or_expression
+    | logical_and_expression LOG_AND_OP inclusive_or_expression -> binop_expr
+
+?inclusive_or_expression: exclusive_or_expression
+    | inclusive_or_expression OR_OP exclusive_or_expression -> binop_expr
+
+?exclusive_or_expression: and_expression
+    | exclusive_or_expression XOR_OP and_expression -> binop_expr
+
+?and_expression: equality_expression
+    | and_expression AND_OP equality_expression -> binop_expr
+
+?equality_expression: relational_expression
+    | equality_expression EQ relational_expression -> binop_expr
+    | equality_expression NEQ relational_expression -> binop_expr
+
+?relational_expression: shift_expression
+    | relational_expression REL_OP shift_expression -> binop_expr
+    | ident_less_than shift_expression -> ident_lt_expr
+
+?shift_expression: additive_expression
+    | shift_expression SHIFT_OP additive_expression -> binop_expr
+
+?additive_expression: multiplicative_expression
+    | additive_expression ADD_OP multiplicative_expression -> binop_expr
+
+?multiplicative_expression: unary_expression
+    | multiplicative_expression MUL_OP unary_expression -> binop_expr
+
+?unary_expression: postfix_expression
+    | INCREMENT_OP unary_expression -> pre_increment_expr
+    | "await" unary_expression -> await_expression
+    | UNARY_OP unary_expression
+
+?postfix_expression: primary_expression
+    | postfix_expression "[" expression "]" -> subscript_expr
+    | postfix_expression "(" [assignment_expression ("," assignment_expression)*] ")" -> function_call_expr
+    | postfix_expression DOT IDENT -> member_access_expr
+    | postfix_expression INCREMENT_OP -> post_increment_expr
+
+?primary_expression: identifier_expr
+    | DECIMAL_NUM -> dec_literal
+    | INT_CONSTANT -> int_literal
+    | ESCAPED_STRING+ -> string_literal
+    | "(" expression ("," expression)+ ")" -> vector_expression
+    | "(" expression ")"
+
+identifier_expr: IDENT
+
+OPERATORS: EQ | ASSIGN_OP | LOG_OR_OP | INCREMENT_OP| LOG_AND_OP | OR_OP | XOR_OP | AND_OP | NEQ | SHIFT_OP
+            | REL_OP  | ADD_OP | MUL_OP | UNARY_OP | "[]"
+
+EQ.3: "=="
+ASSIGN: "="
+ASSIGN_OP.2: ASSIGN | "*=" | "/=" | "%=" | "+=" | "-=" | "<<=" | ">>=" | "&=" | "^=" | "|="
+
+LOG_OR_OP: "||"
+LOG_AND_OP: "&&"
+OR_OP: "|"
+XOR_OP: "^"
+AND_OP: "&"
+NEQ: "!="
+REL_OP: "<=" | ">=" | "<" | ">"
+SHIFT_OP.2: "<<" | ">>"
+ADD_OP: "+" | "-"
+MUL_OP: "*" | "/" | "%"
+UNARY_OP: "+" | "-" | "~" | "!"
+INCREMENT_OP: "++" | "--"
+DOT: "."
+
+INT_CONSTANT: DEC_CONSTANT | OCT_CONSTANT | HEX_CONSTANT | BIN_CONSTANT | CHAR_CONSTANT | "0"
+DEC_CONSTANT: NON_ZERO_DIGIT DIGIT*
+OCT_CONSTANT: "0" ("0".."7")+
+HEX_CONSTANT: "0" ("x" | "X") ("0".."9" | "A".."F" | "a".."f")+
+BIN_CONSTANT: "0" ("b" | "B") ("0" | "1")+
+
+NON_ZERO_DIGIT: "1" .. "9"
+
+DECIMAL_NUM.2: (DEC_CONSTANT | "0") "." DIGIT+
+
+SINGLE_CHAR: (/(<?!\\)./ | "\\" /([abefnrtv\\'"?]|x[\da-fA-F]+|[0-7]{1,3})/ )
+
+CHAR_CONSTANT: "'" SINGLE_CHAR "'"
+
+IDENT: CNAME
+
+%import common.ESCAPED_STRING
+%import common.DIGIT
+%import common.CNAME
+%import common.WS
+
+%ignore WS
+
+COMMENT: "//" /[^\n]/* | "/*" /(\S|\s)*?/ "*/"
+%ignore COMMENT
+

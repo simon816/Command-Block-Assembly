@@ -5,17 +5,62 @@ from .nbt import NBTType
 
 import commands as c
 
+class Conversions:
+
+    def to_int(self, val):
+         raise TypeError('%s cannot convert %s to int' % (self, val))
+
+    @property
+    def scale(self):
+        raise TypeError('%s cannot scale values' % self)
+
+class IConversions(Conversions):
+
+    @property
+    def scale(self):
+        return 1
+
+    def to_int(self, val):
+        return int(val)
+
+class QConversions(Conversions):
+
+    def __init__(self, size):
+        self.size = size
+        self.__scale = 2 ** size
+
+    @property
+    def scale(self):
+        return self.__scale
+
+    def to_int(self, val):
+        return int(val * self.scale)
+
+class NBTConversions(Conversions):
+    pass
+
 class VarType(InsnArg):
 
     __LOOKUP = {}
 
-    def __init__(self, name, nbt_key, numeric, nbt_type, default):
+    def __init__(self, name, nbt_key, numeric, nbt_type, default, conversions):
         self.name = name
         self.nbt_path_key = nbt_key
         self.nbt_type = nbt_type
         self.isnumeric = numeric
         self.default_val = default
+        self.conversions = conversions
         self.__LOOKUP[name] = self
+
+    def __str__(self):
+        return 'VarType(%s)' % (self.name)
+
+    def to_int(self, val):
+        return self.conversions.to_int(val)
+
+    @property
+    def scale(self):
+        return self.conversions.scale
 
     @classmethod
     def _init_from_parser(cls, value):
@@ -23,9 +68,14 @@ class VarType(InsnArg):
 
     i32 = None
     nbt = None
+    # https://en.wikipedia.org/wiki/Q_%28number_format%29
+    q10 = None
 
-VarType.i32 = VarType('i32', 'int', True, NBTType.int, 0)
-VarType.nbt = VarType('nbt', 'nbt', False, NBTType.compound, [])
+VarType.i32 = VarType('i32', 'int', True, NBTType.int, 0, IConversions())
+VarType.nbt = VarType('nbt', 'nbt', False, NBTType.compound, [],
+                      NBTConversions())
+VarType.q10 = VarType('q10', 'qnum', True, NBTType.double, 0.0,
+                      QConversions(10))
 
 
 class OpenVar:
@@ -59,10 +109,12 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
 
     def __init__(self, vartype):
         assert isinstance(vartype, VarType)
-        #assert vartype is VarType.i32, "Only i32 supported"
         self.type = vartype
         self.__use_w = 0
         self.__use_r = 0
+
+    def __repr__(self):
+        return '%s(%s)' % (self.__class__.__name__, self.type)
 
     def open_for_write(self, out, read=False):
         return OpenVar(self, out, read=read, write=True)
@@ -95,14 +147,20 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     @property
     def is_entity_local(self):
         # Bit of a hack
-        return isinstance(self, EntityLocalAccess)
+        return isinstance(self, EntityLocalVariable)
 
     @abc.abstractmethod
     def read(self):
+        """
+        Returns a command that sets the "result" to this variable's
+        value. The value is left unscaled as an int.
+        """
         pass
 
     def clone_to(self, other, out):
+        assert other.type == self.type, "TODO"
         ref = other._direct_ref()
+        # Need to adjust for scaling
         if ref is not None:
             self._write_to_reference(ref, out)
         else:
@@ -111,6 +169,38 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def set_const_val(self, value, out):
         pass
+
+    def to_int(self, value):
+        return self.type.to_int(value)
+
+    def scale_down(self, ref, out):
+        if self.type.scale != 1:
+            # TODO extract to constant reference
+            tmp = out.allocate_temp()
+            scaleparam = c.Var(tmp)
+            out.write(c.SetConst(scaleparam, self.type.scale))
+            out.write(c.OpDiv(ref, scaleparam))
+            out.free_temp(tmp)
+
+    def scale_other_to_this(self, other, otherref, out):
+        factor = self.type.scale / other.type.scale
+        op = c.OpMul
+        if factor < 1:
+            factor = 1 / factor
+            op = c.OpDiv
+        factor = int(factor)
+        if factor == 1:
+            return otherref
+        newvar = out.allocate_temp()
+        scaled = c.Var(newvar)
+        out.write(c.OpAssign(scaled, otherref))
+        # TODO extract to constant reference
+        tmp = out.allocate_temp()
+        scaleparam = c.Var(tmp)
+        out.write(c.SetConst(scaleparam, factor))
+        out.write(op(scaled, scaleparam))
+        out.free_temp(tmp)
+        return newvar
 
     def push_to_stack(self, out):
         # Create a virtual variable to store the value as NBT
@@ -122,6 +212,16 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     def realign_frame(self, shift):
         pass
 
+    ## DIRECT ACCESS
+
+    def _direct_ref(self):
+        return None
+
+    def _direct_nbt(self):
+        return None
+
+    ## INTERNAL ONLY
+
     def _write_to_reference(self, ref, out):
         out.write(c.ExecuteChain()
                   .store('result')
@@ -131,14 +231,12 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     def _read_from_reference(self, ref, out):
         self._store_from_cmd(c.GetValue(ref), out)
 
-    def _direct_ref(self):
-        return None
-
-    def _direct_nbt(self):
-        return None
-
     @abc.abstractmethod
     def _store_from_cmd(self, cmd, out):
+        """
+        Store command "result" value into this variable.
+        Result is not scaled therefore must be scaled as appropriate.
+        """
         pass
 
 class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
@@ -153,8 +251,12 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
     def root_path(self):
         pass
 
+    @property
+    def entity(self):
+        return c.GlobalEntity
+
     def set_const_val(self, value, out):
-        out.write(c.DataModifyValue(c.GlobalEntity.ref, self.path, 'set',
+        out.write(c.DataModifyValue(self.entity.ref, self.path, 'set',
                                   self.nbt_val(value)))
 
     def nbt_val(self, value):
@@ -163,29 +265,30 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
     def _store_from_cmd(self, cmd, out):
         out.write(c.ExecuteChain()
                   .store('result')
-                  .entity(c.GlobalEntity, self.path, self.type.nbt_type.
-                          exec_store_name)
+                  .entity(self.entity, self.path, self.type.nbt_type.
+                          exec_store_name, 1 / self.type.scale)
                   .run(cmd))
 
     def read(self):
-        return c.DataGetGlobal(self.path)
+        return c.DataGet(self.entity.ref, self.path, self.type.scale)
 
     def _direct_nbt(self):
-        return self.path
+        return self.path, self.entity
 
     def clone_to(self, other, out):
-        other_path = other._direct_nbt()
-        if other_path is not None:
+        other_direct = other._direct_nbt()
+        if other_direct is not None:
+            other_path, other_entity = other_direct
             # Optimize here - can copy NBT directly
-            out.write(c.DataModifyFrom(c.GlobalEntity.ref, other_path, 'set',
-                                     c.GlobalEntity.ref, self.path))
+            out.write(c.DataModifyFrom(other_entity.ref, other_path, 'set',
+                                       self.entity.ref, self.path))
         else:
             super().clone_to(other, out)
 
     def push_to_stack(self, out):
         # out-of-bounds stack path
         out.write(c.DataModifyFrom(c.GlobalEntity.ref, c.StackPath(None),
-                                   'append', c.GlobalEntity.ref,
+                                   'append', self.entity.ref,
                                    self.root_path))
 
 class NbtOffsetVariable(NbtStorableVariable):
@@ -209,7 +312,7 @@ class ScoreStorableVariable(Variable):
         self.ref = ref
 
     def set_const_val(self, value, out):
-        out.write(c.SetConst(self.ref, value))
+        out.write(c.SetConst(self.ref, self.to_int(value)))
 
     def _read_from_reference(self, ref, out):
         out.write(c.OpAssign(self.ref, ref))
@@ -323,20 +426,27 @@ class VirtualStackPointer(LocalStackVariable):
 
 class VirtualNbtVariable(NbtStorableVariable):
 
-    def __init__(self, type, path):
+    def __init__(self, type, directgetter):
         super().__init__(type)
-        if not callable(path):
-            self._pathgetter = lambda: path
-        else:
-            self._pathgetter = path
+        self._directgetter = directgetter
 
     @property
     def path(self):
-        return self._pathgetter()
+        path, entity = self._directgetter()
+        return path
 
     @property
     def root_path(self):
-        return self._pathgetter()
+        return self.path
+
+    @property
+    def entity(self):
+        path, entity = self._directgetter()
+        return entity
+
+    @property
+    def is_read_from(self):
+        return True # Prevent getting eliminated
 
 class WorkingNbtVariable(NbtStorableVariable):
 
@@ -348,12 +458,8 @@ class WorkingNbtVariable(NbtStorableVariable):
     def root_path(self):
         return c.Path('working')
 
-class EntityLocalAccess(ScoreStorableVariable):
-
-    def __init__(self, local, target):
-        super().__init__(VarType.i32, c.ScoreRef(target.as_resolve(),
-                                               local.obj_ref))
-
+class EntityLocalVariable:
+    
     @property
     def is_read_from(self):
         return True
@@ -361,3 +467,30 @@ class EntityLocalAccess(ScoreStorableVariable):
     @property
     def is_written_to(self):
         return True
+
+
+class EntityLocalAccess(EntityLocalVariable, ScoreStorableVariable):
+
+    def __init__(self, local, target):
+        super().__init__(VarType.i32, c.ScoreRef(target.as_resolve(),
+                                               local.obj_ref))
+
+class EntityLocalNbtVariable(EntityLocalVariable, NbtStorableVariable):
+
+    def __init__(self, type, target, path):
+        super().__init__(type)
+        self._target = target.as_resolve()
+        self._path = path
+
+    @property
+    def entity(self):
+        return self._target
+    
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def root_path(self):
+        return self._path
+

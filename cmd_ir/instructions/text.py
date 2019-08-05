@@ -47,8 +47,10 @@ class TextObject(NativeType):
             # optimize for direct nbt or ref
             direct_nbt = child._direct_nbt()
             if direct_nbt:
-                return c.TextNBTComponent(direct_nbt)
+                path, entity = direct_nbt
+                return c.TextNBTComponent(entity, path)
             direct_ref = child._direct_ref()
+            # TODO possibly scale if not int?
             if direct_ref:
                 return c.TextScoreComponent(direct_ref)
             with opener.context(child.open_for_read(out)) as ref:

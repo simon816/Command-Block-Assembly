@@ -9,7 +9,8 @@ from ..core_types import (VirtualString,
                           CmdFunction,
                           EntitySelection,
                           )
-from ..variables import Variable, VarType, VirtualNbtVariable
+from ..variables import (Variable, VarType, VirtualNbtVariable,
+                         EntityLocalNbtVariable)
 from ..nbt import NBTType, NBTList, NBTBase, NBTCompound
 
 import commands as c
@@ -138,9 +139,10 @@ class NBTAssign(SingleCommandInsn):
         self.var.usage_write()
 
     def get_cmd(self):
-        path = self.var._direct_nbt()
-        assert path is not None
-        return c.DataModifyValue(c.GlobalEntity.ref, path, 'set', self.nbt)
+        direct = self.var._direct_nbt()
+        assert direct is not None
+        path, entity = direct
+        return c.DataModifyValue(entity.ref, path, 'set', self.nbt)
 
 class NBTSubPath(ConstructorInsn):
     """Create a derivative NBT variable from a sub-path of a parent NBT
@@ -155,14 +157,28 @@ class NBTSubPath(ConstructorInsn):
     def construct(self):
         assert self.root.type is VarType.nbt
         # Needs to be getter because path might not be resolved at this stage
-        return VirtualNbtVariable(self.vartype, self._getpath)
+        return VirtualNbtVariable(self.vartype, self._getdirect)
 
-    def _getpath(self):
-        # TODO proper child paths
-        return c.Path(self.root._direct_nbt().path + str(self.path))
+    def _getdirect(self):
+        path, entity = self.root._direct_nbt()
+        return path.subpath(str(self.path)), entity
 
     def declare(self):
         self.root.usage_read()
+
+class EntityLocalNBT(ConstructorInsn):
+    """Create an NBT variable that references an entity's NBT"""
+    # Note: Have to have path because can't specify empty (root) path
+
+    args = [VarType, EntityRef, VirtualString]
+    argnames = 'type target path'
+    argdocs = ["Variable type", "Target entity", "NBT path"]
+    rettype = Variable
+    insn_name = 'entity_local_nbt'
+
+    def construct(self):
+        path = c.NbtPath(str(self.path))
+        return EntityLocalNbtVariable(self.type, self.target, path)
 
 class NBTModifyValueInsn(SingleCommandInsn):
     """Modify a block or entity at the given NBT path, performing the

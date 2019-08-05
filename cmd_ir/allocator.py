@@ -22,7 +22,8 @@ class Allocator(TopVisitor):
 class FuncAllocator(FuncVisitor):
 
     def visit(self, func):
-        self.offset = 0
+        self.reg_offset = 0
+        self.nbt_offset = 0
         self.use_scores = True
         super().visit(func)
         func.variables_finalized()
@@ -30,13 +31,13 @@ class FuncAllocator(FuncVisitor):
     def visit_local_var(self, name, var):
         if self.use_scores and var.type.isnumeric:
             var.set_proxy(LocalScoreVariable(var.type,
-                                             Var('reg_%d' % self.offset)))
-            if self.offset >= 4:
+                                             Var('reg_%d' % self.reg_offset)))
+            if self.reg_offset >= 4:
                 self.use_scores = False
-                self.offset = -1
+            self.reg_offset += 1
         else:
-            var.set_proxy(LocalStackVariable(var.type, self.offset))
-        self.offset += 1
+            var.set_proxy(LocalStackVariable(var.type, self.nbt_offset))
+            self.nbt_offset += 1
         return name, var
 
 def default_allocation(top):

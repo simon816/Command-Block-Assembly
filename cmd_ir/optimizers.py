@@ -154,6 +154,12 @@ class DeadCodeBlockEliminator(BlockVisitor):
             if not insn.dest.is_read_from:
                 processed = True
                 self.kills.add(insn)
+        if isinstance(insn, Invoke) and insn.func.is_pure:
+            # Pure function either with no retvars or retvars are not read
+            if insn.retvars is None or all(not var.is_read_from for var in \
+                                           insn.retvars):
+                processed = True
+                self.kills.add(insn)
         if not processed:
             # Don't remove anything that is used
             for arg in insn.query(Variable):

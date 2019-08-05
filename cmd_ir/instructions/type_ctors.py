@@ -299,8 +299,9 @@ class ParameterInsn(DefineVariable):
         return ParameterVariable(self.type)
 
     def activate(self, seq):
+        var = super().activate(seq)
         seq.holder.add_parameter(self.type)
-        return super().activate(seq)
+        return var
 
 class ReturnVarInsn(DefineVariable):
     """Define a variable to hold a return value of the given type for a
@@ -313,8 +314,9 @@ class ReturnVarInsn(DefineVariable):
         return ReturnVariable(self.type)
 
     def activate(self, seq):
+        var = super().activate(seq)
         seq.holder.add_return(self.type)
-        return super().activate(seq)
+        return var
 
 class DefineObjective(PreambleOnlyInsn, ConstructorInsn):
     """Creates a new objective reference, optionally with some criteria."""

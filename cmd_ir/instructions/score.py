@@ -1,20 +1,25 @@
 """Variable Arithmetic Instructions"""
 
 from ._core import Insn, READ, WRITE, get_subclasses
-from ..variables import Variable
+from ..variables import Variable, VarType
 
 import commands as c
 
 class SetScore(Insn):
 
-    args = [Variable, (int, Variable)]
+    args = [Variable, (int, Variable, float)]
     access = [WRITE, READ]
     argnames = 'var value'
     argdocs = ["Variable to set the value on", "Value to set"]
     insn_name = '#invalid_setscore'
 
     def activate(self, seq):
-        assert self.var.type.isnumeric
+        if isinstance(self.value, Variable):
+            # Allow nbt=nbt
+            assert self.var.type.isnumeric or \
+                   self.var.type == self.value.type == VarType.nbt
+        else:
+            assert self.var.type.isnumeric
 
     def declare(self):
         self.var.usage_write()
@@ -32,12 +37,13 @@ class SetScore(Insn):
 
 class SimpleOperationInsn(Insn):
 
-    args = [Variable, (int, Variable)]
+    args = [Variable, (int, Variable, float)]
     access = [WRITE, READ]
     argnames = 'dest src'
     argdocs = ["Destination for the operation", "Source for the operation"]
     insn_name = '#invalid_operation'
     with_neg_const = None
+    is_additive = False
 
     def activate(self, seq):
         assert self.dest.type.isnumeric
@@ -57,15 +63,24 @@ class SimpleOperationInsn(Insn):
         with self.dest.open_for_write(out, read=True) as ref:
             if isinstance(self.src, Variable):
                 with self.src.open_for_read(out) as srcref:
+                    scaled = self.dest.scale_other_to_this(self.src,
+                                                           srcref, out)
+                    if scaled != srcref:
+                        # TODO this is a hack because a temp is allocated
+                        srcref = c.Var(scaled)
                     out.write(self.with_ref(ref, srcref))
+                    if scaled != srcref:
+                        out.free_temp(scaled)
             else:
-                self.apply_const_src(ref, out)
+                self.apply_const_src(ref, self.dest.to_int(self.src), out)
+            if not self.is_additive:
+                self.dest.scale_down(ref, out)
 
-    def apply_const_src(self, ref, out):
-        if self.src < 0 and self.with_neg_const is not None:
-            out.write(self.with_neg_const(ref, -self.src))
+    def apply_const_src(self, ref, val, out):
+        if val < 0 and self.with_neg_const is not None:
+            out.write(self.with_neg_const(ref, -val))
         else:
-            out.write(self.with_const(ref, self.src))
+            out.write(self.with_const(ref, val))
 
     def serialize(self, holder):
         dest, src = self.serialize_args(holder)
@@ -85,10 +100,10 @@ import operator
 
 class OnlyRefOperationInsn(SimpleOperationInsn):
 
-    def apply_const_src(self, ref, out):
+    def apply_const_src(self, ref, val, out):
         tmp = out.allocate_temp()
         srcref = c.Var(tmp)
-        out.write(c.SetConst(srcref, self.src))
+        out.write(c.SetConst(srcref, val))
         out.write(self.with_ref(ref, srcref))
         out.free_temp(tmp)
 
@@ -98,6 +113,7 @@ class AddScore(SimpleOperationInsn):
     with_neg_const = c.RemConst
     constfunc = operator.add
     identity = 0
+    is_additive = True
 
 class SubScore(SimpleOperationInsn):
     with_ref = c.OpSub
@@ -105,6 +121,7 @@ class SubScore(SimpleOperationInsn):
     with_neg_const = c.AddConst
     constfunc = operator.sub
     identity = 0
+    is_additive = True
 
 class MulScore(OnlyRefOperationInsn):
     with_ref = c.OpMul
@@ -120,6 +137,7 @@ class ModScore(OnlyRefOperationInsn):
     with_ref = c.OpMod
     constfunc = operator.mod
     identity = None
+    is_additive = True
 
 class MovLtScore(OnlyRefOperationInsn):
     with_ref = c.OpIfLt

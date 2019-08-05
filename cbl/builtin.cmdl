@@ -1,0 +1,32 @@
+
+type World {
+    void spawn(EntityType type);
+}
+
+type Entity {
+    RuntimeEntityType type;
+    RuntimeEntityPos pos;
+    RuntimeEntityPos facing; // TODO
+    RuntimeEntityWorld world;
+    SelectorFilter has_tag(string tag);
+    void kill();
+//    void joinTeam(Team team);
+}
+
+namespace Entities {
+    EntityType magma_cube;
+    EntityType area_effect_cloud;
+}
+
+namespace Events {
+    Event placed_block;
+}
+
+namespace Blocks {
+    BlockType white_carpet;
+}
+
+namespace Game {
+    EntityCollection entities;
+    async void tick();
+}

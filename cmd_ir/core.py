@@ -3,7 +3,7 @@ import abc
 
 from commands import SetConst, Var
 
-from .core_types import FunctionLike, PosUtilEntity
+from .core_types import FunctionLike, PosUtilEntity, GlobalEntity
 
 from .variables import (Variable, VarType, ParameterVariable, ReturnVariable,
                         LocalStackVariable, LocalVariable, NbtOffsetVariable)
@@ -190,6 +190,8 @@ class Scope(OrderedDict):
 class VariableHolder:
 
     def uniq_name(self, hint):
+        if hint not in self.scope:
+            return hint
         i = 0
         while '%s%d' % (hint, i) in self.scope:
             i += 1
@@ -243,9 +245,13 @@ class TopLevel(VariableHolder):
         self.preamble = Preamble(self)
         self.finished = False
         self.store('pos_util', PosUtilEntity())
+        self.store('_global_entity', GlobalEntity())
 
     def get_or_create_func(self, name):
         return self.scope.get_or_create(name, self._create_func)
+
+    def create_function(self, namehint):
+        return self.uniq(namehint, self._create_func)
 
     def _create_func(self, name):
         return IRFunction(name, self)
@@ -395,6 +401,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._exitblock = self.uniq('0ret', self._create_super_block)
         self._varsfinalized = False
         self._is_extern = False
+        self._is_pure = False
         self.params = []
         self.returns = []
 
@@ -433,6 +440,13 @@ class IRFunction(VisibleFunction, VariableHolder):
     @property
     def extern_visibility(self):
         return self._is_extern
+
+    @property
+    def is_pure(self):
+        return self._is_pure
+
+    def set_pure(self):
+        self._is_pure = True
 
     @property
     def is_defined(self):
@@ -543,7 +557,7 @@ class IRFunction(VisibleFunction, VariableHolder):
                 and isinstance(var.var, NbtOffsetVariable)],
                       key=lambda v: v.offset)
         if vars:
-            assert vars[0].offset == 0, "Stack tip not 0"
+            assert vars[0].offset == 0, "Stack tip not 0 in %s: %s" % (self._name, vars)
             assert vars[-1].offset == len(vars) - 1, "Stack base not length - 1"
             assert len({v.offset for v in vars}) == len(vars), "Stack collision"
             # Push the variable type - this initializes with the default value
@@ -556,7 +570,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         return vars
 
     def add_advancement_revoke(self, event):
-        from instructions import RevokeEventAdvancement
+        from .instructions import RevokeEventAdvancement
         self._entryblock.add(RevokeEventAdvancement(self))
 
     def serialize(self):
@@ -629,7 +643,10 @@ class BasicBlock(FunctionLike, InstructionSeq):
         return writer.get_output()
 
     def serialize(self):
-        lines = [self._name + ':']
+        modifier = ''
+        if self.is_function:
+            modifier = '[function] '
+        lines = [modifier + self._name + ':']
         lines.extend(insn.serialize(self._func) for insn in self.insns)
         return '\n'.join('    ' + line for line in lines)
 
