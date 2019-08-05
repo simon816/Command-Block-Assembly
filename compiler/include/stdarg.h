@@ -11,31 +11,30 @@
 
 typedef char* va_list;
 
-void va_start_impl(va_list* list,void* from)
+static void __va_start_impl(va_list* list,void* from)
 {
 *list = from;
 }
 
 
 
-void* va_arg_impl(va_list* list,int size){
+static void* __va_arg_impl(va_list* list,int size){
 	void* t = *list;
 	*list +=size;
 	return t;
 }
 
-void va_end_impl(va_list* list){
-	free(list);
-  free(*list);
+static void __va_end_impl(va_list* list){
+	
 }
 
 
 
 
-#define va_start(list,from) va_start_impl(&list,(&from)+1)
+#define va_start(list,from) __va_start_impl(&list,(&from)+1)
 
-#define va_arg(list,type) *(type*)(va_arg_impl(&list,sizeof(type)))
+#define va_arg(list,type) *(type*)(__va_arg_impl(&list,sizeof(type)))
 
-#define va_end(list) va_end_impl(&list)
+#define va_end(list) __va_end_impl(&list)
 
 #endif
