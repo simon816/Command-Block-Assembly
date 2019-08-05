@@ -1,11 +1,16 @@
 try:
     from .parser_gen import Lark_StandAlone, Interpreter, v_args, Token
-    _standalone_instance = Lark_StandAlone()
+    def lark_parser():
+        return Lark_StandAlone()
 except ImportError:
     from lark import Lark, v_args, Token
     from lark.visitors import Interpreter
-    with open('cmd_ir/grammar.lark', 'r') as f:
-        _standalone_instance = Lark(f, parser='lalr')
+    import os
+    d = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(d, 'grammar.lark'), 'r') as f:
+        grammar = f.read()
+    def lark_parser():
+        return Lark(grammar, parser='lalr', debug=True)
 
 from .core_types import *
 
@@ -164,7 +169,7 @@ class BuildProgram(Interpreter):
 class Reader:
 
     def __init__(self):
-        self.parser = _standalone_instance
+        self.parser = lark_parser()
         self.env = []
 
     def set_env(self, name, value):

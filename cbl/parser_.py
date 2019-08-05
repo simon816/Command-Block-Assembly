@@ -76,7 +76,7 @@ lexer_callbacks = {
 
 try:
     from .parser_gen import (Lark_StandAlone, LexerConf, Transformer, v_args,
-                             Token)
+                             Token, GrammarError)
     # Hack to add our callbacks
     def _lexconf_deserialize(self):
         self.callbacks = lexer_callbacks
@@ -84,7 +84,7 @@ try:
     def lark_parser():
         return Lark_StandAlone()
 except ImportError:
-    from lark import Lark, v_args, Token, Transformer
+    from lark import Lark, v_args, Token, Transformer, GrammarError
     import os
     d = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(d, 'grammar.lark'), 'r') as f:

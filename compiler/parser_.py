@@ -1,81 +1,4 @@
 from .nodes import *
-from .parser_gen import Lark_StandAlone, Transformer, v_args, GrammarError, \
-     Token, Tree, Transformer_InPlace, LEXERS, CallChain
-
-simple_escapes = {
-    'a': '\a',
-    'b': '\b',
-    'e': '\e',
-    'f': '\f',
-    'n': '\n',
-    'r': '\r',
-    't': '\t',
-    'v': '\v',
-    '\\': '\\',
-    '\'': '\'',
-    '"': '"',
-    '?': '?',
-}
-
-class TypedefResolver:
-    always_accept = []
-
-    def __init__(self, fixer):
-        self.fixer = fixer
-
-    def process(self, stream):
-        for tok in stream:
-            if tok.type == 'TYPEDEF_NAME':
-                if not self.fixer.contains(tok.value):
-                    # demote to identifier
-                    yield Token.new_borrow_pos('IDENT', tok.value, tok)
-                else:
-                    yield tok
-            else:
-                yield tok
-
-# TODO should be scope-aware
-class TypedefScanner(Transformer_InPlace):
-
-    def __init__(self, fixer):
-        self.fixer = fixer
-
-    def declaration(self, c):
-        decl_spec = c[0]
-        init_decl = c[1] if len(c) == 2 else None
-        node = Tree('declaration', c)
-        if not init_decl or not init_decl.children:
-            return node
-        store = decl_spec.children[0].children
-        has_typedef = False
-        for child in store:
-            if child.type == 'TYPEDEF':
-                has_typedef = True
-                break
-        if not has_typedef:
-            return node
-        for init in init_decl.children:
-            # only want declarator, not initializer
-            decl = init.children[0]
-            direct = decl.children[-1] # direct_declarator
-            identexpr = direct.children[0]
-            name = identexpr.children[0].value
-            self.fixer.add(name)
-        return node
-
-# https://en.wikipedia.org/wiki/The_lexer_hack
-class TypedefFixer:
-
-    def __init__(self, builtin):
-        self.all_type_names = set(builtin)
-        self.transformer = TypedefScanner(self)
-        self.postlex = TypedefResolver(self)
-
-    def add(self, name):
-        self.all_type_names.add(name)
-
-    def contains(self, name):
-        return name in self.all_type_names
 
 def process_string_escapes(token):
     val = token.value
@@ -133,41 +56,110 @@ lexer_callbacks = {
     'INT_CONSTANT': process_int_constant,
 }
 
-# Inject our callbacks
-for lexer in LEXERS.values():
-    callbacks = lexer.callback
-    for type_, func in lexer_callbacks.items():
-        if type_ in callbacks:
-            callbacks[type_] = CallChain(callbacks[type_], func, lambda t:
-                                         t.type == type_)
-        else:
-            callbacks[type_] = func
+try:
+    from .parser_gen import (Lark_StandAlone, Transformer, v_args, GrammarError,
+                             Token, Tree, Transformer_InPlace, LexerConf)
 
+    # Hack to add our callbacks
+    def _lexconf_deserialize(self):
+        self.callbacks = lexer_callbacks
+    LexerConf._deserialize = _lexconf_deserialize
+    def lark_parser(**kwargs):
+        return Lark_StandAlone(**kwargs)
 
-class Placeholder:
-    def __init__(self):
-        self.inst = None
-    def __getattr__(self, name):
-        if self.inst is not None:
-            return getattr(self.inst, name)
-        raise AttributeError(name)
+except ImportError:
+    from lark import Lark, Transformer, v_args, GrammarError, Token, Tree
+    from lark.visitors import Transformer_InPlace
+    import os
+    d = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(d, 'grammar.lark'), 'r') as f:
+        grammar = f.read()
+    def lark_parser(**kwargs):
+        return Lark(grammar, parser='lalr', debug=True, start='program',
+                    lexer_callbacks=lexer_callbacks, **kwargs)
 
-_placeholder_transformer = Placeholder()
-_placeholder_postlex = Placeholder()
+simple_escapes = {
+    'a': '\a',
+    'b': '\b',
+    'e': '\e',
+    'f': '\f',
+    'n': '\n',
+    'r': '\r',
+    't': '\t',
+    'v': '\v',
+    '\\': '\\',
+    '\'': '\'',
+    '"': '"',
+    '?': '?',
+}
 
-# https://github.com/lark-parser/lark/issues/299
-# Can only initialize once
-_standalone_instance = Lark_StandAlone(transformer=_placeholder_transformer,
-                                       postlex=_placeholder_postlex)
+class TypedefResolver:
+    always_accept = []
 
+    def __init__(self, fixer):
+        self.fixer = fixer
+
+    def process(self, stream):
+        for tok in stream:
+            if tok.type == 'TYPEDEF_NAME':
+                if not self.fixer.contains(tok.value):
+                    # demote to identifier
+                    yield Token.new_borrow_pos('IDENT', tok.value, tok)
+                else:
+                    yield tok
+            else:
+                yield tok
+
+# TODO should be scope-aware
+class TypedefScanner(Transformer_InPlace):
+
+    def __init__(self, fixer):
+        self.fixer = fixer
+
+    def declaration(self, tree):
+        c = tree.children
+        decl_spec = c[0]
+        init_decl = c[1] if len(c) == 2 else None
+        node = Tree('declaration', c)
+        if not init_decl or not init_decl.children:
+            return node
+        store = decl_spec.children[0].children
+        has_typedef = False
+        for child in store:
+            if child.type == 'TYPEDEF':
+                has_typedef = True
+                break
+        if not has_typedef:
+            return node
+        for init in init_decl.children:
+            # only want declarator, not initializer
+            decl = init.children[0]
+            direct = decl.children[-1] # direct_declarator
+            identexpr = direct.children[0]
+            name = identexpr.children[0].value
+            self.fixer.add(name)
+        return node
+
+# https://en.wikipedia.org/wiki/The_lexer_hack
+class TypedefFixer:
+
+    def __init__(self, builtin):
+        self.all_type_names = set(builtin)
+        self.transformer = TypedefScanner(self)
+        self.postlex = TypedefResolver(self)
+
+    def add(self, name):
+        self.all_type_names.add(name)
+
+    def contains(self, name):
+        return name in self.all_type_names
 
 class Parser:
 
     def __init__(self, builtin_types = []):
         tdfixer = TypedefFixer(builtin_types)
-        self._parser = _standalone_instance
-        _placeholder_transformer.inst = tdfixer.transformer
-        _placeholder_postlex.inst = tdfixer.postlex
+        self._parser = lark_parser(transformer=tdfixer.transformer,
+                                   postlex=tdfixer.postlex)
 
     def parse_program(self, text):
         tree = self._parser.parse(text)
@@ -406,8 +398,10 @@ class TransformToNodes(Transformer):
 
     def int_literal(self, token):
         # should be int from token processor
-        assert type(token.value) == int
-        return IntLiteral(val=token.value)
+        # TODO since https://github.com/lark-parser/lark/commit/d952f2a
+        # token.value is forced to be a string
+        # assert type(token.value) == int
+        return IntLiteral(val=int(token.value))
 
     def string_literal(self, *tokens):
         # concat all strings together
