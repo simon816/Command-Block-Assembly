@@ -47,6 +47,9 @@ class EntityLocal(NativeType):
         self.name = name
         self.obj_ref = c.ObjectiveRef(name)
 
+    def clone(self):
+        return self
+
 class VirtualString(NativeType):
 
     def __init__(self, val):
@@ -54,6 +57,9 @@ class VirtualString(NativeType):
 
     def __str__(self):
         return self.val
+
+    def clone(self):
+        return self
 
     def serialize(self):
         return '"%s"' % self.val.replace('\\', '\\\\').replace('"', '\\"')
@@ -72,6 +78,9 @@ class PlayerRef(EntityRef):
 
     def as_resolve(self):
         return c.NameRef(self.player)
+
+    def clone(self):
+        return self
 
 class SelectorType(InsnArg):
 
@@ -157,10 +166,16 @@ class PosUtilEntity(EntityRef):
     def as_resolve(self):
         return c.PosUtil
 
+    def clone(self):
+        return self
+
 class GlobalEntity(EntityRef):
 
     def as_resolve(self):
         return c.GlobalEntity
+
+    def clone(self):
+        return self
 
 class Position(NativeType):
 
@@ -180,17 +195,26 @@ class Position(NativeType):
     def as_worldpos(self):
         return c.WorldPos(self._x, self._y, self._z)
 
+    def clone(self):
+        return self
+
 class RelPosVal(NativeType):
 
     def __init__(self, val):
         self.val = val
         self.as_coord = c.WorldRelCoord(val)
 
+    def clone(self):
+        return self
+
 class AncPosVal(NativeType):
 
     def __init__(self, val):
         self.val = val
         self.as_coord = c.AnchorRelCoord(val)
+
+    def clone(self):
+        return self
 
 class CmdFunction(NativeType, metaclass=abc.ABCMeta):
 
@@ -210,6 +234,13 @@ class BlockType(c.Resolvable, NativeType):
 
     def set_nbt(self, nbt):
         self.nbt = nbt
+
+    def clone(self):
+        copy = BlockType(self.block_id)
+        if self.nbt is not None:
+            copy.nbt = self.nbt.clone()
+        copy.props.update(self.props)
+        return copy
 
     def resolve(self, scope):
         props = ','.join(['%s=%s' % (key, self.props[key]) \
@@ -239,6 +270,9 @@ class TeamRef(NativeType):
     def __init__(self, name):
         self.name = name
         self.ref = c.TeamName(name)
+
+    def clone(self):
+        return self
 
 class TextColor(InsnArg):
 
@@ -294,6 +328,9 @@ class BossbarRef(NativeType):
         self.name = name
         self.ref = c.Bossbar(name)
 
+    def clone(self):
+        return self
+
 PosType = (int, float, RelPosVal, AncPosVal)
 
 def Opt(optype):
@@ -307,5 +344,10 @@ class EventRef(NativeType):
 
     def add_condition(self, path, value):
         self.conditions[path] = value
+
+    def clone(self):
+        copy = EventRef(self.name)
+        copy.conditions.update(self.conditions)
+        return copy
 
 RelPosType = (int, float, RelPosVal)

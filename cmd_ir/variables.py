@@ -351,7 +351,7 @@ class ProxyVariable(Variable):
     @property
     def var(self):
         if self.__var is None:
-            raise ProxyEmptyException("Proxy not finalized")
+            raise ProxyEmptyException("Proxy not finalized %s" % self)
         return self.__var
 
     # Don't proxy usage tracking since tracking is done before

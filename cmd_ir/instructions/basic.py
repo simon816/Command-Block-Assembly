@@ -23,6 +23,8 @@ from .text import TextObject
 import commands as c
 
 class CopyInsn(ConstructorInsn):
+    """Creates a deep copy of an object. Only certain object types can be
+    copied."""
 
     args = [NativeType]
     argnames = 'any'

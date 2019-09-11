@@ -86,6 +86,9 @@ class NBTValue(NBTBase):
     def __str__(self):
         return '%s(%s)' % (self.__class__.__name__, self.val)
 
+    def clone(self):
+        return self
+
     def resolve(self, scope):
         return self.serialize()
 
@@ -180,6 +183,9 @@ class NBTCompound(RecurseMixin):
         assert isinstance(value, NBTBase)
         self.items[name] = value
 
+    def clone(self):
+        return NBTCompound((k, v.clone()) for k, v in self.items.items())
+
     def recurse(self, apply):
         # TODO quote keys
         return '{%s}' % (','.join('%s:%s' % (k, apply(v)) for k, v\
@@ -198,6 +204,11 @@ class NBTList(RecurseMixin):
         assert isinstance(item, NBTBase)
         assert item.type == self.list_type or self.list_type is None
         self.items.append(item)
+
+    def clone(self):
+        copy = NBTList(self.list_type)
+        copy.items.extend(i.clone() for i in self.items)
+        return copy
 
     def recurse(self, apply):
         maybetype = ''

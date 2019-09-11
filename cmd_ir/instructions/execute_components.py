@@ -16,6 +16,11 @@ class ExecChain(NativeType, MultiOpen):
     def set(self, index, component):
         self.components[index] = component
 
+    def clone(self):
+        copy = ExecChain()
+        copy.components.extend(c.clone() for c in self.components)
+        return copy
+
     @contextlib.contextmanager
     def apply(self, out):
         chain = c.ExecuteChain()
@@ -40,6 +45,10 @@ class ExecStoreEntitySpec(ExecStoreSpec):
         storechain.entity(self.target.as_resolve(), c.NbtPath(self.path), \
                            self.nbttype.name, self.scale)
 
+    def clone(self):
+        return ExecStoreEntitySpec(self.target.clone(), self.path,
+                                   self.nbttype, self.scale)
+
 class ExecStoreVarSpec(ExecStoreSpec):
 
     def __init__(self, var):
@@ -51,6 +60,9 @@ class ExecStoreVarSpec(ExecStoreSpec):
                 out.write(c.SetConst(ref, 0)) # MC-125058
             storechain.score(ref)
 
+    def clone(self):
+        return ExecStoreVarSpec(self.var.clone())
+
 class ExecStoreBossbarSpec(ExecStoreSpec):
 
     def __init__(self, bar, attr):
@@ -59,6 +71,9 @@ class ExecStoreBossbarSpec(ExecStoreSpec):
 
     def apply(self, out, chain, storechain):
         storechain.bossbar(self.bar.ref, self.attr)
+
+    def clone(self):
+        return ExecStoreBossbarSpec(self.bar.clone(), self.attr)
 
 class ExecComponentStore:
 
@@ -69,6 +84,9 @@ class ExecComponentStore:
     def apply(self, exec, chain, out):
         self.spec.apply(out, exec, chain.store(self.storetype))
 
+    def clone(self):
+        return ExecComponentStore(self.spec.clone(), self.storetype)
+
 class ExecComponentCondBlock:
 
     def __init__(self, condtype, pos, block):
@@ -78,6 +96,10 @@ class ExecComponentCondBlock:
 
     def apply(self, exec, chain, out):
         chain.cond(self.condtype).block(self.pos.as_blockpos(), self.block)
+
+    def clone(self):
+        return ExecComponentCondBlock(self.condtype, self.pos.clone(),
+                                      self.block.clone())
 
 class ExecComponentCondBlocks:
 
@@ -93,6 +115,11 @@ class ExecComponentCondBlocks:
             self.begin.as_blockpos(), self.end.as_blockpos(),
             self.dest.as_blockpos(), self.type)
 
+    def clone(self):
+        return ExecComponentCondBlocks(self.condtype, self.begin.clone(),
+                                       self.end.clone(), self.dest.clone(),
+                                       self.type)
+
 class ExecComponentCondVar:
 
     def __init__(self, condtype, var, min, max):
@@ -106,6 +133,10 @@ class ExecComponentCondVar:
             chain.cond(self.condtype).score_range(ref,
                                   c.ScoreRange(self.min, self.max))
 
+    def clone(self):
+        return ExecComponentCondVar(self.condtype, self.var.clone(), self.min,
+                                    self.max)
+
 class ExecComponentCondEntity:
 
     def __init__(self, condtype, target):
@@ -114,6 +145,9 @@ class ExecComponentCondEntity:
 
     def apply(self, exec, chain, out):
         chain.cond(self.condtype).entity(self.target.as_resolve())
+
+    def clone(self):
+        return ExecComponentCondEntity(self.condtype, self.target.clone())
 
 class ExecComponentCondCmp:
 
@@ -131,6 +165,10 @@ class ExecComponentCondCmp:
             with exec.context(self.right.open_for_read(out)) as right:
                 chain.cond(self.condtype).score(left, op, right)
 
+    def clone(self):
+        return ExecComponentCondCmp(self.condtype, self.left.clone(), self.op,
+                                    self.right.clone())
+
 class ExecComponentAsEntity:
 
     def __init__(self, target):
@@ -138,6 +176,9 @@ class ExecComponentAsEntity:
 
     def apply(self, exec, chain, out):
         chain.as_entity(self.target.as_resolve())
+
+    def clone(self):
+        return ExecComponentAsEntity(self.target.clone())
 
 class ExecComponentAtEntity:
 
@@ -147,6 +188,9 @@ class ExecComponentAtEntity:
     def apply(self, exec, chain, out):
         chain.at(self.target.as_resolve())
 
+    def clone(self):
+        return ExecComponentAtEntity(self.target.clone())
+
 class ExecComponentAtEntityPos:
 
     def __init__(self, target):
@@ -154,6 +198,9 @@ class ExecComponentAtEntityPos:
 
     def apply(self, exec, chain, out):
         chain.at_entity_pos(self.target.as_resolve())
+
+    def clone(self):
+        return ExecComponentAtEntityPos(self.target.clone())
 
 class ExecComponentAtPos:
 
@@ -163,6 +210,9 @@ class ExecComponentAtPos:
     def apply(self, exec, chain, out):
         chain.at_pos(self.pos.as_worldpos())
 
+    def clone(self):
+        return ExecComponentAtPos(self.pos.clone())
+
 class ExecComponentAlign:
 
     def __init__(self, axes):
@@ -171,6 +221,9 @@ class ExecComponentAlign:
     def apply(self, exec, chain, out):
         chain.align(self.axes)
 
+    def clone(self):
+        return self
+
 class ExecComponentFacePos:
 
     def __init__(self, pos):
@@ -178,6 +231,9 @@ class ExecComponentFacePos:
 
     def apply(self, exec, chain, out):
         chain.facing(self.pos.as_worldpos())
+
+    def clone(self):
+        return ExecComponentFacePos(self.pos.clone())
 
 class ExecComponentFaceEntity:
 
@@ -188,6 +244,9 @@ class ExecComponentFaceEntity:
     def apply(self, exec, chain, out):
         chain.facing_entity(self.target.as_resolve(), self.feature)
 
+    def clone(self):
+        return ExecComponentFaceEntity(self.target.clone(), self.feature)
+
 class ExecComponentRotate:
 
     def __init__(self, y, x):
@@ -197,6 +256,9 @@ class ExecComponentRotate:
     def apply(self, exec, chain, out):
         chain.rotated(self.y, self.x)
 
+    def clone(self):
+        return self
+
 class ExecComponentRotatedAsEntity:
 
     def __init__(self, target):
@@ -205,6 +267,9 @@ class ExecComponentRotatedAsEntity:
     def apply(self, exec, chain, out):
         chain.rotated_as_entity(self.target.as_resolve())
 
+    def clone(self):
+        return ExecComponentRotatedAsEntity(self.target.clone())
+
 class ExecComponentAnchor:
 
     def __init__(self, anchor):
@@ -212,3 +277,6 @@ class ExecComponentAnchor:
 
     def apply(self, exec, chain, out):
         chain.anchored(self.anchor)
+
+    def clone(self):
+        return self

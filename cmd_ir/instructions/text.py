@@ -26,6 +26,12 @@ class TextObject(NativeType):
     def set_style(self, prop, value):
         self.style[prop] = value
 
+    def clone(self):
+        copy = TextObject()
+        copy.style.update(self.style)
+        copy.children.extend(c.clone() for c in self.children)
+        return copy
+
     def to_component(self, out):
         opener = MultiOpen()
         comp = self._to_component(out, opener)
@@ -161,6 +167,11 @@ class TextClickFunc(VoidApplicationInsn):
             cmd = self.func.as_cmd()
         action = self.action + '_command'
         self.text.set_style('clickEvent', c.TextClickAction(action, cmd))
+
+    def changed(self, prop):
+        if prop == 'func':
+            self.validate()
+            self.activate(None)
 
 class TextSend(Insn):
     """Sends a text object to target players."""

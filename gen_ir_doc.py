@@ -43,6 +43,7 @@ class InstructionDoc:
             spec = '<ret> = ' + spec
             argdesc += '\n\n' + '**ret**: `%s`' % typename(self.cls.rettype)
         doc = self.cls.__doc__
+        assert doc is not None, self.name
         return '### %s\n`%s`\n\n%s\n\n%s' % (self.name, spec, doc, argdesc)
 
 class SetScoreDoc(InstructionDoc):
@@ -109,6 +110,7 @@ if __name__ == '__main__':
             summary.append('  - [`%s`](#%s)' % (name, anchor(name)))
             details.append(doc.to_markdown())
             details.append('***')
+        details.pop()
 
     print('# Summary')
     for line in summary:

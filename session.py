@@ -140,9 +140,10 @@ class Session:
     def add_event_handlers(self, event_handlers):
         load_func, clean_func = self.create_load_function()
 
+        load_list = [load_func] if load_func else []
         tag_events = {
             'minecraft:tick': ('minecraft', 'tick', []),
-            'minecraft:load': ('minecraft', 'load', [load_func])
+            'minecraft:load': ('minecraft', 'load', load_list)
         }
 
         for event_handler in event_handlers:
@@ -227,14 +228,15 @@ class Session:
 
         self.extended_setup(setup, clean)
 
-        self.writer.write_function(setup_name, setup)
+        if setup:
+            self.writer.write_function(setup_name, setup)
         clean_func = None
-        if self.create_cleanup:
+        if self.create_cleanup and cleanup:
             cleanup_name = self._unique_func('cleanup')
             self.writer.write_function(cleanup_name, clean)
             clean_func = self.scope.function_name(cleanup_name)
-
-        return self.scope.function_name(setup_name), clean_func
+        setup_func = self.scope.function_name(setup_name) if setup else None
+        return setup_func, clean_func
 
     # TODO remove
     def extended_setup(self, setup, clean):
