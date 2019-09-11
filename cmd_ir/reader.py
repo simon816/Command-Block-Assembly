@@ -85,8 +85,7 @@ class BuildProgram(Interpreter):
         if isinstance(value, Insn):
             assert isinstance(value, ConstructorInsn)
             assert op == '='
-            ret = self.curr_seq.add(value)
-            self.holder.store(varname, ret)
+            self.curr_seq.add(value, varname)
             return None
         value = self.token_to_val(value)
         var = self.holder.get_var(varname)
@@ -151,7 +150,7 @@ class BuildProgram(Interpreter):
             return self.top.get_or_create_func(token.value[1:])
         if token.type == 'BLOCK_REF':
             return self.func.get_or_create_block(token.value[1:])
-        assert False
+        assert False, token.type
 
     def unescape(self, strval):
         parts = []

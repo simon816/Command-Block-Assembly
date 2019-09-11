@@ -11,12 +11,39 @@ def get_subclasses(cls):
         yield from get_subclasses(subclass)
         yield subclass
 
-
 READ, WRITE = 'acc_read', 'acc_write'
 
 STACK_HEAD = -1
 
-class Insn(metaclass=abc.ABCMeta):
+def type_check(in_arg, arg_type, arg_name, insn):
+    assert isinstance(in_arg, arg_type), ("Incorrect argument type " \
+        + "for argument %s:\nExpect type %s, got %s\n" \
+        + "Instruction: %s") % (arg_name, arg_type, type(in_arg), type(insn))
+
+class InsnArgProperty:
+
+    def __init__(self, name):
+        self.name = name
+
+    def __get__(self, instance, owner):
+        return instance._real_arg_vals[self.name]
+
+    def __set__(self, instance, value):
+        # Ensure nothing changes when not expecting
+        assert instance._allow_set
+        instance._real_arg_vals[self.name] = value
+
+class InsnMeta(abc.ABCMeta):
+
+    def __init__(self, name, bases, dct):
+        super().__init__(name, bases, dct)
+        if hasattr(self, 'insn_name'):
+            names = self.argnames.split(' ') if self.argnames else []
+            self.argnlist = names
+            for name in names:
+                setattr(self, name, InsnArgProperty(name))
+
+class Insn(metaclass=InsnMeta):
 
     __lookup_cache = {}
 
@@ -32,27 +59,36 @@ class Insn(metaclass=abc.ABCMeta):
     is_block_terminator = False
     is_branch = False
     is_virtual = False
+    inline_copyable = True
 
     def __init__(self, *args):
         assert len(args) == len(self.args), type(self)
+        self._real_arg_vals = {}
+        self.in_seq = None
+        names = self.argnlist
         for i, arg in enumerate(args):
-            assert isinstance(arg, self.args[i]), ("Incorrect argument type " \
-            + "for argument %d:\nExpect type %s, got %s\n" \
-            + "Instruction: %s") % (i, self.args[i], type(arg), type(self))
-        names = self.argnames.split(' ')
-        self.__dict__.update(zip(names, args))
+            type_check(arg, self.args[i], names[i], self)
+            # Check types of tuple elements
+            if type(arg) == tuple:
+                elem_type = getattr(self, names[i] + '_type')
+                for j, elem in enumerate(arg):
+                    type_check(elem, elem_type, names[i] + ':%d' % j, self)
+        self._allow_set = True
+        for name, value in zip(names, args):
+            setattr(self, name, value)
+        self._allow_set = False
         assert hasattr(self, 'insn_name'), self
         if not hasattr(self, 'access'):
             self.__class__.access = [READ for _ in self.args]
+        self.validate()
 
     def __str__(self):
-        if self.argnames:
-            names = self.argnames.split(' ')
-            arglist = ', '.join('%s=%s' % (name, getattr(self, name)) \
-                                for name in names)
-        else:
-            arglist = ''
+        arglist = ', '.join('%s=%s' % (name, getattr(self, name)) \
+                            for name in self.argnlist)
         return '%s(%s)' % (self.__class__.__name__, arglist)
+
+    def validate(self):
+        pass
 
     def activate(self, seq):
         pass
@@ -91,38 +127,39 @@ class Insn(metaclass=abc.ABCMeta):
                 return '@' + name
             return '$' + name
         l = []
-        if self.argnames:
-            names = self.argnames.split(' ')
-            for name in names:
-                l.append(serialize(getattr(self, name)))
+        for name in self.argnlist:
+            l.append(serialize(getattr(self, name)))
         return l
 
     def serialize(self, holder):
         args = ''
-        if self.argnames:
+        if self.argnlist:
             args = ' ' + ', '.join(self.serialize_args(holder))
         return self.insn_name + args
 
     def query(self, argtype):
-        if not self.argnames:
-            return []
-        names = self.argnames.split(' ')
-        for i, name in enumerate(names):
+        for i, name in enumerate(self.argnlist):
             if isinstance(getattr(self, name), argtype):
                 yield QueryResult(self, name, self.args[i], self.access[i])
+        else:
+            return []
 
     def changed(self, name):
         pass
 
     def copy(self):
+        return self.copy_with_changes({})
+
+    def copy_with_changes(self, mapping):
         cls = self.__class__
-        if not self.argnames:
-            return cls()
-        names = self.argnames.split(' ')
         args = []
-        for i, name in enumerate(names):
-            args.append(getattr(self, name))
-        return cls(*args)
+        for name in self.argnlist:
+            val = getattr(self, name)
+            if val in mapping:
+                val = mapping[val]
+            args.append(val)
+        ret = cls(*args)
+        return ret
 
     def terminator(self):
         return self.is_block_terminator
@@ -189,9 +226,12 @@ class QueryResult:
 
     @val.setter
     def val(self, value):
-        assert isinstance(value, self.__type), '%s %s %s' % (self.__name,
-                                                  type(value), self.__insn)
+        assert isinstance(value, self.__type), ("Tried to set argument %s on " \
+               + "insn %s to type:%s, expected type:%s") % (
+                   self.__name, self.__insn, type(value), self.__type)
+        self.__insn._allow_set = True
         setattr(self.__insn, self.__name, value)
+        self.__insn._allow_set = False
         self.__insn.changed(self.__name)
 
     def accepts(self, vtype):
@@ -220,7 +260,11 @@ class ConstructorInsn(VoidApplicationInsn):
         return cpy
 
     def serialize(self, holder):
-        return '$%s = %s' % (holder.name_for(self._value),
+        try:
+            name = holder.name_for(self._value)
+        except KeyError:
+            name = '!!!INVALID'
+        return '$%s = %s' % (name,
                             super().serialize(holder))
 
 # Instruction that always returns one command

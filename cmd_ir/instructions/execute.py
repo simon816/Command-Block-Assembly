@@ -114,8 +114,10 @@ class ExecCondBlocks(VoidApplicationInsn):
     argdocs = ["Execute chain", "Begin position", "End position",
                "Test position", "all or masked"]
 
-    def activate(self, seq):
+    def validate(self):
         assert self.type in ['all', 'masked']
+
+    def activate(self, seq):
         self.chain.add(ExecComponentCondBlocks(self.cond, self.begin, self.end,
                                                self.dest, self.type))
 
@@ -136,10 +138,12 @@ class ExecCondVar(VoidApplicationInsn):
                "negative infinity", "Maximum value, or NULL for positive " + \
                "infinity"]
 
-    def activate(self, seq):
+    def validate(self):
         assert self.max is not None or self.min is not None, self
         assert self.var.type.isnumeric, self
         assert self.var.type.scale == 1, "TODO"
+
+    def activate(self, seq):
         self._index = self.chain.add(ExecComponentCondVar(self.cond, self.var,
                                                           self.min, self.max))
 
@@ -195,11 +199,13 @@ class ExecCondCmp(VoidApplicationInsn):
     argdocs = ["Execute chain", "Left variable", "Operator, one of: " + \
                "lt|le|eq|ge|gt", "Right variable"]
 
-    def activate(self, seq):
+    def validate(self):
         assert self.op in ['lt', 'le', 'eq', 'ge', 'gt']
         assert self.left.type.isnumeric
         assert self.right.type.isnumeric
         assert self.left.type.scale == self.right.type.scale, "TODO"
+
+    def activate(self, seq):
         self._index = self.chain.add(ExecComponentCondCmp(self.cond, self.left,
                                                           self.op, self.right))
 

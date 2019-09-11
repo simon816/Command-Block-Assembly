@@ -60,8 +60,10 @@ class SelectScoreRange(VoidApplicationInsn):
                "infinity", "Maximum value, or NULL for positive infinity"]
     insn_name = 'select_score_range'
 
-    def activate(self, seq):
+    def validate(self):
         assert self.min is not None or self.max is not None
+
+    def activate(self, seq):
         self.sel.set_score_range(self.score.obj_ref, self.min, self.max)
 
 class SelectNbt(VoidApplicationInsn):
@@ -294,6 +296,7 @@ class ParameterInsn(DefineVariable):
 
     argdocs = ["Parameter type"]
     insn_name = 'parameter'
+    inline_copyable = False
 
     def construct(self):
         return ParameterVariable(self.type)
@@ -309,6 +312,7 @@ class ReturnVarInsn(DefineVariable):
 
     argdocs = ["Return type"]
     insn_name = 'return'
+    inline_copyable = False
 
     def construct(self):
         return ReturnVariable(self.type)

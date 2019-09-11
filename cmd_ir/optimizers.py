@@ -55,21 +55,24 @@ class DeadCodeEliminator(TopVisitor):
 
     def visit(self, top):
         self.changed = False
-        self.changed |= super().visit(top)
+        if super().visit(top):
+            self.changed = True
 
     def visit_preamble(self, preamble):
-        self.changed |= preamble.transform(self.visit_pre_insn)
+        if preamble.transform(self.visit_pre_insn):
+            self.changed = True
 
     def visit_pre_insn(self, insn):
         if isinstance(insn, DefineGlobal):
             var = insn._value
             if not var.is_referenced:
-                #print("Unreferenced global", var)
+                #print("Unreferenced global define", var)
                 return None
         return insn
 
     def visit_global(self, name, var):
         if not var.is_referenced:
+            #print("Unreferenced global", var)
             return None, None
         return name, var
 
@@ -78,10 +81,6 @@ class DeadCodeEliminator(TopVisitor):
             #print("Dead function", func)
             self.changed = True
             return None, None
-        elim = DeadCodeFuncEliminator()
-        changed = elim.visit(func) or elim.changed
-        if changed:
-            self.changed = True
         return name, func
 
 class DeadCodeFuncEliminator(FuncVisitor):
@@ -92,18 +91,20 @@ class DeadCodeFuncEliminator(FuncVisitor):
         super().visit(func)
 
     def visit_preamble(self, preamble):
-        self.changed |= preamble.transform(self.visit_pre_insn)
+        if preamble.transform(self.visit_pre_insn):
+            self.changed = True
 
     def visit_pre_insn(self, insn):
         if isinstance(insn, DefineVariable):
             var = insn._value
             if not var.is_referenced:
-                #print("Unreferenced local", var)
+                #print("Unreferenced local define", var)
                 return None
         return insn
 
     def visit_local_var(self, name, var):
         if not var.is_referenced:
+            #print("Unreferenced local", var)
             return None, None
         return name, var
 
@@ -111,7 +112,6 @@ class DeadCodeFuncEliminator(FuncVisitor):
         if block.use_count() == 0:
             #print("Dead block", block)
             return None, None
-        self.changed |= DeadCodeBlockEliminator().visit(block)
         return name, block
 
 class DeadCodeBlockEliminator(BlockVisitor):
@@ -154,6 +154,7 @@ class DeadCodeBlockEliminator(BlockVisitor):
             if not insn.dest.is_read_from:
                 processed = True
                 self.kills.add(insn)
+                #print("Dest not read from", insn)
         if isinstance(insn, Invoke) and insn.func.is_pure:
             # Pure function either with no retvars or retvars are not read
             if insn.retvars is None or all(not var.is_read_from for var in \
@@ -198,6 +199,30 @@ class BranchInliner(BlockVisitor):
                 #print("inline", insn.label, "into", self._block)
                 return insn.label.insns
         return insn
+
+class InvokeInliner(BlockVisitor):
+
+    def visit(self, block):
+        self.reattach_block = None
+        return super().visit(block)
+
+    def visit_insn(self, insn):
+        new_attach = self.reattach_block
+        if isinstance(insn, Invoke) and insn.func.is_inline:
+            #print("Inlining invoke to function:", insn.func)
+            entry, exit = self.inline_function(insn.func, insn.fnargs,
+                                               insn.retvars)
+            new_attach = exit
+            insn = Branch(entry)
+            insn.declare()
+        if self.reattach_block is not None:
+            self.reattach_block.insns.append(insn)
+            insn = None
+        self.reattach_block = new_attach
+        return insn
+
+    def inline_function(self, func, args, retvars):
+        return func.inline_into(self._block._func, args, retvars)
 
 class BranchEliminator(BlockVisitor):
 
@@ -280,6 +305,11 @@ class AliasRewriter(BlockVisitor):
             if arg.val in self.data.aliases:
                 changed = True
                 #print("Alias re", arg.val, "to", self.data.aliases[arg.val])
+                # If the inliner detected an invoke, we need to replace branch
+                # with invoke
+                if isinstance(insn, Branch) and \
+                   isinstance(self.data.aliases[arg.val], VisibleFunction):
+                    return Invoke(self.data.aliases[arg.val], None, None)
                 arg.val = self.data.aliases[arg.val]
             # Things like exec_run
             elif arg.val in self.data.cmd_aliases and arg.accepts(CmdFunction):
@@ -641,6 +671,7 @@ class TopOptimizers(TopVisitor):
         self.changed = False
         for opt in self.optimizers:
             changed = opt.visit(top) or opt.changed
+            #print(opt, "reports", changed)
             if not self.changed:
                 self.changed = changed
 
@@ -649,17 +680,27 @@ class Optimizer:
     def optimize(self, top):
         alias_data = AliasData()
         opt = TopOptimizers([
-            DeadCodeEliminator(),
+            # Invoke inlining has to occur first - things like BranchInliner
+            # Will duplicate instructions which leads to InvokeInliner calling
+            # activate() on the duplicates
             FuncOptimizers([
                 BlockOptimizers([
+                    InvokeInliner(),
+                ])
+            ]),
+            DeadCodeEliminator(),
+            FuncOptimizers([
+                DeadCodeFuncEliminator(),
+                BlockOptimizers([
+                    DeadCodeBlockEliminator(),
                     BranchInliner(),
                     AliasRewriter(alias_data),
                     BranchEliminator(),
                     ConstantFolding(),
                     VariableAliasing(),
-                    ComparisonOptimizer()
+                    ComparisonOptimizer(),
                 ]),
-                AliasInliner(alias_data)
+                AliasInliner(alias_data),
             ])
         ])
         while True:

@@ -1,7 +1,6 @@
 """Events"""
 
-from ._core import (PreambleOnlyInsn, ConstructorInsn, Insn, SingleCommandInsn,
-                    VoidApplicationInsn)
+from ._core import PreambleOnlyInsn, ConstructorInsn, Insn, SingleCommandInsn
 from ..core_types import (VirtualString,
                           EventRef,
                           Selector,
@@ -58,6 +57,7 @@ class EventHandler(PreambleOnlyInsn, Insn):
         self.handler.usage()
 
     def apply(self, out, top):
+        assert not self.handler.is_inline
         out.write_event_handler(self.handler, self.event)
 
 class RevokeEventAdvancement(SingleCommandInsn):
@@ -74,31 +74,6 @@ class RevokeEventAdvancement(SingleCommandInsn):
                              .as_resolve(),
                            'only', c.AdvancementRef(self.func.global_name))
 
-class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
-    """Marks the function as externally visible. The function will not
-    be removed during optimization."""
-
-    args = []
-    argnames = ''
-    func_preamble_only = True
-    insn_name = 'extern'
-
-    def activate(self, seq):
-        seq.holder.set_extern(True)
-
-class PureInsn(PreambleOnlyInsn, VoidApplicationInsn):
-    """Marks the function as a pure function (i.e. no side-effects). No checks
-    are done to ensure it is side-effect free, allowing for functions with
-    irrelevant side-effects (e.g. caching) to be marked as pure."""
-
-    args = []
-    argnames = ''
-    func_preamble_only = True
-    insn_name = 'pure_func'
-
-    def activate(self, seq):
-        seq.holder.set_pure()
-
 class SetupInsn(PreambleOnlyInsn, Insn):
     """Tags a function as being part of the setup phase. It is called whenever
     the datapack is reloaded."""
@@ -113,4 +88,5 @@ class SetupInsn(PreambleOnlyInsn, Insn):
         self.func.usage()
 
     def apply(self, out, top):
+        assert not self.func.is_inline
         out.write_setup_function(self.func)

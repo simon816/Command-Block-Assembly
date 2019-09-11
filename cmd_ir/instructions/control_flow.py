@@ -23,6 +23,9 @@ class Branch(SingleCommandInsn):
     def declare(self):
         self.label.usage()
 
+    def activate(self, seq):
+        assert self.label._func == seq._func
+
     def get_cmd(self):
         return c.Function(self.label.global_name)
 
@@ -204,7 +207,7 @@ class RangeBr(Insn):
     insn_name = 'rangebr'
     is_branch = True
 
-    def activate(self, seq):
+    def validate(self):
         assert self.var.type.isnumeric
         assert self.var.type.scale == 1, "TODO"
         assert self.min is not None or self.max is not None
@@ -239,7 +242,7 @@ class CmpBr(Insn):
     insn_name = 'cmpbr'
     is_branch = True
 
-    def activate(self, seq):
+    def validate(self):
         assert self.left.type.isnumeric
         assert self.right.type.isnumeric
         assert self.left.type.scale == self.right.type.scale, "TODO"
@@ -401,6 +404,7 @@ class PushNewStackFrame(Insn):
 
     args = [tuple]
     argnames = 'framevals'
+    framevals_type = (int, float, VarType, Variable)
     argdocs = ["Frame content"]
     insn_name = 'push_stack_frame'
 

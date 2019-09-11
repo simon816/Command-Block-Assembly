@@ -105,16 +105,20 @@ class TextStyle(VoidApplicationInsn):
     insn_name = 'text_style'
     preamble_safe = True
 
+    def validate(self):
+        if self.prop in self._boolean_props:
+            assert self.val in ['true', 'false']
+        elif self.prop == 'color':
+            assert type(self.val) == str
+            # TODO
+        elif self.prop == 'insertion':
+            assert isinstance(self.val, VirtualString)
+
     def activate(self, seq):
         val = self.val
         if self.prop in self._boolean_props:
-            assert val in ['true', 'false']
             val = val == 'true'
-        elif self.prop == 'color':
-            assert type(val) == str
-            # TODO
         elif self.prop == 'insertion':
-            assert isinstance(val, VirtualString)
             val = str(val)
         self.text.set_style(self.prop, val)
 
@@ -128,8 +132,10 @@ class TextClickAction(VoidApplicationInsn):
     insn_name = 'text_click_action'
     preamble_safe = True
 
-    def activate(self, seq):
+    def validate(self):
         assert self.action in ['open_url', 'open_file', 'change_page']
+
+    def activate(self, seq):
         self.text.set_style('clickEvent', c.TextClickAction(self.action,
                                                           str(self.value)))
 

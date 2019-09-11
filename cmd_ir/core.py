@@ -96,13 +96,25 @@ class InstructionSeq:
         self.insns = []
         self.holder = holder
 
-    def add(self, insn):
+    def validate_insn(self, insn):
+        return insn
+
+    def add(self, insn, with_name=False, namehint=None):
+        insn = self.validate_insn(insn)
         ret = insn.activate(self)
         self.insns.append(insn)
-        return ret
+        if with_name:
+            assert ret is not None
+            if type(with_name) == str:
+                name = with_name
+            else:
+                name = self.holder.uniq_name(namehint or insn.insn_name)
+            self.holder.store(name, ret)
+            return ret
+        return None
 
     def define(self, insn):
-        return self.holder.generate_name(insn.insn_name, self.add(insn))
+        return self.add(insn, True)
 
     def is_empty(self):
         return len(self.insns) == 0
@@ -128,9 +140,9 @@ class Preamble(InstructionSeq):
         super().__init__(parent)
         self.is_top = isinstance(parent, TopLevel)
 
-    def add(self, insn):
+    def validate_insn(self, insn):
         assert insn.preamble_safe, insn
-        return super().add(insn)
+        return insn
 
     def apply(self, writer):
         for insn in self.insns:
@@ -141,6 +153,9 @@ class Preamble(InstructionSeq):
         insns = '\n'.join(indent + '    ' + insn.serialize(self.holder)
                           for insn in self.insns)
         return indent + 'preamble {\n' + insns + '\n' + indent + '}\n'
+
+    def __str__(self):
+        return 'Preamble(%s)' % self.holder
 
 class Scope(OrderedDict):
 
@@ -223,14 +238,16 @@ class VariableHolder:
 
     def transform_scope(self, func):
         changed = False
-        new_scope = Scope(self.scope.parent)
-        for key, value in self.scope.items():
+        #new_scope = Scope(self.scope.parent)
+        for key, value in list(self.scope.items()):
             new_key, new_value = func(key, value)
             if not changed:
                 changed = key != new_key or value != new_value
             if new_key is not None:
-                new_scope[new_key] = new_value
-        self.scope = new_scope
+                self.scope[new_key] = new_value
+            else:
+                del self.scope[key]
+        #self.scope = new_scope
         return changed
 
     def reset_var_usage(self):
@@ -258,9 +275,7 @@ class TopLevel(VariableHolder):
 
     def create_global(self, namehint, vartype):
         from .instructions import DefineGlobal
-        def create(name):
-            return self.preamble.add(DefineGlobal(vartype))
-        return self.uniq(namehint, create)
+        return self.preamble.add(DefineGlobal(vartype), True, namehint)
 
     def lookup_func(self, name):
         func = self.lookup(name)
@@ -297,7 +312,11 @@ class TopLevel(VariableHolder):
         writer.write_objective('success_tracker', None)
 
         for func in functions:
-            func.writeout(writer, temp_generator)
+            try:
+                func.writeout(writer, temp_generator)
+            except:
+                print("Error in function: " + func.global_name)
+                raise
 
         temp_generator.finish()
 
@@ -324,27 +343,27 @@ class VisibleFunction(FunctionLike):
     def validate_args(self, args, retvars):
         assert self.finished
         if self.params:
-            assert args is not None
-            assert len(args) == len(self.params)
+            assert args is not None, "Missing args"
+            assert len(args) == len(self.params), "Incorrect number of args"
             for argtype, argval in zip(self.params, args):
                 if type(argval) == int:
-                    assert argtype == VarType.i32
+                    assert argtype == VarType.i32, "Literal int on non i32"
                 else:
-                    assert isinstance(argval, Variable)
-                    assert argval.type == argtype
+                    assert isinstance(argval, Variable), "Arg must be variable"
+                    assert argval.type == argtype, "Arg type mismatch"
         else:
-            assert args is None
+            assert args is None, "Args when no params"
 
         if self.returns:
-            assert retvars is not None
-            assert len(retvars) == len(self.returns)
+            assert retvars is not None, "Missing return variables"
+            assert len(retvars) == len(self.returns), "Incorrect num of retvars"
             for rtype, rdest in zip(self.returns, retvars):
                 # Allow a dest of nowhere
                 if rdest is not None:
-                    assert isinstance(rdest, Variable)
-                    assert rdest.type == rtype
+                    assert isinstance(rdest, Variable), "Retvar must be a var"
+                    assert rdest.type == rtype, "Retvar type mismatch"
         else:
-            assert retvars is None
+            assert retvars is None, "Retvar when no returns"
 
     @property
     def extern_visibility(self):
@@ -402,6 +421,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._varsfinalized = False
         self._is_extern = False
         self._is_pure = False
+        self._is_inline = False
         self.params = []
         self.returns = []
 
@@ -449,6 +469,13 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._is_pure = True
 
     @property
+    def is_inline(self):
+        return self._is_inline
+
+    def set_inline(self):
+        self._is_inline = True
+
+    @property
     def is_defined(self):
         if not self._varsfinalized:
             return len(self.blocks) > 0
@@ -486,9 +513,7 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def create_var(self, namehint, vartype):
         from .instructions import DefineVariable
-        def create(name):
-            return self.preamble.add(DefineVariable(vartype))
-        return self.uniq(namehint, create)
+        return self.preamble.add(DefineVariable(vartype), True, namehint)
 
     def end(self):
         assert self.is_defined
@@ -515,6 +540,49 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def is_closed(self):
         return all(b.is_terminated() for b in self.blocks)
+
+    def _inline_seq(self, from_seq, to_seq, scope_mapping):
+        #print("inline", from_seq, "->", to_seq)
+        #print(from_seq.serialize())
+        from .instructions import ConstructorInsn
+        for insn in from_seq.insns:
+            if not insn.inline_copyable:
+                continue
+            new_insn = insn.copy_with_changes(scope_mapping)
+            if isinstance(insn, ConstructorInsn):
+                name = self.name_for(insn._value)
+                scope_mapping[insn._value] = to_seq.add(new_insn, True, name)
+            else:
+                to_seq.add(new_insn)
+            new_insn.declare()
+
+    def inline_into(self, other, args, retvars):
+        self.validate_args(args, retvars)
+        assert not self._varsfinalized
+        assert not other._varsfinalized
+        block_mapping = {}
+        scope_mapping = {}
+        argiter = iter(args or [])
+        retiter = iter(retvars or [])
+
+        for name, var in self.scope.items():
+            if isinstance(var, BasicBlock):
+                new_block = other.create_block(var._name)
+                scope_mapping[var] = new_block
+                block_mapping[var] = new_block
+                new_block.is_function = var.is_function
+                new_block.defined = var.defined
+            elif isinstance(var, ParameterVariable):
+                scope_mapping[var] = next(argiter)
+            elif isinstance(var, ReturnVariable):
+                scope_mapping[var] = next(retiter)
+
+        self._inline_seq(self.preamble, other.preamble, scope_mapping)
+
+        for old_block, new_block in block_mapping.items():
+            self._inline_seq(old_block, new_block, scope_mapping)
+
+        return block_mapping[self.blocks[0]], block_mapping[self._exitblock]
 
     def configure_parameters(self, hasownstackframe):
         # Linked to InvokeInsn
@@ -625,14 +693,14 @@ class BasicBlock(FunctionLike, InstructionSeq):
             return False
         return self.insns[-1].terminator()
 
-    def add(self, insn):
+    def validate_insn(self, insn):
         from .instructions import Branch, Return
         if not self.force and self.insns and self.insns[-1].terminator():
             assert False, "Block %s is terminated by %s. Tried adding %s" % (
                 self, self.insns[-1], insn)
         if isinstance(insn, Return):
-            return super().add(Branch(self._func._exitblock))
-        return super().add(insn)
+            return Branch(self._func._exitblock)
+        return insn
 
     def writeout(self, temp_gen):
         writer = CmdWriter(temp_gen)

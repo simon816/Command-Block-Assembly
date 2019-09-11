@@ -13,7 +13,7 @@ class SetScore(Insn):
     argdocs = ["Variable to set the value on", "Value to set"]
     insn_name = '#invalid_setscore'
 
-    def activate(self, seq):
+    def validate(self):
         if isinstance(self.value, Variable):
             # Allow nbt=nbt
             assert self.var.type.isnumeric or \
@@ -45,7 +45,7 @@ class SimpleOperationInsn(Insn):
     with_neg_const = None
     is_additive = False
 
-    def activate(self, seq):
+    def validate(self):
         assert self.dest.type.isnumeric
         if isinstance(self.src, Variable):
             assert self.src.type.isnumeric

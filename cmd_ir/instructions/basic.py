@@ -236,7 +236,7 @@ class GiveEntityEffectInsn(SingleCommandInsn):
                "Whether to hide particles (true|false)"]
     insn_name = 'give_effect'
 
-    def activate(self, seq):
+    def validate(self):
         if self.hide_particles is not None:
             assert self.hide_particles in ['true', 'false']
 
@@ -269,7 +269,7 @@ class SpawnParticleInsn(SingleCommandInsn):
                + "mode (normal|force)", "Players to show the particles to"]
     insn_name = 'spawn_particle'
 
-    def activate(self, seq):
+    def validate(self):
         assert self.mode in ['normal', 'force']
 
     def get_cmd(self):
@@ -286,7 +286,7 @@ class TitleInsn(Insn):
                + "otherwise title|subtitle|actionbar", "Text to show"]
     insn_name = 'title'
 
-    def activate(self, seq):
+    def validate(self):
         if self.action in ['clear', 'reset']:
             assert self.text is None
         else:

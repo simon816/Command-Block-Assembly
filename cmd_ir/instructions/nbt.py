@@ -132,7 +132,7 @@ class NBTAssign(SingleCommandInsn):
     argdocs = ["Variable to set the value on", "NBT value"]
     insn_name = 'nbt_assign'
 
-    def activate(self, seq):
+    def validate(self):
         assert self.var.type is VarType.nbt
 
     def declare(self):
@@ -191,7 +191,7 @@ class NBTModifyValueInsn(SingleCommandInsn):
                "one of: append|insert|merge|prepend|set", "Value"]
     insn_name = 'nbt_modify_val'
 
-    def activate(self, seq):
+    def validate(self):
         assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
         assert self.action != 'insert', "TODO"
 
@@ -218,7 +218,7 @@ class NBTModifyFromInsn(SingleCommandInsn):
                " block", "Path in source"]
     insn_name = 'nbt_modify_from'
 
-    def activate(self, seq):
+    def validate(self):
         assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
         assert self.action != 'insert', "TODO"
 
