@@ -1,23 +1,148 @@
 Command Block Assembly
 ======================
-_Now with 99% less command blocks_
+
+Command Block Assembly started off as a tool that compiled assembly instructions
+into Minecraft commands.
+
+It has now grown into a much larger suite of tools for compiling source code into Minecraft
+commands, therefore the toolchain as a whole is known as the Minecraft Compiler Collection (MCC).
 
 
-Command Block Assembly is a tool that allows you to write assembly instructions
-that compile down into Minecraft commands.
+Minecraft Compiler Collection
+=============================
 
-With the introduction of [Functions](https://minecraft.gamepedia.com/Function)
-in Minecraft 1.12, Command Block Assembly now outputs functions.
-Functions greatly increase the speed of execution, so Command Block Assembly
-keeps the usage of command blocks to a minimum.
+The Minecraft Compiler Collection (MCC) is an umbrella tool composed of multiple compilers in a toolchain to
+compile high level code into Minecraft commands. It shares some similarities with the [GNU Compiler Collection](https://gcc.gnu.org/).
 
-# C Compiler
+MCC is composed of the following components:
 
-There is a C compiler that compiles to this assembly language,
-read more [here](https://github.com/simon816/Command-Block-Assembly/blob/master/README_C.md).
+## CBL Compiler
 
-As shown in the [fibonacci sequence example](https://github.com/simon816/Command-Block-Assembly/blob/master/examples/fib.c),
-it's just like writing normal C code.
+Command Block Language (CBL) is a C++ inspired programming language specifically designed for Minecraft commands.
+
+CBL has been designed to abstract away from commands to the point where you aren't even aware of the underlying limitations.
+
+The syntax is similar to C++ in a lot of ways. It also takes from Java's idea of having no pointers in the language.
+
+### Example
+
+```cpp
+include "Text"
+
+type point {
+    int x;
+    int y;
+
+    constructor(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    inline point operator +(point other) {
+        return point(this.x + other.x, this.y + other.y);
+    }
+
+    inline point operator *(int val) {
+        return point(this.x * val, this.y * val);
+    }
+
+    inline void print();
+}
+
+inline void point::print() {
+    Text output;
+    output += "(";
+    output += this.x;
+    output += ", ";
+    output += this.y;
+    output += ")";
+    output.send_to_all();
+}
+
+void main() {
+    point p1(2, 4);
+    point p2(5, 9);
+    p1 += p2;
+    p1 *= 2;
+    p1.print();
+}
+```
+
+This example demonstrates several language features of CBL, some of which should be familiar to C++ programmers.
+
+Because everything in this example can be determined statically (at compile time), the output is just:
+
+```mcfunction
+tellraw @a [{"text":"("},{"text":"14"},{"text":", "},{"text":"26"},{"text":")"}]
+```
+
+### Documentation
+
+See the [CBL Wiki](https://github.com/simon816/Command-Block-Assembly/wiki/CBL) for more details on the CBL language.
+
+## Assembler
+
+The assembler in MCC is the original assembler when this project was just Command Block Assembly.
+
+### Assembly Language
+
+The assembly language is simple and has instructions similar to x86.
+
+The language looks like the following:
+
+```asm
+#include foo.asm
+
+; Useful comment
+
+.my_const #1 ; A constant value
+.my_ref my_const ; A constant reference
+
+main:
+    MOV #0x01, 0 ; Do the thing
+    _loop: ADD my_const, 0
+    JMP _loop
+```
+
+### Example
+
+The first example code written for CBA was an assembly program that prints the fibinacci sequence until
+the next value overflows:
+
+```asm
+.x 0x00
+.y 0x01
+.old_x 0x02
+.counter 0x03
+
+main:
+    MOV #0, x
+    MOV #1, y
+    MOV #1, counter
+    _loop:
+    PRINT "fib(", counter, ") = ", x
+    SYNC
+    ADD #1, counter
+    MOV x, old_x
+    MOV y, x
+    ADD old_x, y
+    CMP #0, x
+    JGE _loop ; if not >=0 then x has overflowed
+```
+
+### Documentation
+
+The instruction set and how write CBA programs is documented [on the wiki](https://github.com/simon816/Command-Block-Assembly/wiki/Assembly-Language).
+
+## C Compiler
+
+MCC partially implements a C compiler, most language features are implemented and it includes a preprocessor.
+
+The C compiler sits on top of the assembler - all C code is compiled into assembly which is then passed through MCC's assembler.
+
+### Example
+
+Here is the same fibinacci sequence program but implemented in C:
 
 ```c
 #include <stdio.h>
@@ -41,299 +166,225 @@ void main() {
 }
 ```
 
-# Command IR
+### Documentation
 
-A new intermediate representation has been developed that the assembly language builds on top of. 
-To find out more see [Command IR](https://github.com/simon816/Command-Block-Assembly/wiki/Command-IR).
+The C compiler tries to stay as close as possible to the real C language, so documentation for most language features can be found elsewhere.
 
-# The Assembly Language
 
-It is a simple language with instructions similar to that of x86.
+There is only one built-in type, `int`. Fundamentally, all data is stored in a scoreboard objective
+which is a 32 bit signed integer.
 
-## Syntax
 
-Here's a description of the syntax in rough BNF:
+The [mclib.h](https://github.com/simon816/Command-Block-Assembly/blob/master/compiler/include/mclib.h) file
+contains several useful macros and definitions.
 
-```xml
-<program>     ::= <statement> | <whitespace> <statement> | <program> <program>
-<statement>   ::= (<directive> | <label> | <instruction> | <constant> | <comment>) <eol>
-<directive>   ::= "#" <symbol> <whitespace> <ANY> <line-end>
-<label>       ::= (<symbol> | "_" <symbol>) ":" (<instruction> | <line-end>)
-<instruction> ::= (<symbol> | <symbol> <whitespace> <operands>) <line-end>
-<operands>    ::= <reference> | <reference> [<whitespace>] "," [<whitespace>] <operands>
-<constant>    ::= "." <symbol> <whitespace> <reference> <line-end>
-<comment>     ::= ";" <ANY> <eol>
-<line-end>    ::= <EOF> | <eol> | <comment>
-<reference>   ::= "#" <number> | <number> | <symbol> | <string>
-<string>      ::= '"' <ANY> '"'
-<symbol>      ::= <ident-start> | <ident-start> <identifier>
-<ident-start> ::= <alpha> | "_"
-<identifier>  ::= <ident-start> | <decimal>
-<number>      ::= <decimal> | "0" "x" <hexadecimal> | "0" "o" <octal> | "0" "b" <binary>
 
-<alpha>       ::= "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
-                | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z"
-                | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m"
-                | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+Browse the code in the [examples](https://github.com/simon816/Command-Block-Assembly/tree/master/examples) directory to see working examples
+of C code.
 
-<binary>      ::= "0" | "1" | <binary> <binary>
-<octal>       ::= <binary> | "2" | "3" | "4" | "5" | "6" | "7" | <octal> <octal>
-<decimal>     ::= <octal> | "8" | "9" | <decimal> <decimal>
-<hexadecimal> ::= <decimal> | "A" | "B" | "C" | "D" | "E" | "F"
-                            | "a" | "b" | "c" | "d" | "e" | "f" | <hexadecimal> <hexadecimal>
-<whitespace>  ::= " " | "\t" | <whitespace> <whitespace>
+
+## Command IR Compiler
+
+Command IR is _the_ intermediate representation used by MCC. All compilers above ultimately generate Command IR code.
+
+It is designed to relate closely to Minecraft commands themselves but provide a level of abstraction and context which
+enables optimizations among other things.
+
+Command IR supports linking, which means it's possible to write code in CBL, C, ASM and IR directly and compile them
+together into one program.
+
+### Example
+
+Here is a hello world program:
+```
+function hello {
+    preamble {
+        $all_players = selector a
+        extern
+    }
+
+    begin:
+    $message = text
+    text_append $message, "Hello, "
+    text_append $message, "World!"
+    text_send $message, $all_players
+    ret
+}
 ```
 
-What this actually looks like:
-
-```asm
-#include foo.asm
-
-; Useful comment
-
-.my_const #1 ; A constant value
-.my_ref my_const ; A constant reference
-
-main:
-    MOV #0x01, 0 ; Do the thing
-    _loop: ADD my_const, 0
-    JMP _loop
+The output is a file `hello.mcfunction`:
+```mcfunction
+tellraw @a [{"text":"Hello, "},{"text":"World!"}]
 ```
 
-## Instruction Set
+### Documentation
 
-|Instruction|Operands|Description|
-|-----------|--------|-----------|
-|ADD|src, dest|Adds src to dest|
-|SUB|src, dest|Subtracts src from dest|
-|MUL|src, dest|Multiplies dest by src|
-|DIV|src, dest|Divides dest by src|
-|MOD|src, dest|Performs dest modulo src and puts into dest|
-|MOVLT|src, dest|Sets dest equal to src if src is less than dest|
-|MOVGT|src, dest|Sets dest equal to src if src is greater than dest|
-|XCHG|left, right|Exchanges left with right|
-|MOV|src, dest|Copies src to dest|
-|AND|src, dest|Performs bitwise AND, result put into dest|
-|OR|src, dest|Performs bitwise OR and puts into dest|
-|XOR|src, dest|Performs bitwise XOR and puts into dest|
-|NOT|ref|Performs bitwise NOT on ref|
-|SHL|src, dest|Logical shift dest left by src|
-|SHR|src, dest|Logical shift dest right by src|
-|SAR|src, dest|Arithmetic shift dest right by src|
-|ROL|src, dest|Rotates dest left by src|
-|ROR|src, dest|Rotates dest right by src|
-|CMP|left, right|Compares left with right (i.e. `right - left`), result used for jumping|
-|JE|label|Jumps to label if the previous CMP's operands were equal|
-|JNE|label|Jumps to label if the previous CMP's operands were not equal|
-|JL|label|Jumps to label if the previous CMP's right was less than left|
-|JG|label|Jumps to label if the previous CMP's right was greater than left|
-|JLE|label|Jumps to label if the previous CMP's right was less than or equal to the left|
-|JGE|label|Jumps to label if the previous CMP's right was greater than or equal to the left|
-|JMP|label|Unconditionally jumps to label|
-|CALL|label|Jumps to label, returns back after completion|
-|RET||Return from a subroutine (use with CALL)|
-|PRINT|arg1, [...args]|Outputs arguments to chat for all players (`@a` selector)|
-|CMD|bare words|Runs the given command|
-|TEST|bare words|Runs the given command, skipping the next line if the command failed|
-|EXECAS|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute as` if the selector matches|
-|EXECASN|label, sel_type, sel_pairs|Same as EXECAS except runs if it does _not_ match the selector|
-|EXECAT|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute at` if the selector matches|
-|EXECATP|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute positioned as` if the selector matches|
-|EXECPOS|label, x, y, z|Runs the function defined in `label` using `/execute positioned`|
-|EXECALI|label, axes|Runs the function defined in `label` using `/execute align`|
-|EXECFACP|label, x, y, z|Runs the function defined in `label` using `/execute facing`|
-|EXECFAC|label, feature, sel_type, sel_pairs|Runs the function defined in `label` using `/execute facing entity`|
-|EXECROT|label, y, x|Runs the function defined in `label` using `/execute rotated`|
-|EXECROTE|label, sel_type, sel_pairs|Runs the function defined in `label` using `/execute rotated as`|
-|EXECANC|label, anchor|Runs the function defined in `label` using `/execute anchored`|
-|PUSH||Pushes stack register onto the stack, increments stack pointer|
-|POP||Pops stack into stack register, decrements stack pointer|
-|SYNC||Synchronises with the game tick. i.e. wait one tick before continuing|
+Command IR's syntax, instruction reference and internal working is documented [on the wiki](https://github.com/simon816/Command-Block-Assembly/wiki/Command-IR).
 
-### Operand types
+## Datapack Packer
 
-There are 2 'types' of referencing:
+Finally, to bring everything together and generate a [datapack](https://minecraft.gamepedia.com/Data_pack), MCC reads a "Datapack Definition" file
+which declares how to package the code into a datapack.
 
-|Type|Description|Example|
-|---|---|---|
-|Value reference|<ul><li>Literal value</li><li>Memory location</li></ul>|<ul><li>`#42`</li><li>`0x000F`</li></ul>|
-|Label reference|A subroutine name|`main`|
+The file is a simple INI file declaring attributes such as the namespace.
 
-Constants must be a value reference, and can be used anywhere that accepts value references.
-
-For the instructions above, their accepted types are as follows:
-
-A `src` can be any _value_ reference.  
-`dest` must be a _memory location_ reference.
-
-SWP's left and right must both be _memory location_ references.  
-CMP's left and right can be any _value_ reference.
-
-A `label` must be a _label_ reference.
-
-"Bare words" are taken as the literal string value until the end of the line.
-Note that this means comments are interpreted as part of the bare word.
-
-## Constants
-
-As shown in the syntax, constants are defined with "." followed by their name, a space, then the value.  
-Constants can only be _value_ references, but can be any type of value reference.
-
-There are two predefined constants:
-
-`sp` (Stack pointer)  
-The current value of the stack pointer. Should be treated as read-only unless you know what you're doing.
-
-`sr` (Stack register)  
-Used to get values to/from the stack.  
-POP puts the top of the stack into the register, PUSH puts stack register at the top of the stack.
-
-## Directives
-
-Directives are a kind of meta-program language that instruct the assembler to perform certain functions.
-
-The following directives are supported:
-
-#### `#include filename.asm`
-Pulls in code from `filename.asm` in-place. Has the same effect as copy+pasting all the code from the file
-into wherever the directive is.
-
-#### `#include_h filename.asm`
-"Include headers". Does not load any code from the file, but pulls in the symbol table (subroutines, constants).  
-Useful for using library code already running in the game. (i.e. library was loaded sometime beforehand).
-
-#### `#event_handler label event_name condition1=value1;condition2=value2;...`
-
-Runs the subroutine with the given `label` whenever the named event is triggered and the conditions match.
-The following is an example where the function `on_placed_stone` will get invoked every time a player places
-a stone block.
-
-```
-#event_handler on_placed_stone minecraft:placed_block item.item=minecraft:stone
-on_placed_stone:
-    ...
+To complete the fibinacci example, the datapack definition file [`fib.dpd`](https://github.com/simon816/Command-Block-Assembly/blob/master/examples/fib.dpd) is:
+```ini
+[Datapack]
+namespace=fib
+place location=0 56 0
+description = An example datapack that prints the fibonacci sequence
 ```
 
-## Memory locations
+### Documentation
 
-Memory locations can be thought of like locations in RAM, however there are a few things you need to know.
+Currently there is only one section in a DPD file, the **Datapack** section.
 
-You can't reference locations indirectly (e.g. pointers).  
-Locations are actually just scoreboard objectives, and are computed at compile-time. They are really only
-useful for storing temporary data and using as global names (like `sp` and `sr`).
+In order to create a datapack, two values are required: the `namespace` and the `place location`
 
-It is not possible to dynamically reference scoreboard objectives (or function names, for that matter).
-So you can't do something like `MOV #1, [loc]` (move literal `1` to the address stored in `loc`).
+|Option|Description|
+|------|-----------|
+|namespace|The [namespace](https://minecraft.gamepedia.com/Namespaced_ID) used for functions in the datapack|
+|place location|An absolute position in the world to place the utility command block. Specifiy as 3 space-separated numbers|
+|spawn location|A position in the world to spawn the global armorstand. Specifiy as 3 space-separated components. Relative positioning (~) is allowed|
+|description|Set the description of the datapack|
+|generate cleanup|Generate a function which will remove everything created by the datapack|
 
-The only way to have truly real memory is using something like `hdd_driver` (see examples) or a giant
-lookup table. (Something like `if(addr==0) objective_0=buffer else if (addr==1) objective_1=buffer ...`)  
-This is how the stack is implemented, it performs a lookup on the current `sp` value.
+# MCC pipeline
 
-# The Assembler
+There are 3 main stages to the compiler pipeline:
+1) Compiling: Converts source code into Command IR
+2) Linking: Merges one or more Command IR files into one master file
+3) Packing: Converts Command IR into Minecraft commands and creates a datapack from a datapack definition file
 
-The assembler is invoked by calling `main.py`.
+The MCC command takes a list of files, each code file goes through some number of transformations to end up as a Command IR object.
 
-Command line parameters:
+The linker merges each Command IR object into a single Command IR object. Any conflicts when merging will abort the compiler.
+
+A datapack definition file is required for the packer. The packer takes the single Command IR object and generates the final
+mcfunction files.
+
+To get an idea of the hierarchy of components, here is a diagram:
+
 ```
-usage: main.py [-h] [--world-dir WORLD_DIR] [--as-zip] [--namespace NAMESPACE]
-               [--rem-existing] [--debug] [--dump-ir] [--gen-cleanup]
-               [--jump JUMP] --place-location PLACE_LOCATION [--setup-on-load]
-               [--spawn-location SPAWN_LOCATION]
-               [--pack-description PACK_DESCRIPTION]
-               file
+            +---------------+
+            |               |
+            |  C Compiler   |
+            |               |
++-----------+---------------+
+|           |               |
+|    CBL    |   Assembler   |
+|           |               |
++-----------+---------------+   +-----------------------+
+|                           |   |                       |
+|        Command IR         |   |  Datapack Definition  |
+|                           |   +---------|-------------+
++---------------------------+----+        |
+|                                |  <-----+
+|      Command Abstraction       |
+|                                |
++--------------------------------+----------------------+
+|                  Minecraft Commands                   |
++-------------------------------------------------------+
+```
+
+# Running MCC
+
+You will need to generate the standalone parsers (from [Lark](https://github.com/lark-parser/lark)) using the `./build-parsers.sh` script.
+
+The Lark python package needs to be installed, `pip` can be used on the `requirements.txt` file. It is recommended to use `virtualenv`.
+
+Example: `virtualenv env --python=python3 && source env/bin/activate && pip install -r requirements.txt`
+Once the parsers have been built, you don't technically need the virtual environment anymore. It can be deleted with
+`deactivate && rm -rf env/`
+
+Alternatively, you don't need to create the standalone parsers if you keep Lark available in the python environment.
+
+MCC is implemented in python. Currently it is not bundled into an executable so it must be invoked using the python interpreter.
+
+MCC is invoked by `python main.py` (If python 3 is not your default python command then run `python3 main.py`).
+
+Command help text:
+```
+usage: main.py [-h] [-o outfile] [-E] [-c] [-S] [-dump-asm] [-O {0,1}]
+               [-dump-ir] [--dummy-datapack] [--stats] [--dump-commands]
+               [--c-page-size SIZE]
+               infile [infile ...]
+
+Command line tool for the Minecraft Compiler Collection
 
 positional arguments:
-  file                  ASM File
+  infile              Input files
 
 optional arguments:
-  -h, --help            show this help message and exit
-  --world-dir WORLD_DIR
-                        World Directory
-  --as-zip              Write datapack as zip file
-  --namespace NAMESPACE
-                        Function namespace
-  --rem-existing        Remove existing functions in namespace
-  --debug               Enable debug output
-  --dump-ir             Dump Command IR output
-  --gen-cleanup         Generate cleanup function
-  --jump JUMP           Output subroutine jump instruction
-  --place-location PLACE_LOCATION
-                        Location to place command blocks
-  --setup-on-load       Run setup on minecraft:load
-  --spawn-location SPAWN_LOCATION
-                        Location to spawn hidden armor stand
-  --pack-description PACK_DESCRIPTION
-                        Datapack description
+  -h, --help          show this help message and exit
+
+Output generation control:
+  Options that control what stage in the output pipeline the compiler should
+  stop at.
+
+  -o outfile          Set the filename to write output to.
+  -E                  Stop after running the preprocessor. Input files which
+                      do not pass through a preprocessor are ignored.
+  -c                  Compile source files, but do not link. An object file is
+                      created for each source file
+  -S                  Do not compile Command IR code. A Command IR file is
+                      created for each non Command IR source file
+
+C Compiler options:
+  Options specific to the C compiler.
+
+  -dump-asm           Print The generated ASM code to stdout. Compilation is
+                      stopped after this point.
+
+Optimization control:
+  -O {0,1}            Control optimization level
+
+Linker arguments:
+  Arguments that control how the linker behaves.
+
+  -dump-ir            Print Command IR textual representation to stdout after
+                      linking objects, then exit
+
+Packer arguments:
+  Arguments that control how the packer behaves.
+
+  --dummy-datapack    Don't write an output datapack. This can be used for
+                      debugging with --dump-commands
+  --stats             Print statistics about the generated datapack
+  --dump-commands     Dump the commands to stdout as they are written to the
+                      datapack
+  --c-page-size SIZE  Size of the memory page to generate if using the C
+                      compiler
 ```
 
-Notes:
+MCC will dispatch a different tool depending on what the file extension of each input file is:
 
-If `--world-dir` is not provided, no functions are written.
-This can be useful in combination with `--debug`.
+ * `.cmdl` Will compile the CBL source code file
+ * `.c` Will compile the C source code file
+ * `.asm` Will compile the assembly file
+ * `.ir` Will read the Command IR file
+ * `.o` Will load the pre-compiled Command IR object file
+ * `.dpd` Will read the datapack definition file
 
-`--place-location` is where to place a utility command block. It has to be an absolute position e.g. '0,56,0'
+Depending on the command line arguments, MCC will perform different tasks on each file. Some files
+are ignored if they are not relevant for the desired action.
 
-You may want `--gen-cleanup` which creates a function to remove all scoreboard objectives and the global entity.
+## Examples
 
-### Running a program
-
-In order to run a subroutine (`main` is a good name for the entry point), you need to run the jump command.
-
-e.g. to run a subroutine named `main`, use `--jump main`, this will output the exact command to run.
-
-The first time a program is loaded into a world, the setup command must be ran before any function calls are made.  
-The setup command is outputted by the assembler.
-
-The assembler also outputs a cleanup function, which performs the opposite operation to setup.
-If command blocks are placed by the setup command, the cleanup command will remove them. If a relative `--place-location`
-was used, the cleanup must be executed from the same location that setup was ran from.
-
-# Examples
-Examples can be found in the [examples](https://github.com/simon816/Command-Block-Assembly/tree/master/examples) directory.
-
-#### `fib.asm`
-
-Prints the fibonacci sequence until the next integer overflows.
-
-#### `hdd_driver.asm`
-
-An example of how the assembly code can make use of the world.
-
-The "hard drive" is represented by blocks in the world. An air block represents 0, stone = 1.
-
-In this example, data is stored in a 2D plane on the x and z axis.  
-A memory location `loc` is stored at `x = loc / MEM_SIZE_X`, `z = loc % MEM_SIZE_Z`  
-The value is then WORD_SIZE bits in the y axis. i.e. for an 8-bit word, y=0 is the LSB, y=7 is the MSB.
-
-`hdd_driver.asm` is a library file, and exports the `read_mem`, `write_mem` subroutines along with
-its constants.
-
-The location where the memory region is hardcoded to be `100 60 100`.
-
-#### `mem_test.asm`
-
-A simple test of the hdd_driver library. See description at the top of the file.
-
-# Issues and nuances
-
-## CMP and jumping
-
-Due to there being no concept of a "status" register, jump instructions don't check flags of any sort.  
-Instead, they evaluate the most recent CMP instruction.
-
-The assembler keeps a reference to the most recent CMP instruction. If a conditional jump instruction
-is encountered, it fetches this CMP to decide whether to jump or not.
-
-A more accurate conditional jump could be an instruction that takes 3 arguments e.g: `JL left, right, label`.
-However writing out the comparison is clunky when performing a succinct multi-jump like this:
-```asm
-CMP left, right
-JE is_equal
-JL is_less
-JG is_greater
+Compiling `examples/fib.asm` into a datapack` fib.zip`:
+```
+python main.py examples/fib.asm examples/fib.dpd
 ```
 
-## Signed bitwise operations
+Compiling `examples/hdd_driver.c` into Command IR `examples/hdd_driver.ir`:
+```
+python main.py examples/hdd_driver.c -S
+```
 
-The bitwise operations (e.g. AND, SHR, ROL) have not been tested for correct handling of negative values.
-Use with caution.
+Compiling `mylib.cmdl` into an object file, statically linking `myprogram.cmdl` with the object and `examples/fib.ir`,
+then using `mydatapack.dpd` to create `mysuperdatapack.zip`:
+```
+python main.py mylib.cmdl -c
+python main.py mylib.o myprogram.cmdl examples/fib.ir mydatapack.dpd -o mysuperdatapack.zip
+```
