@@ -114,7 +114,7 @@ class Session:
         self.writer = writer
         self.scope = Scope(namespace, pos)
         self.add_util_command_block()
-        self.entity_pos = entity_pos
+        self.entity_pos = ' '.join(map(str, entity_pos))
         self.create_cleanup = create_cleanup
 
     def add_util_command_block(self):
@@ -231,7 +231,7 @@ class Session:
         if setup:
             self.writer.write_function(setup_name, setup)
         clean_func = None
-        if self.create_cleanup and cleanup:
+        if self.create_cleanup and clean:
             cleanup_name = self._unique_func('cleanup')
             self.writer.write_function(cleanup_name, clean)
             clean_func = self.scope.function_name(cleanup_name)

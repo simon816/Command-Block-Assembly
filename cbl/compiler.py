@@ -5,8 +5,9 @@ from .types import *
 from .containers import *
 from .array_support import ArraySupport
 from .entity_support import (EntitySupport, EntityTypeType,
-                             RuntimeEntityTypeType, RuntimeEntityWorldType,
+                             RuntimeEntityTypeType,
                              RuntimeEntityPosType)
+from .intrinsic_support import IntrinsicSupport
 
 from cmd_ir.core import TopLevel
 from cmd_ir.variables import VarType
@@ -17,7 +18,10 @@ EventCondition = namedtuple('EventCondition', 'path value')
 VarDeclaration = namedtuple('VarDeclaration', 'type name')
 
 FuncDeclaration = namedtuple('FuncDeclaration', 'name ret_type params ' + \
-                             'is_operator inline async')
+                             'is_operator inline async typespace')
+CtorDeclaration = namedtuple('CtorDeclaration', 'params inline')
+
+ConstructorArgs = namedtuple('ConstructorArgs', 'args')
 
 class SymbolTable:
 
@@ -27,7 +31,7 @@ class SymbolTable:
 
     def declare(self, name, type, compiler):
         assert name not in self.symbols, "Cannot redeclare symbol %s" % name
-        value = compiler._create(type, name)
+        value = type.create(name)
         assert value is not None, "%s didn't create a value for %s!" % (type, name)
         type.initialize(value)
         symbol = self.symbols[name] = Symbol(type, name, value)
@@ -44,6 +48,11 @@ class SymbolTable:
         if self.parent:
             return self.parent.lookup(name)
         return None
+
+    def get_all(self):
+        yield from self.symbols.items()
+        if self.parent is not None:
+            yield from self.parent.get_all()
 
 class ScopeManager:
 
@@ -66,6 +75,9 @@ class ScopeManager:
     def store(self, name, symbol):
         return self.current_table.store(name, symbol)
 
+    def get_all(self):
+        return self.current_table.get_all()
+
 class LoopAttacher:
 
     def __init__(self, continue_, break_, compiler, parent):
@@ -80,71 +92,110 @@ class LoopAttacher:
     def __exit__(self, *args):
         self.compiler.loop_attacher = self.parent
 
+class CompileError(Exception):
+
+    def __str__(self):
+        meta, filename, cause, diag = self.args
+        if meta is None or meta.empty:
+            line, col = 0, 0
+        else:
+            line, col = meta.line, meta.column
+        diag = 'Diagnostic:\n' + diag
+        return "%s\n\n%s:%d:%d: error: %s" % (diag, filename, line, col, cause)
+
 @v_args(inline=True)
 class Compiler(Transformer_WithPre):
 
     # === External === #
 
-    def __init__(self):
+    def __init__(self, search_path):
         self._parser = Parser(self)
+        self.search_path = search_path
+        self.inclusion_set = set()
         self.scope = ScopeManager(self)
         self.types = Types()
+        self.create_var = self.__create_var
         self.add_core_types()
         self.top = TopLevel()
         self._global_func_names = set()
+        self.possible_extern = []
         self.loop_attacher = LoopAttacher(None, None, self, None)
         self.array_support = ArraySupport(self)
         self.entity_support = EntitySupport(self)
+        self.intrinsic_support = IntrinsicSupport(self)
         self.func = None
         self.funcsym = None
         self.typedef = None
         self.block = None
-        self.define_intrinsics()
+        self.include_file('__builtin__')
 
-    def compile_unit(self, program):
-        self.transform(self._parser.parse_program(program))
+    def compile_unit(self, program, filename):
+        self._fault_meta = None
+        tree = self._parser.parse_program(program)
+        try:
+            self.transform(tree)
+        except Exception as e:
+            diag = self.diag_debug()
+            raise CompileError(self._fault_meta, filename, e, diag)
 
-    def compile(self, program):
-        self.compile_unit(program)
+    def compile(self, program, filename):
+        self.compile_unit(program, filename)
         self.array_support.generate()
+        for fn_container in self.possible_extern:
+            fn_container.extern_if_needed()
         self.top.end()
 
-    def is_type_name(self, name):
-        return self.types.lookup(name) is not None
+    def include_file(self, name):
+        if name in self.inclusion_set:
+            return
+        assert name
+        assert not name.startswith('/')
+        import os
+        for dir in self.search_path:
+            path = os.path.join(dir, name)
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    self.compile_unit(f.read(), name)
+                    self.inclusion_set.add(name)
+                return
+        assert False, "No such file: %s" % name
 
     # === Setup === #
 
     def add_core_types(self):
-        self.types.add('void', VoidType(self))
-        self.types.add('int', IntType(self))
-        self.types.add('bool', BoolType(self))
-        self.types.add('decimal', DecimalType(self))
-        self.types.add('string', StringType(self))
-        self.types.add('vec3d', Vector3dType(self))
+        self.add_type('void', VoidType(self))
+        self.add_type('int', IntType(self))
+        self.add_type('bool', BoolType(self))
+        self.add_type('decimal', DecimalType(self))
+        self.add_type('string', StringType(self))
 
-        self.types.add('EntityLocal', EntityLocalType(self))
+        self.add_type('EntityLocal', EntityLocalType(self))
 
-        self.types.add('EntityType', EntityTypeType(self))
-        self.types.add('RuntimeEntityType', RuntimeEntityTypeType(self))
-        self.types.add('RuntimeEntityWorld', RuntimeEntityWorldType(self))
-        self.types.add('RuntimeEntityPos', RuntimeEntityPosType(self))
+        self.add_type('EntityType', EntityTypeType(self))
+        self.add_type('RuntimeEntityType', RuntimeEntityTypeType(self))
 
-        self.types.add('EntityCollection', EntityCollectionType(self))
-        self.types.add('SelectorFilter', SelectorFilterType(self))
+        self.add_type('SelectorFilter', SelectorFilterType(self))
 
-        self.types.add('Event', EventType(self))
-        self.types.add('BlockType', BlockTypeType(self))
-
-    def define_intrinsics(self):
-        import os
-        d = os.path.dirname(os.path.abspath(__file__))
-        with open(os.path.join(d, 'builtin.cmdl'), 'r') as f:
-            text = f.read()
-        self.compile_unit(text)
-        from .intrinsics import define
-        define(self)
+        self.add_type('Event', EventType(self))
+        self.add_type('BlockType', BlockTypeType(self))
+        self.add_type('ItemType', ItemTypeType(self))
 
     # === Support / Helpers === #
+
+    def diag_debug(self):
+        out = []
+        if self.typedef is not None:
+            out.append('Defining type: %s' % self.typedef.typename)
+        if self.func is not None:
+            out.append('Compiling function %s' % self.funcsym.name)
+            if self.block is not None:
+                out.append('Current basic block: %s' % self.block.global_name)
+                prev = self.block.serialize().split('\n')
+                if len(prev) > 8:
+                    out.append('    ... (%d previous instructions)' % \
+                               (len(prev) - 8))
+                out.extend(prev[-8:])
+        return '\n'.join(out)
 
     def loop(self, continue_=None, break_=None):
         parent = self.loop_attacher
@@ -156,33 +207,44 @@ class Compiler(Transformer_WithPre):
     def dispatch_operator(self, op, left, right=None):
         return left.type.dispatch_operator(op, left, right)
 
-    def create_var(self, namehint, var_type):
+    def __create_var(self, namehint, var_type):
         if self.func is None:
             return self.top.create_global(namehint, var_type)
         return self.func.create_var(namehint, var_type)
+
+    @contextlib.contextmanager
+    def set_create_var(self, create_var):
+        old = self.create_var
+        self.create_var = create_var
+        yield
+        self.create_var = old
     
     def create_block(self, namehint):
         assert self.func is not None, "Tried to create block outside of function"
         return self.func.create_block(namehint)
 
-    def create_function(self, name):
+    def define_function(self, name):
         assert name not in self._global_func_names, \
                "Function '%s' already defined" % name
         self._global_func_names.add(name)
         # All functions must be lower-case
-        return self.top.create_function(name.lower())
+        ir_name = name.lower()
+        return self.top.define_function(ir_name)
 
     def add_insn(self, insn):
-        return self.block.add(insn)
+        self.block.add(insn)
 
     def type(self, name):
         t = self.types.lookup(name)
         assert t is not None, "Unknown type %s" % name
         return t
 
+    def add_type(self, name, type):
+        self.types.add(name, type)
+        self.scope.store(name, Symbol(TypeType(self), name, type))
+
     def global_def(self, namehint, insn):
-        ret = self.top.preamble.add(insn)
-        return self.top.generate_name(namehint, ret)
+        return self.top.preamble.add(insn, True, namehint)
 
     def do_define(self, insn):
         if self.func is None:
@@ -191,10 +253,8 @@ class Compiler(Transformer_WithPre):
 
     def define(self, namehint, insn):
         if self.func is None:
-            ret = self.top.preamble.add(insn)
-            return self.top.generate_name(namehint, ret)
-        ret = self.func.preamble.add(insn)
-        return self.func.generate_name(namehint, ret)
+            return self.top.preamble.add(insn, True, namehint)
+        return self.func.preamble.add(insn, True, namehint)
 
     def insn_def(self, insn):
         return self.block.define(insn)
@@ -202,34 +262,48 @@ class Compiler(Transformer_WithPre):
     def as_var(self, symbol):
         return symbol.type.as_variable(symbol.value)
 
-    def _create(self, type, name):
-        return type.create(name, self.create_var, self.do_define)
-
-    def _declare_function(self, decl):
-        if self.typedef is not None:
+    def _declare_function(self, decl, has_definition):
+        if decl.typespace is not None:
+            static = decl.typespace.is_namespace_type
             if decl.is_operator:
                 assert not decl.async
-                fn_type, func = self.typedef.overload_operator(decl.name,
+                assert not static
+                fn_type, func = decl.typespace.overload_operator(decl.name,
                     decl.ret_type, decl.params, decl.inline)
-                return Temporary(fn_type, func)
+                symbol = Temporary(fn_type, func)
             else:
-                fn_type, func = self.typedef.add_func_member(decl.name,
-                    decl.ret_type, decl.params, decl.inline, decl.async)
-                return self.scope.store(decl.name,
-                                        Symbol(fn_type, decl.name, func))
+                action = decl.typespace.add_func_member
+                # Check if already have this function
+                if decl.typespace.has_member(decl.name):
+                    action = decl.typespace.get_func_member
+                fn_type, func = action(decl.name, decl.ret_type, decl.params,
+                                       decl.inline, decl.async, static)
+                symbol = Symbol(fn_type, decl.name, func)
         else:
             fn_type = FunctionType(self, decl.ret_type, decl.params,
                                    decl.inline, decl.async)
             existing = self.scope.lookup(decl.name)
             if existing is not None:
                 # TODO check type matches
-                return existing
-            return self.scope.declare_symbol(decl.name, fn_type)
+                symbol = existing
+            else:
+                symbol = self.scope.declare_symbol(decl.name, fn_type)
+        if not has_definition:
+            self.possible_extern.append(symbol.value)
+        return symbol
+
 
     def _declare_var(self, decl):
         return self.scope.declare_symbol(decl.name, decl.type)
 
     # === Tree Traversal === #
+
+    def _call_userfunc(self, tree, new_children=None):
+        self._fault_meta = tree.meta
+        return super()._call_userfunc(tree, new_children)
+
+    def include(self, name):
+        self.include_file(name.value)
 
     # == Declarations == #
 
@@ -240,15 +314,27 @@ class Compiler(Transformer_WithPre):
                 self._declare_var(decl)
             elif isinstance(decl, FuncDeclaration):
                 assert not decl.is_operator, "TODO"
-                self._declare_function(decl)
+                self._declare_function(decl, False)
 
     def var_declaration(self, type, name):
         return VarDeclaration(type, name.value)
 
-    def func_declaration_(self, ret_type, name, params=[]):
+    @v_args(inline=False)
+    def func_declaration_(self, children):
+        if len(children) == 4:
+            ret_type, typespace, name, params = children
+        else:
+            ret_type, name, params = children
+            typespace = None
+        if self.typedef is not None:
+            assert typespace is None
+            typespace = self.typedef
         is_op = name.type == 'OPERATORS'
         return FuncDeclaration(name.value, ret_type, params, is_op, False,
-                               False)
+                               False, typespace)
+
+    def ctor_declaration(self, params=[]):
+        return CtorDeclaration(params, True) # Always inline for now
 
     def inline_func_decl(self, _, decl):
         return decl._replace(inline=True)
@@ -274,13 +360,19 @@ class Compiler(Transformer_WithPre):
             func_decl, body = tree.children
             event_handler = None
         func_decl = self.transform(func_decl)
-        func_sym = self._declare_function(func_decl)
-        self.func = func_sym.value
-        self.funcsym = func_sym
+        func_sym = self._declare_function(func_decl, True)
+        func = func_sym.value.get_or_create_definition()
         if event_handler is not None:
-            self.top.preamble.add(EventHandler(self.func, event_handler.value))
-        if not func_decl.is_operator:
-            self.func.preamble.add(ExternInsn())
+            self.top.preamble.add(EventHandler(func, event_handler.value))
+        if not func_decl.is_operator and not func_decl.inline:
+            func.preamble.add(ExternInsn())
+        if func_decl.inline:
+            func.preamble.add(InlineInsn())
+        self._process_function_def(func_sym, body)
+
+    def _process_function_def(self, func_sym, body):
+        self.func = func_sym.value.get_or_create_definition()
+        self.funcsym = func_sym
         self.block = self.func.create_block('entry')
         with self.scope:
             for param in func_sym.type.params:
@@ -290,7 +382,7 @@ class Compiler(Transformer_WithPre):
             sender = self.scope.declare_symbol('sender', self.type('Entity'))
             self.entity_support.assign_pointer_to_sender(sender.value)
             rtype = func_sym.type.ret_type
-            if rtype != self.types.lookup('void'):
+            if rtype != self.type('void'):
                 self.ret_param = Temporary(rtype, rtype.create_return('ret'))
             else:
                 self.ret_param = None
@@ -306,6 +398,24 @@ class Compiler(Transformer_WithPre):
         self.block = None
         self.func = None
         self.funcsym = None
+
+    def pre_ctor_definition(self, tree, post_transform):
+        assert self.typedef is not None
+        ctor_decl, body = tree.children
+        ctor_decl = self.transform(ctor_decl)
+        fn_type, func = self.typedef.add_constructor(ctor_decl.params,
+                                                     ctor_decl.inline)
+        ctor_sym = Symbol(fn_type, None, func) # No name for this symbol
+        if ctor_decl.inline:
+            func = ctor_sym.value.get_or_create_definition()
+            func.preamble.add(InlineInsn())
+        self._process_function_def(ctor_sym, body)
+
+    def pre_top_ctor_definition(self, tree, post_transform):
+        type_name, ctor_def = tree.children
+        self.typedef = self.transform(type_name)
+        self.transform(ctor_def)
+        self.typedef = None
 
     def pre_event_handler(self, tree, post_transform):
         event, *conditions = tree.children
@@ -324,19 +434,28 @@ class Compiler(Transformer_WithPre):
         *keyparts, value = children
         return EventCondition(tuple(tok.value for tok in keyparts), value)
 
-    def var_init_declaration(self, decl, value=None):
+    def var_init_expr(self, expr):
+        return expr
+
+    def var_ctor_expr(self, *ctor_args):
+        return ConstructorArgs(ctor_args)
+
+    def var_init_declaration(self, decl, init=None):
         symbol = self._declare_var(decl)
-        if value is not None:
-            self.dispatch_operator('=', symbol, value)
+        if init is not None:
+            if isinstance(init, ConstructorArgs):
+                symbol.type.run_constructor(symbol.value, init.args)
+            else:
+                self.dispatch_operator('=', symbol, init)
 
     def type_declaration(self, name):
         assert False, "TODO"
-        #self.types.add(name.value, UnfinishedType(self))
+        #self.add_type(name.value, UnfinishedType(self))
 
     def pre_type_definition(self, tree, post_transform):
         name, *decls = tree.children
         type = UserDefinedType(self, name.value)
-        self.types.add(name.value, type)
+        self.add_type(name.value, type)
         self.typedef = type
         with self.scope:
             for decl_node in decls:
@@ -344,19 +463,24 @@ class Compiler(Transformer_WithPre):
                 if isinstance(decl, VarDeclaration):
                     type.add_var_member(decl.name, decl.type)
                 elif isinstance(decl, FuncDeclaration):
-                    self._declare_function(decl)
+                    self._declare_function(decl, False)
+                elif isinstance(decl, CtorDeclaration):
+                    ftype, func = type.add_constructor(decl.params, decl.inline)
+                    self.possible_extern.append(func)
+                elif decl is not None:
+                    assert False, decl
         type.finalize()
         self.typedef = None
 
     def type_name(self, name, *type_args):
-        t = self.types.lookup(name.value)
-        assert t is not None, "Undefined type %s" % name.value
+        t = self.type(name.value)
         return t.instantiate(tuple(self.type(t) for t in type_args))
 
     def pre_namespace_definition(self, tree, post_transform):
         name, *decls = tree.children
-        type = UserDefinedNamespace(self, name.value)
-        self.scope.declare_symbol(name.value, type)
+        type = UserDefinedType(self, name.value)
+        type.is_namespace_type = True
+        self.add_type(name.value, type)
         # TODO temp for FuncDeclaration
         self.typedef = type
         with self.scope:
@@ -364,10 +488,26 @@ class Compiler(Transformer_WithPre):
                 decl = self.transform(decl_node)
                 if isinstance(decl, VarDeclaration):
                     sym = self.scope.declare_symbol(decl.name, decl.type)
-                    type.add_var(decl.name, sym)
+                    type.add_static_var_member(decl.name, sym)
                 elif isinstance(decl, FuncDeclaration):
-                    self._declare_function(decl)
+                    self._declare_function(decl, False)
+                elif isinstance(decl, CtorDeclaration):
+                    assert False
+                elif decl is not None:
+                    assert False, decl
         self.typedef = None
+
+    def pre_intrinsic(self, tree, post_transform):
+        self.intrinsic_support.traverse(tree.children)
+
+    def native_definition(self, func_decl, py_code):
+        self.intrinsic_support.native_definition(func_decl, py_code.value[1:-1])
+
+    def type_configure(self, type_name, py_code):
+        self.intrinsic_support.type_configure(type_name, py_code.value[1:-1])
+
+    def extends_decl(self, typename=None):
+        return self.type(typename.value) if typename else None
 
     # == Statements == #
 
@@ -550,7 +690,7 @@ class Compiler(Transformer_WithPre):
         iterable = self.transform(expr)
         col_type = self.type('EntityCollection')
         assert iterable.type == col_type
-        new_col = self._create(col_type, 'filtered')
+        new_col = col_type.create('filtered')
         new_col.copy_from(self, iterable.value)
         with self.scope:
             loopvar = self.scope.declare_symbol(varname.value,
@@ -588,7 +728,7 @@ class Compiler(Transformer_WithPre):
 
         # TODO unify true/false types
         val_type = true_val.type
-        res = Temporary(val_type, self._create(val_type, 'condres'))
+        res = Temporary(val_type, val_type.create('condres'))
 
         # Link true result to expr result
         self.block = end_true
@@ -628,6 +768,10 @@ class Compiler(Transformer_WithPre):
         return self.dispatch_operator('[]', left, subscript)
 
     def function_call_expr(self, func_ref, *fn_args):
+        # Special case for type constructors
+        if isinstance(func_ref.type, TypeType):
+            return func_ref.type.constructor(func_ref, fn_args)
+        assert isinstance(func_ref.type, FunctionType)
         # TODO verify await is used
         if func_ref.type.is_async:
             assert self.funcsym.type.is_async
@@ -641,14 +785,14 @@ class Compiler(Transformer_WithPre):
         else:
             args = None
         r_type = func_ref.type.ret_type
-        if r_type != self.types.lookup('void'):
-            rval = r_type.as_variable(self._create(r_type, 'fnret'))
-            ret_args = (rval,)
+        if r_type != self.type('void'):
+            retobj = r_type.create('fnret')
+            ret_args = tuple(r_type.as_returns(retobj))
         else:
             ret_args = None
-            rval = None
+            retobj = None
         func_ref.type.invoke(func_ref, args, ret_args)
-        return FuncCallRet(r_type, rval, func_ref)
+        return FuncCallRet(r_type, retobj, func_ref)
 
     def member_access_expr(self, var, dot, property):
         propvar = var.type.get_property(var, property.value)
@@ -675,16 +819,14 @@ class Compiler(Transformer_WithPre):
         return Temporary(self.type('vec3d'), components)
 
     def dec_literal(self, token):
-        # See int_literal
-        # assert type(token.value) == float
-        return LiteralDec(self.type('decimal'), float(token.value))
+        # should be float from token processor
+        assert type(token.value) == float
+        return LiteralDec(self.type('decimal'), token.value)
 
     def int_literal(self, token):
         # should be int from token processor
-        # TODO since https://github.com/lark-parser/lark/commit/d952f2a
-        # token.value is forced to be a string
-        # assert type(token.value) == int
-        return LiteralInt(self.type('int'), int(token.value))
+        assert type(token.value) == int
+        return LiteralInt(self.type('int'), token.value)
 
     def string_literal(self, *tokens):
         # concat all strings together

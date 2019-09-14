@@ -771,63 +771,63 @@ function array_get {
     call :get_0_7
     ret
 
-    get_0_0:
+    [function] get_0_0:
     $value0 = nbtsubpath $arr, "[0]", i32
     $value = $value0
 
-    get_1_1:
+    [function] get_1_1:
     $value1 = nbtsubpath $arr, "[1]", i32
     $value = $value1
 
-    get_2_2:
+    [function] get_2_2:
     $value2 = nbtsubpath $arr, "[2]", i32
     $value = $value2
 
-    get_3_3:
+    [function] get_3_3:
     $value3 = nbtsubpath $arr, "[3]", i32
     $value = $value3
 
-    get_4_4:
+    [function] get_4_4:
     $value4 = nbtsubpath $arr, "[4]", i32
     $value = $value4
 
-    get_5_5:
+    [function] get_5_5:
     $value5 = nbtsubpath $arr, "[5]", i32
     $value = $value5
 
-    get_6_6:
+    [function] get_6_6:
     $value6 = nbtsubpath $arr, "[6]", i32
     $value = $value6
 
-    get_7_7:
+    [function] get_7_7:
     $value7 = nbtsubpath $arr, "[7]", i32
     $value = $value7
 
-    get_0_1:
+    [function] get_0_1:
     rangebr $index, 0, 0, :get_0_0, NULL
     rangebr $index, 1, 1, :get_1_1, NULL
 
-    get_2_3:
+    [function] get_2_3:
     rangebr $index, 2, 2, :get_2_2, NULL
     rangebr $index, 3, 3, :get_3_3, NULL
 
-    get_4_5:
+    [function] get_4_5:
     rangebr $index, 4, 4, :get_4_4, NULL
     rangebr $index, 5, 5, :get_5_5, NULL
 
-    get_6_7:
+    [function] get_6_7:
     rangebr $index, 6, 6, :get_6_6, NULL
     rangebr $index, 7, 7, :get_7_7, NULL
 
-    get_0_3:
+    [function] get_0_3:
     rangebr $index, 0, 1, :get_0_1, NULL
     rangebr $index, 2, 3, :get_2_3, NULL
 
-    get_4_7:
+    [function] get_4_7:
     rangebr $index, 4, 5, :get_4_5, NULL
     rangebr $index, 6, 7, :get_6_7, NULL
 
-    get_0_7:
+    [function] get_0_7:
     rangebr $index, 0, 3, :get_0_3, NULL
     rangebr $index, 4, 7, :get_4_7, NULL
 

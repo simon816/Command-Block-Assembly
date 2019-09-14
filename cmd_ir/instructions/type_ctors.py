@@ -35,7 +35,7 @@ class CreateSelector(ConstructorInsn):
     insn_name = 'selector'
 
     def construct(self):
-        return Selector(self.type)
+        return Selector.new(self.type)
 
     def serialize_args(self, holder):
         return [self.type.letter]

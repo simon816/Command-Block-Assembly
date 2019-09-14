@@ -38,15 +38,18 @@ class BuildProgram(Interpreter):
         if isinstance(returns, Token):
             returns = self.token_to_val(returns)
         from .variables import VarType
-        if params is not None:
-            params = tuple(VarType._init_from_parser(p) for p in params)
-        if returns is not None:
-            returns = tuple(VarType._init_from_parser(r) for r in returns)
-        self.top.store(name, ExternFunction(name, params, returns))
+        params = [VarType._init_from_parser(p) for p in params or []]
+        returns = [VarType._init_from_parser(r) for r in returns or []]
+        existing = self.top.lookup_func(name)
+        extern = ExternFunction(name, params, returns)
+        if existing:
+            existing.expect_signature(extern)
+        else:
+            self.top.store(name, extern)
 
     def function(self, node):
         name = node.children[0].value
-        self.func = self.top.get_or_create_func(name)
+        self.func = self.top.define_function(name)
         self.holder = self.func
         self.curr_seq = self.func.preamble
         self.visit_children(node)

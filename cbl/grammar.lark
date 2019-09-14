@@ -1,33 +1,45 @@
 start: top_level
 
-top_level: (scoped_declaration | function_definition | type_definition | namespace_definition
+top_level: (include | scoped_declaration | function_definition | top_ctor_definition | type_definition | namespace_definition
             | intrinsic)*
 
-?scoped_declaration: (var_declaration | array_declaration | func_declaration) ";"
+include: "include" ESCAPED_STRING
+
+?scoped_declaration: (var_arr_declaration | func_declaration) ";"
+?var_arr_declaration: var_declaration | array_declaration
 
 var_declaration: type_name IDENT
 
 ?func_declaration: async_func_decl
 ?async_func_decl: ASYNC? inline_func_decl
 ?inline_func_decl: INLINE? func_declaration_
-?func_declaration_: type_name (IDENT | "operator" OPERATORS) "(" param_list? ")"
+?func_declaration_: type_name (type_name "::")? (IDENT | "operator" OPERATORS) "(" param_list ")"
 ASYNC: "async"
 INLINE: "inline"
 
+ctor_declaration: "constructor" "(" param_list ")"
+
 array_declaration: type_name IDENT "[" INT_CONSTANT "]"
 
-param_list: param_declaration ("," param_declaration)*
+param_list: param_declaration ("," param_declaration)* |
 param_declaration: type_name IDENT
 
 function_definition: event_handler? func_declaration block_statement
+ctor_definition: ctor_declaration block_statement
+top_ctor_definition: type_name "::" ctor_definition
 
 event_handler: "[" "Event" conditional_expression [":" "{" (event_condition ("," event_condition)*)? "}"] "]"
 event_condition: IDENT ("." IDENT)* ":" conditional_expression
 
-var_init_declaration: (var_declaration | array_declaration) ["=" assignment_expression] ";"
+var_init_expr: "=" assignment_expression
+var_ctor_expr: "(" [assignment_expression ("," assignment_expression)*] ")"
+var_init_declaration: var_arr_declaration (var_init_expr|var_ctor_expr)? ";"
+
 
 // TODO change to type_name and support type parameters
-type_definition: "type" IDENT "{" (scoped_declaration | function_definition)* "}"
+// All function definitions must occur after variable declarations have finished
+?non_var_decl: func_declaration | ctor_declaration
+type_definition: "type" IDENT "{" (var_arr_declaration ";")* ((non_var_decl ";") | function_definition | ctor_definition)* "}"
     | "type" IDENT ";" -> type_declaration
 
 type_name: IDENT 
@@ -38,8 +50,10 @@ type_name: IDENT
 
 namespace_definition: "namespace" IDENT "{" (scoped_declaration | function_definition)* "}"
 
-// TODO
-intrinsic: "intrinsic_extension" "{" "}"
+intrinsic: "intrinsic_extension" "{" (native_definition | type_configure)* "}"
+native_definition: func_declaration "Python" ":" PY_BLOCK
+type_configure: "reconfigure_type" type_name "Python" ":" PY_BLOCK
+PY_BLOCK: /{.*?}/s
 
 block_statement: "{" statement* "}"
 

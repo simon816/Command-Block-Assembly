@@ -113,19 +113,22 @@ SelectorType.RANDOM_PLAYER = SelectorType('r', 1)
 
 class Selector(EntitySelection):
 
-    def __new__(cls, type):
+    @classmethod
+    def new(cls, type):
         if type.max_limit == 1:
             return SingleEntitySelector(type)
-        return super().__new__(cls)
+        return cls(type)
 
     def __init__(self, type):
+        assert type.max_limit != 1 or self.__class__ == SingleEntitySelector, \
+               "Use Selector.new"
         self.type = type
         self.other_args = []
         self.simple_args = {}
         self.var_ranges = []
 
     def clone(self):
-        copy = Selector(self.type)
+        copy = self.__class__(self.type)
         copy.other_args.extend(self.other_args)
         copy.simple_args.update(self.simple_args)
         copy.var_ranges.extend(self.var_ranges)
@@ -153,9 +156,6 @@ class Selector(EntitySelection):
 
 # Same as Selector but is also an EntityRef so can be used in more places
 class SingleEntitySelector(Selector, EntityRef):
-
-    def __new__(cls, type):
-        return object.__new__(cls)
 
     @property
     def is_only_one(self):

@@ -1,0 +1,10 @@
+namespace Events {
+    Event placed_block;
+}
+
+intrinsic_extension {
+    reconfigure_type Events Python: {
+        for name, event in the_type.get_static_members().items():
+            event.value.init('minecraft:' + name)
+    }
+}

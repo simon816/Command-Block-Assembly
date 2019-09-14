@@ -2,7 +2,6 @@ from asm_reader import AsmReader
 from cmd_ir.core import *
 from cmd_ir.instructions import *
 from cmd_ir.variables import GlobalScoreVariable, VarType
-from cmd_ir.optimizers import Optimizer
 
 class Assembler:
 
@@ -683,7 +682,6 @@ void OP(int src, int *dest) {
             self.func.end()
             self.func.variables_finalized()
         self.top.end()
-        Optimizer().optimize(self.top)
 
     def write_to_session(self, session):
         return session.load_from_top(self.top)

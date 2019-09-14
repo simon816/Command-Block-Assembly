@@ -35,7 +35,7 @@ class ArraySupport:
 
     def lazy_load_get(self):
         if self.getter is None:
-            func = self.compiler.create_function('_internal/array_get')
+            func = self.compiler.define_function('_internal/array_get')
             arrparam = func.preamble.define(ParameterInsn(VarType.nbt))
             indexparam = func.preamble.define(ParameterInsn(self.index_type))
             # TODO type
@@ -44,7 +44,7 @@ class ArraySupport:
 
     def lazy_load_set(self):
         if self.setter is None:
-            func = self.compiler.create_function('_internal/array_set')
+            func = self.compiler.define_function('_internal/array_set')
             arrparam = func.preamble.define(ParameterInsn(VarType.nbt))
             indexparam = func.preamble.define(ParameterInsn(self.index_type))
             # TODO type

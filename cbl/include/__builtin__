@@ -1,0 +1,108 @@
+type vec3d {
+    decimal x;
+    decimal y;
+    decimal z;
+}
+
+type World {
+    void spawn(EntityType type);
+}
+
+type Entity {
+    RuntimeEntityType type;
+    vec3d pos;
+    //RuntimeEntityPos facing; // TODO
+    World world;
+    Entity operator =(Entity other);
+    SelectorFilter has_tag(string tag);
+    void kill();
+//    void joinTeam(Team team);
+}
+
+type EntityCollection {
+    Entity first();
+    EntityCollection sortNearest();
+    EntityCollection operator =(EntityCollection other);
+}
+
+intrinsic_extension {
+
+    reconfigure_type EntityCollection Python: {
+        from .types import EntityCollection
+        def create_this(name):
+            yield None
+        the_type.override_create_this = create_this
+        the_type.instance_class = EntityCollection
+    }
+
+    EntityCollection EntityCollection::operator =(EntityCollection other) Python: {
+        this.copy_ref_from(args['other'].value)
+        return args['other']
+    }
+
+    Entity EntityCollection::first() Python: {
+        from .types import EntityCollection
+        from .containers import Temporary
+        new_col = EntityCollection()
+        new_col.copy_from(compiler, this)
+        compiler.add_insn(i.SetSelector(new_col.selector, 'limit', i.VirtualString('1')))
+        assert new_col.boolvar is None, "TODO"
+        exec = compiler.insn_def(i.CreateExec())
+        compiler.add_insn(i.ExecAsEntity(exec, new_col.selector))
+        body = compiler.create_block('first')
+        body.set_is_function()
+
+        ptr = compiler.type('Entity').create('first')
+        old_block = compiler.block
+        compiler.block = body
+        compiler.entity_support.assign_pointer_to_sender(ptr)
+        compiler.block = old_block
+
+        compiler.add_insn(i.ExecRun(exec, body))
+        return Temporary(compiler.type('Entity'), ptr)
+    }
+
+    EntityCollection EntityCollection::sortNearest() Python: {
+        from .containers import Temporary
+        new_col = EntityCollection()
+        new_col.copy_from(compiler, this)
+        compiler.add_insn(i.SetSelector(new_col.selector, 'sort', i.VirtualString('nearest')))
+        return Temporary(compiler.type('EntityCollection'), new_col)
+    }
+
+
+}
+
+intrinsic_extension {
+
+    reconfigure_type World Python: {
+        def create_this(name, entity_ptr):
+            yield entity_ptr
+        the_type.override_create_this = create_this
+    }
+
+    void World::spawn(EntityType type) Python: {
+        entity_id = i.VirtualString(args['type'].value.name)
+        block = this._var.at_entity()
+        block.add(i.SpawnEntityInsn(entity_id, None, None))
+    }
+
+    SelectorFilter Entity::has_tag(string tag) Python: {
+        return this.has_tag_filter(self.compiler, args['tag'].value)
+    }
+
+    reconfigure_type Entity Python: {
+        compiler.entity_support.extend_entity_type(the_type)
+    }
+
+    void Entity::kill() Python: {
+        block, sender = this.as_entity()
+        block.add(i.KillInsn(sender))
+    }
+
+    Entity Entity::operator =(Entity other) Python: {
+        compiler.add_insn(i.SetScore(this._var, args['other'].value._var))
+        return args['other']
+    }
+
+}

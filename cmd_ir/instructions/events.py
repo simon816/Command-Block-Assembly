@@ -70,7 +70,7 @@ class RevokeEventAdvancement(SingleCommandInsn):
 
     def get_cmd(self):
         # Advancement name = handler func name
-        return c.Advancement('revoke', Selector(SelectorType.SENDER) \
+        return c.Advancement('revoke', Selector.new(SelectorType.SENDER) \
                              .as_resolve(),
                            'only', c.AdvancementRef(self.func.global_name))
 

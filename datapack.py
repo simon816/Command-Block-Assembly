@@ -3,6 +3,56 @@ import os
 import json
 import zipfile
 
+from placer import Rel
+
+def write_once_property(name, validator, default=None):
+    def setter(self, value):
+        assert name not in self._props
+        validator(value)
+        self._props[name] = value
+    return property(lambda self: self._props.get(name, default), setter)
+
+class DatapackDefinition:
+
+    def __init__(self):
+        self._props = {}
+        self.required = {'namespace', 'place_loc'}
+
+    def validate_namespace(namespace):
+        err = "Invalid namespace %r, should match [0-9a-z_-]+" % namespace
+        assert namespace, err
+        for char in namespace:
+            assert char.isdigit() or (
+                char.isalpha and not char.isupper()) or char in '_-', err
+
+    def validate_place_loc(place_loc):
+        pass
+
+    def validate_spawn_loc(spawn_loc):
+        pass
+
+    def validate_descripiton(description):
+        pass
+
+    namespace = write_once_property('namespace', validate_namespace)
+    place_loc = write_once_property('place_loc', validate_place_loc)
+    spawn_loc = write_once_property('spawn_loc', validate_spawn_loc,
+                                    (Rel(0), Rel(0), Rel(0)))
+    description = write_once_property('description', validate_descripiton,
+                                      "Description")
+
+    @property
+    def gen_cleanup(self):
+        return self._props.get('gen_cleanup', False)
+
+    @gen_cleanup.setter
+    def gen_cleanup(self, value):
+        self._props['gen_cleanup'] = value or self.gen_cleanup
+
+    def validate(self):
+        for req in self.required:
+            assert req in self._props, req
+
 class _ZipWriteIO(io.StringIO):
 
     def __init__(self, path, zip):

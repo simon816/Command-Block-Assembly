@@ -91,7 +91,7 @@ except ImportError:
         grammar = f.read()
     def lark_parser():
         return Lark(grammar, parser='lalr', debug=True,
-                    lexer_callbacks=lexer_callbacks)
+                    lexer_callbacks=lexer_callbacks)#, propagate_positions=True)
 
 class Parser:
 

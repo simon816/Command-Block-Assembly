@@ -1,0 +1,32 @@
+type Text {
+    //Text operator +=(object any);
+    void send_to_all();
+}
+
+intrinsic_extension {
+
+    reconfigure_type Text Python: {
+        def create_this(name):
+            yield compiler.define(name, i.CreateText())
+        the_type.override_create_this = create_this
+
+        from .containers import LiteralString
+        def text_plus_eq(thistype, thisobj, right):
+            text = thistype.as_variable(thisobj)
+            if isinstance(right, LiteralString):
+                value = i.VirtualString(right.value)
+            else:
+                value = right.type.as_variable(right.value)
+            compiler.add_insn(i.TextAppend(text, value))
+            return right
+
+        the_type._make_intrinsic_op('+=', False, text_plus_eq)
+    }
+
+    void Text::send_to_all() Python: {
+        text = this._var
+        sel = compiler.define('all_players', i.CreateSelector(
+            i.SelectorType.ALL_PLAYERS))
+        compiler.add_insn(i.TextSend(text, sel))
+    }
+}

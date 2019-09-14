@@ -1,4 +1,4 @@
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 import abc
 
 from commands import SetConst, Var
@@ -118,6 +118,13 @@ class InstructionSeq:
 
     def is_empty(self):
         return len(self.insns) == 0
+
+    def apply_mapping(self, arg_type, mapping):
+        for insn in self.insns:
+            for arg in insn.query(arg_type):
+                val = arg.val
+                if val in mapping:
+                    arg.val = mapping[val]
 
     def transform(self, func):
         changed = False
@@ -263,6 +270,9 @@ class TopLevel(VariableHolder):
         self.finished = False
         self.store('pos_util', PosUtilEntity())
         self.store('_global_entity', GlobalEntity())
+        # Internal referencing to the toolchain
+        # Needed for the C compiler
+        self.toolchain_vars = {}
 
     def get_or_create_func(self, name):
         return self.scope.get_or_create(name, self._create_func)
@@ -272,6 +282,19 @@ class TopLevel(VariableHolder):
 
     def _create_func(self, name):
         return IRFunction(name, self)
+
+    def define_function(self, name):
+        func = self.get_or_create_func(name)
+        if isinstance(func, ExternFunction):
+            real_func = self.scope[name] = self._create_func(name)
+            real_func.expect_signature(func)
+            mapping = {func: real_func}
+            for var in self.scope.values():
+                if isinstance(var, IRFunction):
+                    for block in var.blocks:
+                        block.apply_mapping(ExternFunction, mapping)
+            func = real_func
+        return func
 
     def create_global(self, namehint, vartype):
         from .instructions import DefineGlobal
@@ -328,11 +351,56 @@ class TopLevel(VariableHolder):
                 strs.append(elem.serialize())
         return '\n'.join(strs)
 
+    @staticmethod
+    def linker(*tops):
+        """NOTE: This will LINK tops together, each TopLevel will not be
+        copied so they will be mutated if the output is mutated"""
+        assert tops
+        if len(tops) == 1:
+            return tops[0]
+        out = TopLevel()
+        externs = defaultdict(list)
+        all_blocks = []
+        for top in tops:
+            assert top.finished
+            out.preamble.insns.extend(top.preamble.insns)
+            out.toolchain_vars.update(top.toolchain_vars)
+            for name, var in top.scope.items():
+                if isinstance(var, VisibleFunction):
+                    if isinstance(var, ExternFunction):
+                        externs[name].append(var)
+                    else:
+                        # Name must be the same as global name
+                        out.store(name, var)
+                        # re-parent function scopes
+                        var.scope.parent = out.scope
+                        all_blocks.extend(var.blocks)
+                else:
+                    out.generate_name(name, var)
+        extern_mapping = {}
+        for name, externlist in externs.items():
+            new_extern = externlist[0]
+            concrete = out.lookup_func(name)
+            replacement = concrete or new_extern
+            for extern in externlist:
+                # Externs of the same name must have same signature
+                extern.expect_signature(replacement)
+                extern_mapping[extern] = replacement
+        # Replace ExternFunction references in all blocks
+        if extern_mapping:
+            for block in all_blocks:
+                block.apply_mapping(ExternFunction, extern_mapping)
+        out.end()
+        return out
+
 class VisibleFunction(FunctionLike):
 
     @property
     def finished(self):
         return False
+
+    def expect_signature(self, other):
+        assert False, "Not implemented"
 
     def get_func_table(self):
         return []
@@ -349,7 +417,7 @@ class VisibleFunction(FunctionLike):
                 if type(argval) == int:
                     assert argtype == VarType.i32, "Literal int on non i32"
                 else:
-                    assert isinstance(argval, Variable), "Arg must be variable"
+                    assert isinstance(argval, Variable), "Arg must be variable, got %s" % argval
                     assert argval.type == argtype, "Arg type mismatch"
         else:
             assert args is None, "Args when no params"
@@ -380,16 +448,38 @@ class ExternFunction(VisibleFunction):
     def finished(self):
         return True
 
+    def writeout(self, writer, temp_gen):
+        assert False, "Exern function not linked: %s" % self._gname
+
     @property
     def global_name(self):
+        assert False, "Extern function cannot be referenced: %s" % self._gname
         return self._gname
 
+    def expect_signature(self, other):
+        # Special logic to check signature once finished
+        if not other.finished:
+            other.expect_signature(self)
+        else:
+            assert self.params == other.params
+            assert self.returns == other.returns
+
     def get_func_table(self):
-        return [self._gname]
+        return []
 
     @property
     def extern_visibility(self):
         return True
+
+    @property
+    def is_pure(self):
+        # Even if the real function is pure don't require the extern to be
+        return False
+
+    @property
+    def is_inline(self):
+        # Even if the real function is inline don't require the extern to be
+        return False
 
     def usage(self):
         pass
@@ -405,6 +495,9 @@ class ExternFunction(VisibleFunction):
         return 'extern function %s %s %s\n' % (self._gname,
                                                serialize(self.params),
                                                serialize(self.returns))
+
+    def __str__(self):
+        return 'Extern(%s)' % self._gname
 
 class IRFunction(VisibleFunction, VariableHolder):
 
@@ -424,6 +517,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._is_inline = False
         self.params = []
         self.returns = []
+        self.__future_expect_sig = []
 
     def _create_super_block(self, name):
         return SuperBlock(name, self)
@@ -486,6 +580,10 @@ class IRFunction(VisibleFunction, VariableHolder):
         return self._finished
 
     @property
+    def finalized(self):
+        return self._varsfinalized
+
+    @property
     def global_name(self):
         assert self.is_defined, self._name
         return self._name
@@ -515,12 +613,22 @@ class IRFunction(VisibleFunction, VariableHolder):
         from .instructions import DefineVariable
         return self.preamble.add(DefineVariable(vartype), True, namehint)
 
+    def expect_signature(self, other):
+        assert other.finished
+        if not self.finished:
+            self.__future_expect_sig.append(other)
+            return
+        assert self.params == other.params
+        assert self.returns == other.returns
+
     def end(self):
         assert self.is_defined
         assert not self.finished
         for block in self.blocks:
             block.end()
         self._finished = True
+        for other in self.__future_expect_sig:
+            self.expect_signature(other)
 
     def get_func_table(self):
         return [block.global_name for block in self.allblocks] \
@@ -605,6 +713,7 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def variables_finalized(self):
         assert self.is_defined, self._name
+        assert not self._varsfinalized, self._name
         stackvars = self.add_entry_exit()
         self.configure_parameters(bool(stackvars))
         if self.is_closed():
@@ -752,3 +861,26 @@ class SuperBlock(BasicBlock):
     def reset(self):
         if self._clear:
             super().reset()
+
+class ObjectFormat:
+
+    VERSION = "1.0.0"
+
+    def __init__(self, top):
+        self.top = top
+        self.__version = ObjectFormat.VERSION
+
+    @staticmethod
+    def load(data):
+        import pickle
+        import zlib
+        obj = pickle.loads(zlib.decompress(data))
+        assert obj.__version == ObjectFormat.VERSION
+        return obj
+
+    @staticmethod
+    def save(top):
+        import pickle
+        import zlib
+        obj = ObjectFormat(top)
+        return zlib.compress(pickle.dumps(obj))

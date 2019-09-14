@@ -1,0 +1,4 @@
+[Datapack]
+namespace=fib
+place location=0 56 0
+description = An example datapack that prints the fibonacci sequence

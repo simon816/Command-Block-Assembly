@@ -17,8 +17,9 @@ STACK_HEAD = -1
 
 def type_check(in_arg, arg_type, arg_name, insn):
     assert isinstance(in_arg, arg_type), ("Incorrect argument type " \
-        + "for argument %s:\nExpect type %s, got %s\n" \
-        + "Instruction: %s") % (arg_name, arg_type, type(in_arg), type(insn))
+        + "for argument '%s':\nExpect type %s, got %s\n" \
+        + "Instruction: %s <%s>") % (arg_name, arg_type, type(in_arg),
+                                insn.insn_name, '>, <'.join(insn.argnlist))
 
 class InsnArgProperty:
 
@@ -42,6 +43,8 @@ class InsnMeta(abc.ABCMeta):
             self.argnlist = names
             for name in names:
                 setattr(self, name, InsnArgProperty(name))
+            if not hasattr(self, 'access'):
+                setattr(self, 'access', [READ for _ in names])
 
 class Insn(metaclass=InsnMeta):
 
@@ -62,6 +65,7 @@ class Insn(metaclass=InsnMeta):
     inline_copyable = True
 
     def __init__(self, *args):
+        assert hasattr(self.__class__, 'insn_name'), self
         assert len(args) == len(self.args), type(self)
         self._real_arg_vals = {}
         self.in_seq = None
@@ -77,10 +81,11 @@ class Insn(metaclass=InsnMeta):
         for name, value in zip(names, args):
             setattr(self, name, value)
         self._allow_set = False
-        assert hasattr(self, 'insn_name'), self
-        if not hasattr(self, 'access'):
-            self.__class__.access = [READ for _ in self.args]
-        self.validate()
+        try:
+            self.validate()
+        except Exception as e:
+            raise ValueError('Validation failed when constructing %s: %s' % (
+                self.insn_name, e))
 
     def __str__(self):
         arglist = ', '.join('%s=%s' % (name, getattr(self, name)) \
@@ -157,6 +162,8 @@ class Insn(metaclass=InsnMeta):
             val = getattr(self, name)
             if val in mapping:
                 val = mapping[val]
+            if type(val) == tuple and mapping:
+                val = tuple(mapping[e] if e in mapping else e for e in val)
             args.append(val)
         ret = cls(*args)
         return ret

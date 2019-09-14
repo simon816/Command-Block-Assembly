@@ -18,10 +18,15 @@ class EntityFilterExpression:
 
 class EntityPointer(UserDefinedInstance):
 
-    def __init__(self, support, type, members, ptr):
-        super().__init__(type, members, ptr)
-        self.sup = support
+    def __init__(self, type, var, var_members, fn_members):
+        # Don't init vars in super, we do it here
+        super().__init__(type, var, {}, fn_members)
+        compiler = type.compiler
+        self.sup = compiler.entity_support
         self.__fixed_var = None
+        self.construct_var('type', RuntimeEntityTypeType(compiler), self)
+        self.construct_var('pos', RuntimeEntityPosType(compiler), self)
+        self.construct_var('world', compiler.type('World'), self)
 
     def set_fixed_var(self, var):
         self.__fixed_var = var
@@ -33,6 +38,15 @@ class EntityPointer(UserDefinedInstance):
             self.sup.compiler.add_insn(i.Call(block))
             return block, self.__fixed_var
         return self.sup.as_entity(self._var)
+
+    def at_entity(self):
+        block = self.sup.compiler.create_block('at_entity')
+        block.set_is_function()
+        as_block, sender = self.as_entity()
+        ex = as_block.add(i.CreateExec(), True)
+        as_block.add(i.ExecAtEntity(ex, sender))
+        as_block.add(i.ExecRun(ex, block))
+        return block
 
     def has_tag_filter(self, compiler, tag):
         res = EntityFilterExpression(self, 'tag', tag)
@@ -59,15 +73,12 @@ class EntityTypeInstance:
 
 class EntityTypeType(Type):
 
-    def create(self, name, create_var, define):
+    def create(self, name):
         return EntityTypeInstance()
 
-class RuntimeEntityProperty:
-    pass
+class RuntimeEntityTypeType(Type):
 
-class RuntimeEntityTypeType(RuntimeEntityProperty, Type):
-
-    def create_for_entity(self, ptr):
+    def create(self, name, ptr):
         return ptr
 
     def operator_eq(self, left, right):
@@ -78,19 +89,15 @@ class RuntimeEntityTypeType(RuntimeEntityProperty, Type):
         res = EntityFilterExpression(left.value, 'type', right.value.name)
         return Temporary(self.compiler.type('SelectorFilter'), res)
 
-class RuntimeEntityWorldType(RuntimeEntityProperty, Type):
+class RuntimeEntityWorldType(Type):
 
-    def create_for_entity(self, ptr):
+    def create(self, name, ptr):
         return ptr
 
 class PositionComponent:
 
-    def __init__(self, compiler, orig_var):
-        self._var = orig_var
+    def __init__(self, compiler, epos, idx):
         self.compiler = compiler
-        self.epos = None
-
-    def init(self, epos, idx):
         assert not epos.has_offset(), "TODO"
         self.epos = epos
         self.path = i.VirtualString('Pos[%d]' % idx)
@@ -104,24 +111,18 @@ class PositionComponent:
     @contextlib.contextmanager
     def open_write(self):
         cblock = self.compiler.block
-        if self.epos is None:
-            yield cblock, self._var
-        else:
-            block, var = self._create_var()
-            self.compiler.block = block
-            yield block, var
-            self.compiler.block = cblock
+        block, var = self._create_var()
+        self.compiler.block = block
+        yield block, var
+        self.compiler.block = cblock
 
     def open_read(self):
-        if self.epos is None:
-            return self._var
-        else:
-            block, var = self._create_var()
-            # Variable stored on global entity
-            res = self.compiler.create_var('poscomp', i.VarType.q10)
-            # Copy into res from the temporary block
-            block.add(i.SetScore(res, var))
-            return res
+        block, var = self._create_var()
+        # Variable stored on global entity
+        res = self.compiler.create_var('pos%d_' % self.idx, i.VarType.q10)
+        # Copy into res from the temporary block
+        block.add(i.SetScore(res, var))
+        return res
 
     def tp_offset(self, offset):
         block, sender = self.epos.ptr.as_entity()
@@ -133,19 +134,22 @@ class PositionComponent:
 
 class PosComponentType(DecimalType):
 
-    def create(self, name, create_var, define):
-        return PositionComponent(self.compiler,
-                                 super().create(name, create_var, define))
+    def create(self, name, epos, index):
+        return PositionComponent(self.compiler, epos, index)
 
-    def _pos_create(self, epos, index):
-        c = PositionComponent(self.compiler, None)
-        c.init(epos, index)
-        return c
+    def new_temporary(self, namehint='tmp'):
+        val = super().create(namehint)
+        super().initialize(val)
+        return Temporary(self.compiler.type('decimal'), val)
 
     def write_ctx(self, instance):
+        if not isinstance(instance.value, PositionComponent):
+            return super().write_ctx(instance)
         return instance.value.open_write()
 
     def as_variable(self, instance):
+        if not isinstance(instance, PositionComponent):
+            return super().as_variable(instance)
         return instance.open_read()
 
     def operator_add_assign(self, left, right):
@@ -165,17 +169,19 @@ class PosComponentType(DecimalType):
 class EntityPosition:
 
     def __init__(self, ptr, xoff=0, yoff=0, zoff=0):
+        self._members = {}
         self.ptr = ptr
         self.xoff = xoff
         self.yoff = yoff
         self.zoff = zoff
+        compiler = ptr.sup.compiler
+        var_type = PosComponentType(compiler)
+        self.add_member('x', var_type, compiler, self, 0)
+        self.add_member('y', var_type, compiler, self, 1)
+        self.add_member('z', var_type, compiler, self, 2)
 
-        cplr = ptr.sup.compiler
-        var_type = PosComponentType(ptr.sup.compiler)
-
-        self.xprop = UserDefSymbol(self, var_type, var_type._pos_create(self, 0))
-        self.yprop = UserDefSymbol(self, var_type, var_type._pos_create(self, 1))
-        self.zprop = UserDefSymbol(self, var_type, var_type._pos_create(self, 2))
+    def add_member(self, name, type, *args):
+        self._members[name] = UserDefSymbol(self, type, type.create(*args))
 
     def offset(self, x, y, z):
         return EntityPosition(self.ptr, self.xoff + x, self.yoff + y,
@@ -184,9 +190,9 @@ class EntityPosition:
     def has_offset(self):
         return any((self.xoff, self.yoff, self.zoff))
 
-class RuntimeEntityPosType(RuntimeEntityProperty, Type):
+class RuntimeEntityPosType(Type):
 
-    def create_for_entity(self, ptr):
+    def create(self, name, ptr):
         return EntityPosition(ptr)
 
     def operator_assign(self, left, right):
@@ -205,12 +211,8 @@ class RuntimeEntityPosType(RuntimeEntityProperty, Type):
         return Temporary(self, left.value.offset(*components))
 
     def get_property(self, instance, prop):
-        if prop == 'x':
-            return instance.value.xprop
-        if prop == 'y':
-            return instance.value.yprop
-        if prop == 'z':
-            return instance.value.zprop
+        if prop in ['x', 'y', 'z']:
+            return instance.value._members[prop]
         return super().get_property(instance, prop)
 
 class EntitySupport:
@@ -220,20 +222,15 @@ class EntitySupport:
         self._get_or_create = None
         self._current_sender = None
 
-    def entity_ctor(self, type, name, create_var, define, var_members, func_members):
-        ptr = create_var(name + '_ptr', i.VarType.i32)
-        members = {}
-        instance = EntityPointer(self, type, members, ptr)
-        for vname, vtype in var_members.items():
-            assert isinstance(vtype, RuntimeEntityProperty), vname
-            val = vtype.create_for_entity(instance)
-            members[vname] = UserDefSymbol(instance, vtype, val)
-        for fname, (ftype, func) in func_members.items():
-            members[fname] = UserDefSymbol(instance, ftype, func)
-        return instance
+    def extend_entity_type(self, type):
+        type.instance_class = EntityPointer
+        type._nbtwrapped = False
+        type.override_create_this = self._create_ptr
+
+    def _create_ptr(self, name):
+        yield self.compiler.create_var(name + '_ptr', i.VarType.i32)
 
     def assign_pointer_to_sender(self, ptr):
-        # TODO add optimization to remove this call if result is not used
         assert isinstance(ptr, EntityPointer)
         if self._get_or_create is None:
             self._get_or_create = self._create_func()
@@ -268,7 +265,7 @@ class EntitySupport:
         return block, sender # sender for convenience
 
     def _create_func(self):
-        func = self.compiler.create_function('_internal/entity_ptr')
+        func = self.compiler.define_function('_internal/entity_ptr')
         func.preamble.add(i.PureInsn())
         retvar = func.preamble.define(i.ReturnVarInsn(i.VarType.i32))
         entry = func.create_block('entry')

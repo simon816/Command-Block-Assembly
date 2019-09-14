@@ -1,0 +1,24 @@
+namespace Game {
+    EntityCollection entities;
+    async void tick();
+}
+
+intrinsic_extension {
+
+    reconfigure_type Game Python: {
+        entities = the_type.get_static_member('entities')
+        insn = i.CreateSelector(i.SelectorType.ALL_ENTITIES)
+        all_entities = compiler.global_def('all_entities', insn)
+        entities.value.selector = all_entities
+    }
+
+    async void Game::tick() Python: {
+        assert not args
+        tr = compiler.func.create_block('yield_trampoline')
+        tr.add(i.ClearCommandBlock())
+        compiler.block.add(i.SetCommandBlock(tr))
+        compiler.block = tr
+        from .containers import LiteralInt
+        return LiteralInt(compiler.type('int'), 1)
+    }
+}

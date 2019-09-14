@@ -398,10 +398,8 @@ class TransformToNodes(Transformer):
 
     def int_literal(self, token):
         # should be int from token processor
-        # TODO since https://github.com/lark-parser/lark/commit/d952f2a
-        # token.value is forced to be a string
-        # assert type(token.value) == int
-        return IntLiteral(val=int(token.value))
+        assert type(token.value) == int
+        return IntLiteral(val=token.value)
 
     def string_literal(self, *tokens):
         # concat all strings together

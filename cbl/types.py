@@ -56,6 +56,13 @@ class Type:
             '--post': self.operator_unary_post_dec
         }
 
+    def __str__(self):
+        return self.__class__.__name__
+
+    @property
+    def typename(self):
+        return self.compiler.types.name_for(self)
+
     def is_binop(self, op):
         return op in self.__binops
 
@@ -66,18 +73,21 @@ class Type:
         assert not args, "%s does not take arguments" % self
         return self
 
-    def create(self, name, create_var, define):
-        return create_var(name, self.ir_type)
+    def create(self, name):
+        return self.compiler.create_var(name, self.ir_type)
 
     def initialize(self, instance):
         pass
+
+    def run_constructor(self, instance, args):
+        assert not args, "%s does not have a constructor" % self
 
     @contextlib.contextmanager
     def write_ctx(self, instance):
         yield self.compiler.block, as_var(instance)
 
     def new_temporary(self, namehint='tmp'):
-        val = self.compiler._create(self, namehint)
+        val = self.create(namehint)
         self.initialize(val)
         return Temporary(self, val)
 
@@ -88,11 +98,23 @@ class Type:
     def create_parameter(self, name):
         return self.compiler.define(name, i.ParameterInsn(self.ir_type))
 
+    def to_parameters(self):
+        return (self.ir_type,)
+
+    def to_returns(self):
+        return (self.ir_type,)
+
     def create_return(self, name):
         return self.compiler.define(name, i.ReturnVarInsn(self.ir_type))
 
     def as_arguments(self, instance):
         return [self.as_variable(instance)]
+
+    def as_returns(self, instance):
+        return (self.as_variable(instance),)
+
+    def effective_var_size(self):
+        return 1
 
     def as_variable(self, instance):
         raise TypeError('%s cannot be converted to a variable' % self)
@@ -112,38 +134,39 @@ class Type:
     def operator_assign(self, left, right):
         self.badop('=')
 
-    def _op_assign(self, left, right, op_func):
-        return self.operator_assign(left, op_func(left, right))
+    def _op_assign(self, left, right, op):
+        return self.operator_assign(left,
+                                    self.dispatch_operator(op, left, right))
 
     def operator_mul_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_mul)
+        return self._op_assign(left, right, '*')
 
     def operator_div_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_div)
+        return self._op_assign(left, right, '/')
 
     def operator_mod_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_mod)
+        return self._op_assign(left, right, '%')
 
     def operator_add_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_add)
+        return self._op_assign(left, right, '+')
 
     def operator_sub_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_sub)
+        return self._op_assign(left, right, '-')
 
     def operator_shl_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_shl)
+        return self._op_assign(left, right, '<<')
 
     def operator_shr_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_shr)
+        return self._op_assign(left, right, '>>')
 
     def operator_and_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_and)
+        return self._op_assign(left, right, '&')
 
     def operator_xor_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_xor)
+        return self._op_assign(left, right, '^')
 
     def operator_or_assign(self, left, right):
-        return self._op_assign(left, right, self.operator_or)
+        return self._op_assign(left, right, '|')
 
     def operator_log_or(self, left, right):
         self.badop('||')
@@ -261,7 +284,7 @@ class CmpOperatorMixin:
         if invert:
             if_false, if_true = if_true, if_false
         bool = self.compiler.type('bool')
-        res = self.compiler._create(bool, 'cmpres')
+        res = bool.create('cmpres')
         retblock = self.compiler.create_block('after_cmp')
         rval = as_var(right)
         if type(rval) == int:
@@ -313,7 +336,7 @@ class LogOperatorMixin:
 
     def operator_log_or(self, left, right):
         bool = self.compiler.type('bool')
-        res = self.compiler._create(bool, 'logorres')
+        res = bool.create('logorres')
         ret = Temporary(bool, res)
         if_true = self.compiler.create_block('logor_true')
         if_false = self.compiler.create_block('logor_false')
@@ -332,7 +355,7 @@ class LogOperatorMixin:
 
     def operator_log_and(self, left, right):
         bool = self.compiler.type('bool')
-        res = self.compiler._create(bool, 'logandres')
+        res = bool.create('logandres')
         ret = Temporary(bool, res)
         if_true = self.compiler.create_block('logand_true')
         if_false = self.compiler.create_block('logand_false')
@@ -351,7 +374,7 @@ class LogOperatorMixin:
 
     def operator_unary_log_not(self, instance):
         bool = self.compiler.type('bool')
-        res = self.compiler._create(bool, 'not')
+        res = bool.create('not')
         is_zero = self.compiler.create_block('is_zero')
         non_zero = self.compiler.create_block('non_zero')
         self.compiler.add_insn(i.RangeBr(as_var(instance), 0, 0, is_zero,
@@ -508,14 +531,16 @@ class IntegerOperators(NumericalOperators, LogOperatorMixin,
     pass
 
 class VoidType(Type):
-    pass
+
+    def to_returns(self):
+        return tuple()
 
 class StringInstance:
     pass
 
 class StringType(Type):
 
-    def create(self, name, create_var, define):
+    def create(self, name):
         return StringInstance()
 
 class BoolType(LogOperatorMixin, Type):
@@ -603,7 +628,7 @@ class EntityLocalIntType(Type):
         super().__init__(compiler)
         self.int_type = int_type
 
-    def create(self, name, create_var, define):
+    def create(self, name):
         return self.compiler.global_def(name, i.DefineObjective(
             i.VirtualString(name), None))
 
@@ -622,27 +647,83 @@ class EntityLocalIntType(Type):
         assert isinstance(entity.value, (EntityPointer, EntitySelectorPointer))
         return self._create_bind(elocal, entity.value)
 
+class FunctionContainer:
+
+    def __init__(self, fn_type, compiler, name):
+        self.fn_type = fn_type
+        self.name = name
+        self.compiler = compiler
+        self.__real_fn = None
+        self.__extern_fn = None
+
+    def get_or_create_definition(self):
+        if not self.__real_fn:
+            self.__real_fn = self.compiler.define_function(self.name)
+        return self.__real_fn
+
+    @property
+    def ir_param_types(self):
+        p_types = []
+        for p in self.fn_type.params:
+            p_types.extend(p.type.to_parameters())
+        return tuple(p_types)
+
+    @property
+    def ir_ret_types(self):
+        return tuple(self.fn_type.ret_type.to_returns())
+
+    @property
+    def ir_func(self):
+        if not self.__real_fn:
+            return self._get_or_create_extern()
+        return self.__real_fn
+
+    def _get_or_create_extern(self):
+        from cmd_ir.core import ExternFunction
+        if self.__extern_fn is None:
+            extern = ExternFunction(self.name, self.ir_param_types,
+                                    self.ir_ret_types)
+            self.compiler.top.store(self.name, extern)
+            self.__extern_fn = extern
+        return self.__extern_fn
+
+    def extern_if_needed(self):
+        if self.__real_fn is None:
+            print("externing", self.name)
+            self._get_or_create_extern()
+
+    def set_as_intrinsic(self, intrinsic):
+        assert not self.fn_type.is_intrinsic
+        self.fn_type.is_intrinsic = True
+        self.__real_fn = intrinsic
+
+    def intrinsic_invoke(self, instance, args):
+        assert isinstance(self.__real_fn, IntrinsicFunction)
+        return self.__real_fn.invoke(instance, args)
+
+    def invoke(self, args, ret_args):
+        self.compiler.add_insn(i.Invoke(self.ir_func, args, ret_args))
+
 class FunctionType(Type):
 
     def __init__(self, compiler, ret_type, params, inline, async):
         super().__init__(compiler)
-        assert not inline, "TODO"
         self.ret_type = ret_type
         self.params = tuple(params)
         self.is_intrinsic = False
+        self.is_inline = inline
         self.is_async = async
 
-    def create(self, name, create_var, define):
-        return self.compiler.create_function(name)
+    def create(self, name):
+        return FunctionContainer(self, self.compiler, name)
 
     def intrinsic_invoke(self, instance, args):
         assert self.is_intrinsic, "Function is not intrinsic"
-        assert isinstance(instance.value, IntrinsicFunction)
-        return instance.value.invoke(instance, args)
+        return instance.value.intrinsic_invoke(instance, args)
 
     def invoke(self, instance, args, ret_args):
         assert not self.is_intrinsic, "Cannot call invoke on intrinsic"
-        self.compiler.add_insn(i.Invoke(instance.value, args, ret_args))
+        return instance.value.invoke(args, ret_args)
 
 class ArrayType(Type):
 
@@ -718,98 +799,11 @@ class ArrayTypeElementProxy(WrappedType):
         assert isinstance(left, ArrayElementHolder)
         return self.compiler.array_support.set(left.array, left.index, right)
 
-class EntityCollection:
-
-    def __init__(self, selector=None):
-        self.selector = selector
-        self.boolvar = None
-
-    def copy_ref_from(self, other):
-        self.selector = other.selector
-        self.boolvar = other.boolvar
-
-    def copy_from(self, compiler, other):
-        self.selector = compiler.insn_def(i.CopyInsn(other.selector))
-        self.boolvar = other.boolvar
-
-    def add_bool_var(self, var):
-        if self.boolvar is None:
-            self.boolvar = var
-        else:
-            self.boolvar = self.boolvar.type.dispatch_operator('&&',
-                                                          self.boolvar, var)
-
-class EntityCollectionType(Type):
-
-    def create(self, name, create_var, define):
-        return EntityCollection()
-
-    def operator_assign(self, left, right):
-        assert isinstance(right.value, EntityCollection)
-        left.value.copy_ref_from(right.value)
-        return right
-
-    def get_property(self, instance, prop):
-        if prop == 'first':
-            ftype = FunctionType(self.compiler,
-                                 self.compiler.type('Entity'),
-                                 tuple(), False, False)
-            ftype.is_intrinsic = True
-            return Temporary(ftype, FirstInCollectionFn(instance.value,
-                                                        self.compiler))
-        if prop == 'sortNearest':
-            ftype = FunctionType(self.compiler,
-                                 self.compiler.type('EntityCollection'),
-                                 tuple(), False, False)
-            ftype.is_intrinsic = True
-            return Temporary(ftype, SortCollectionNearestFn(instance.value,
-                                                        self.compiler))
-        return super().get_property(instance, prop)
-
 class IntrinsicFunction(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def invoke(self, instance, args):
         pass
-
-class FirstInCollectionFn(IntrinsicFunction):
-
-    def __init__(self, collection, compiler):
-        new_col = EntityCollection()
-        new_col.copy_from(compiler, collection)
-        compiler.add_insn(i.SetSelector(new_col.selector, 'limit',
-                                        i.VirtualString('1')))
-        self.col = new_col
-        self.compiler = compiler
-
-    def invoke(self, instance, args):
-        assert self.col.boolvar is None, "TODO"
-        exec = self.compiler.insn_def(i.CreateExec())
-        self.compiler.add_insn(i.ExecAsEntity(exec, self.col.selector))
-        body = self.compiler.create_block('first')
-        body.set_is_function()
-
-        ptr = self.compiler._create(self.compiler.type('Entity'), 'first')
-        old_block = self.compiler.block
-        self.compiler.block = body
-        self.compiler.entity_support.assign_pointer_to_sender(ptr)
-        self.compiler.block = old_block
-
-        self.compiler.add_insn(i.ExecRun(exec, body))
-        return Temporary(self.compiler.type('Entity'), ptr)
-
-class SortCollectionNearestFn(IntrinsicFunction):
-
-    def __init__(self, collection, compiler):
-        new_col = EntityCollection()
-        new_col.copy_from(compiler, collection)
-        compiler.add_insn(i.SetSelector(new_col.selector, 'sort',
-                                        i.VirtualString('nearest')))
-        self.col = new_col
-        self.compiler = compiler
-
-    def invoke(self, instance, args):
-        return Temporary(self.compiler.type('EntityCollection'), self.col)
 
 class SelectorFilterType(Type):
     pass
@@ -838,7 +832,7 @@ class EventNameInstance:
 
 class EventType(Type):
 
-    def create(self, name, create_var, define):
+    def create(self, name):
         return EventNameInstance(self.compiler)
 
 class BlockTypeInstance:
@@ -850,19 +844,30 @@ class BlockTypeInstance:
         assert self.__name is None
         self.__name = name
 
+class ItemTypeInstance:
+
+    def __init__(self):
+        self.__name = None
+
+    def init(self, name):
+        assert self.__name is None
+        self.__name = name
+
 class BlockTypeType(Type):
 
-    def create(self, name, create_var, define):
+    def create(self, name):
         return BlockTypeInstance()
 
-class Vector3dType(Type):
+class ItemTypeType(Type):
 
-    pass
+    def create(self, name):
+        return ItemTypeInstance()
 
 class Types:
 
     def __init__(self):
         self._tdict = {}
+        self._reverse = {}
         self._flatnames = set()
 
     def add(self, type_name, type_instance):
@@ -870,6 +875,7 @@ class Types:
             assert isinstance(self._tdict[type_name], UnfinishedType), \
                    "Type %s already defined" % type_name
         self._tdict[type_name] = type_instance
+        self._reverse[type_instance] = type_name
 
     def lookup(self, type_name):
         return self._tdict.get(type_name)
@@ -884,17 +890,52 @@ class Types:
         self._flatnames.add(name)
         return name
 
+    def name_for(self, type):
+        return self._reverse[type]
+
 class UnfinishedType(Type):
     pass
+
+# Meta-type: Actions performed on types themselves
+class TypeType(Type):
+
+    def constructor(self, instance, args):
+        the_type = instance.value
+        obj = the_type.create(the_type.typename + '_anon')
+        the_type.run_constructor(obj, args)
+        return Temporary(the_type, obj)
+
+    def get_property(self, instance, prop):
+        the_type = instance.value
+        return the_type.get_static_member(prop)
 
 UserDefSymbol = namedtuple('UserDefSymbol', 'this type value')
 
 class UserDefinedInstance:
 
-    def __init__(self, type, members, var):
+    def __init__(self, type, var, var_members, fn_members):
         self._type = type
-        self.__members = members
+        self.__members = {}
+        for vname, vtype in var_members.items():
+            self.construct_var(vname, vtype)
+        for fname, (ftype, func) in fn_members.items():
+            self.construct_fn(fname, ftype, func)
         self._var = var
+        self.custom_init()
+
+    def custom_init(self):
+        pass
+
+    def construct_member(self, name, type, value):
+        assert name not in self.__members
+        self.__members[name] = UserDefSymbol(self, type, value)
+
+    def construct_var(self, name, type, *args):
+        val = type.create(name, *args)
+        self.construct_member(name, type, val)
+
+    def construct_fn(self, name, type, func):
+        self.construct_member(name, type, func)
 
     def init(self):
         for m in self.__members.values():
@@ -903,56 +944,103 @@ class UserDefinedInstance:
     def get_member(self, prop):
         return self.__members[prop]
 
-    def _all_vars(self):
-        return [m.value for (name, m) in self.__members.items() \
-                if self._type.is_var(name)]
+    def _all_vars(self, transform):
+        vars = []
+        for (name, m) in self.__members.items():
+            if self._type.is_var(name):
+                vars.extend(transform(m.type, m.value))
+        return vars
 
-    def make_param_args(self):
+    def to_arguments(self):
         if self._var is None:
-            return self._all_vars()
+            return self._all_vars(lambda t, v: t.as_arguments(v))
+        return [self._var]
+
+    def to_returns(self):
+        if self._var is None:
+            return self._all_vars(lambda t, v: t.as_returns(v))
         return [self._var]
 
     def make_ret_args(self):
+        assert False, "TODO"
         if self._var is None:
             return self._all_vars()
         return []
 
 class UserDefFuncType(FunctionType):
 
-    def __init__(self, type, ret_type, params, inline, async):
-        new_params = [Parameter(type, 'this')]
-        if params is not None:
-            new_params.extend(params)
+    def __init__(self, type, ret_type, params, inline, async, static):
+        if not static:
+            new_params = [Parameter(type, 'this')]
+            if params is not None:
+                new_params.extend(params)
+        else:
+            new_params = params
         super().__init__(type.compiler, ret_type, new_params, inline, async)
         self.user_type = type
+        self.is_static = static
 
-    def create(self, name, create_var, define):
-        return super().create(self.user_type.namespace + '/' + name,
-                              create_var, define)
+    def create(self, name):
+        return super().create(self.user_type.namespace + '/' + name)
 
     def invoke(self, instance, args, ret_args):
-        new_args = instance.this.make_param_args()
+        if self.is_static:
+            return super().invoke(instance, args, ret_args)
+        new_args = instance.this.to_arguments()
         if args is not None:
             new_args.extend(args)
-        new_ret = instance.this.make_ret_args()
+        # TODO Need to create return variables to propagate changes
+        # back to parent object
+        new_ret = [] #instance.this.make_ret_args()
         if ret_args is not None:
             new_ret.extend(ret_args)
         return super().invoke(instance, tuple(new_args) if new_args else None,
                                         tuple(new_ret) if new_ret else None)
 
-class UserDefNsFuncType(FunctionType):
+class OperatorDispatcher:
 
-    def __init__(self, type, ret_type, params, inline, async):
-        super().__init__(type.compiler, ret_type, params, inline, async)
-        self.user_type = type
-        self.__val = None
+    def __init__(self, user_type, opname):
+        self.user_type = user_type
+        self.opname = opname
+        self.__resolutions = set()
 
-    def create(self, name, create_var, define):
-        # Singleton
-        if self.__val is None:
-            self.__val = super().create(self.user_type.namespace + '/' + name,
-                                        create_var, define)
-        return self.__val
+    def add_resolution(self, ret_type, params, inline):
+        name = self.name_for_types(p.type for p in params)
+        assert name not in self.__resolutions, name
+        self.__resolutions.add(name)
+        type = UserDefFuncType(self.user_type, ret_type, params,
+                               inline, False, False)
+        func = type.create(name)
+        return name, type, func
+
+    def get_resolution(self, params):
+        name = self.name_for_types(p.type for p in params)
+        assert name in self.__resolutions, name
+        return name
+
+    def name_for_types(self, types):
+        # use special characters to not conflict with user defined names
+        return 'op/%s-%s' % (self.opname,
+                             '-'.join(type.typename for type in types))
+
+    def dispatch(self, thisobj, args):
+        name = self.name_for_types(a.type for a in args)
+        assert name in self.__resolutions
+        fnsym = thisobj.get_member(name)
+        return self.user_type.compiler.function_call_expr(fnsym, *args)
+
+class IntrinsicOperator(OperatorDispatcher):
+
+    def __init__(self, user_type, opname, func):
+        super().__init__(user_type, opname)
+        self.__func = func
+
+    def add_resolution(self, ret_type, params, inline):
+        raise TypeError('Operator %s is intrinsic, cannot override' \
+                        % self.opname)
+
+    def dispatch(self, thisobj, args):
+        return self.__func(self.user_type, thisobj, *args)
 
 class UserDefinedType(Type):
 
@@ -961,9 +1049,15 @@ class UserDefinedType(Type):
         self.name = name
         self.__var_members = {}
         self.__fn_members = {}
+        self.__static_members = {}
+        self.__operators = {}
         self.namespace = compiler.types._safe_name(name)
-        self._nbtwrapped = True
-        self._intrinsic_ctor = None
+        self._nbtwrapped = False
+        self.__variables_finished = False
+        self.__finished = False
+        self.instance_class = UserDefinedInstance
+        self.override_create_this = None
+        self.is_namespace_type = False
 
     @property
     def ir_type(self):
@@ -974,45 +1068,61 @@ class UserDefinedType(Type):
     def __str__(self):
         return 'UserType(%s)' % self.name
 
-    def create_this(self, name, create_var, define):
+    @contextlib.contextmanager
+    def create_this(self, name, args):
+        if self.override_create_this is not None:
+            yield from self.override_create_this(name, *args)
+            return
+        assert not args
         if self._nbtwrapped:
-            this = create_var(name, i.VarType.nbt)
+            this = self.compiler.create_var(name, i.VarType.nbt)
+
             def create_sub_var(subname, var_type):
                 path = i.VirtualString('.' + subname)
-                return define(i.NBTSubPath(this, path, var_type))
-            return this, create_sub_var
+                insn = i.NBTSubPath(this, path, var_type)
+                return self.compiler.do_define(insn)
+
         else:
+            this = None
+
+            create_var = self.compiler.create_var
             def create_sub_var(subname, var_type):
                 return create_var(name + '_' + subname, var_type)
-            return None, create_sub_var
 
-    def create(self, name, create_var, define):
-        print("Create", name)
-        if self._intrinsic_ctor is not None:
-            return self._intrinsic_ctor(self, name, create_var, define,
-                                        self.__var_members, self.__fn_members)
-        this, create_sub_var = self.create_this(name, create_var, define)
-        members = {}
-        instance = UserDefinedInstance(self, members, this)
-        for mname, mtype in self.__var_members.items():
-            val = mtype.create(mname, create_sub_var, define)
-            members[mname] = UserDefSymbol(instance, mtype, val)
-        for fname, (ftype, func) in self.__fn_members.items():
-            members[fname] = UserDefSymbol(instance, ftype, func)
-        return instance
+        with self.compiler.set_create_var(create_sub_var):
+            yield this
+
+    def create(self, name, *args):
+        with self.create_this(name, args) as this:
+            return self.instance_class(self, this, self.__var_members,
+                                       self.__fn_members)
 
     def initialize(self, instance):
         instance.init()
 
+    def run_constructor(self, instance, args):
+        name = 'ctor'
+        assert name in self.__operators
+        self.__operators[name].dispatch(instance, args)
+
     def as_variable(self, instance):
+        assert isinstance(instance, self.instance_class), instance
         assert instance._var is not None, "Cannot convert %s to variable" % self
         return instance._var
 
     def as_arguments(self, instance):
-        return instance.make_param_args()
+        return instance.to_arguments()
+
+    def as_returns(self, instance):
+        return instance.to_returns()
+
+    def effective_var_size(self):
+        if self._nbtwrapped:
+            return 1
+        return sum(t.effective_var_size() for t in self.__var_members.values())
 
     def create_parameter(self, name):
-        print("Create param", name)
+        #print("Create param", name)
         if self._nbtwrapped:
             this = super().create_parameter(name)
             def create_var(subname, var_type):
@@ -1021,7 +1131,16 @@ class UserDefinedType(Type):
         else:
             def create_var(vname, var_type):
                 return self.compiler.define(vname, i.ParameterInsn(var_type))
-        return self.create(name, create_var, self.compiler.do_define)
+        with self.compiler.set_create_var(create_var):
+            return self.create(name)
+
+    def to_parameters(self):
+        if self._nbtwrapped:
+            return super().to_parameters()
+        params = []
+        for m_type in self.__var_members.values():
+            params.extend(m_type.to_parameters())
+        return params
 
     def create_return(self, name):
         if self._nbtwrapped:
@@ -1032,7 +1151,16 @@ class UserDefinedType(Type):
         else:
             def create_var(vname, var_type):
                 return self.compiler.define(vname, i.ReturnVarInsn(var_type))
-        return self.create(name, create_var, self.compiler.do_define)
+        with self.compiler.set_create_var(create_var):
+            return self.create(name)
+
+    def to_returns(self):
+        if self._nbtwrapped:
+            return super().to_returns()
+        returns = []
+        for m_type in self.__var_members.values():
+            returns.extend(m_type.to_parameters())
+        return returns
 
     def get_property(self, instance, prop):
         if self.has_member(prop):
@@ -1041,33 +1169,94 @@ class UserDefinedType(Type):
 
     def dispatch_operator(self, op, left, right=None):
         opname = self._opname(op, right is None)
-        if opname in self.__fn_members:
-            sym = left.value.get_member(opname)
+        if opname in self.__operators:
             args = [right] if right is not None else []
-            return self.compiler.function_call_expr(sym, *args)
+            return self.__operators[opname].dispatch(left.value, args)
         return super().dispatch_operator(op, left, right)
 
     def operator_assign(self, left, right):
         assert right.type == self
-        self.compiler.add_insn(i.SetScore(self.as_variable(left.value),
-                                          as_var(right)))
+        if self._nbtwrapped:
+            self.compiler.add_insn(i.SetScore(as_var(left), as_var(right)))
+        else:
+            # Pair each var member
+            for var in self.__var_members.keys():
+                lvar = left.value.get_member(var)
+                rvar = right.value.get_member(var)
+                lvar.type.dispatch_operator('=', lvar, rvar)
         return right
 
     def has_member(self, name):
-        return name in self.__var_members or name in self.__fn_members
+        return name in self.__var_members or name in self.__fn_members \
+               or name in self.__static_members
 
     def is_var(self, name):
         return name in self.__var_members
 
     def add_var_member(self, name, type):
+        assert not self.__finished
         assert not self.has_member(name)
+        assert not self.__variables_finished
+        assert not self.is_namespace_type
         self.__var_members[name] = type
 
-    def add_func_member(self, name, ret_type, params, inline, async):
+    def add_static_var_member(self, name, member):
+        assert not self.__finished
         assert not self.has_member(name)
-        type = UserDefFuncType(self, ret_type, params, inline, async)
-        func = type.create(name, None, None) # TODO
-        self.__fn_members[name] = (type, func)
+        self.__static_members[name] = member
+
+    def _finish_vars(self):
+        if self.__variables_finished:
+            return
+        self.__variables_finished = True
+        # Initially we are not NBT wrapped
+        size = self.effective_var_size()
+        # Become NBT wrapped if size exceeds 3 variables
+        if size > 3:
+            self._nbtwrapped = True
+
+    def add_func_member(self, name, ret_type, params, inline, async, static):
+        assert not self.__finished
+        self._finish_vars()
+        assert not self.has_member(name)
+        if self.is_namespace_type:
+            assert static
+        type = UserDefFuncType(self, ret_type, params, inline, async, static)
+        func = type.create(name)
+        if static:
+            self.__static_members[name] = Temporary(type, func)
+        else:
+            self.__fn_members[name] = (type, func)
+        return type, func
+
+    def get_func_member(self, name, ret_type, params, inline, async, static):
+        # TODO check types
+        return self.__fn_members[name]
+
+    def get_static_member(self, name):
+        return self.__static_members[name]
+
+    def add_constructor(self, params, inline):
+        if self.__finished:
+            return self.define_constructor(params, inline)
+        self._finish_vars()
+        # use operator dispatcher since it does everything we need already
+        name = 'ctor'
+        if name not in self.__operators:
+            self.__operators[name] = OperatorDispatcher(self, name)
+        disp = self.__operators[name]
+        fname, type, func = disp.add_resolution(self.compiler.type('void'),
+                                                params, inline)
+        self.__fn_members[fname] = (type, func)
+        return type, func
+
+    def define_constructor(self, params, inline):
+        name = 'ctor'
+        assert name in self.__operators
+        disp = self.__operators[name]
+        fname = disp.get_resolution(params)
+        type, func = self.__fn_members[fname]
+        # TODO check types
         return type, func
 
     def _opname(self, op, unary):
@@ -1075,29 +1264,55 @@ class UserDefinedType(Type):
 
     def overload_operator(self, op, ret_type, params, inline):
         unary = len(params) == 0
+        if self.__finished:
+            return self.define_operator(op, ret_type, unary, params, inline)
+        self._finish_vars()
         if unary:
             assert self.is_unop(op), op
         else:
             assert len(params) == 1, op
             assert self.is_binop(op), op
         opname = self._opname(op, unary)
-        assert opname not in self.__fn_members
-        type = UserDefFuncType(self, ret_type, params, inline, False)
-        func = type.create('op/' + opname, None, None) # TODO
-        self.__fn_members[opname] = (type, func)
+        if opname not in self.__operators:
+            self.__operators[opname] = OperatorDispatcher(self, opname)
+        disp = self.__operators[opname]
+        fname, type, func = disp.add_resolution(ret_type, params, inline)
+        self.__fn_members[fname] = (type, func)
         return type, func
 
+    def define_operator(self, op, ret_type, unary, params, inline):
+        opname = self._opname(op, unary)
+        disp = self.__operators[opname]
+        fname = disp.get_resolution(params)
+        type, func = self.__fn_members[fname]
+        # TODO check types
+        return type, func
+
+    def get_static_members(self):
+        return dict(self.__static_members)
+
     def finalize(self):
-        # Need to create return variables to return any mutation
-        assert self._nbtwrapped, "TODO"
+        self._finish_vars()
+        self.__finished = True
 
     def _make_intrinsic(self, name, func):
-        assert name in self.__fn_members
-        type, old_func = self.__fn_members[name]
-        old_func.create_block('entry').add(i.Return())
-        old_func.end()
-        type.is_intrinsic = True
-        self.__fn_members[name] = (type, func)
+        if name in self.__fn_members:
+            type, fn_container = self.__fn_members[name]
+        else:
+            assert name in self.__static_members
+            sym = self.__static_members[name]
+            assert isinstance(sym.type, FunctionType)
+            type, fn_container = sym.type, sym.value
+        fn_container.set_as_intrinsic(func)
+
+    def _set_intrinsic_op(self, op, params, func):
+        opname = self._opname(op, not params)
+        name = self.__operators[opname].name_for_types(p.type for p in params)
+        self._make_intrinsic(name, func)
+
+    def _make_intrinsic_op(self, op, unary, func):
+        opname = self._opname(op, unary)
+        self.__operators[opname] = IntrinsicOperator(self, opname, func)
 
 chr_name = {
     '=': 'eq',
@@ -1117,47 +1332,23 @@ chr_name = {
     ']': 'csq',
 }
 
-class UserDefNsInstance:
-    pass
+class EntityCollection(UserDefinedInstance):
 
-class UserDefinedNamespace(Type):
+    def custom_init(self):
+        self.selector = None
+        self.boolvar = None
 
-    def __init__(self, compiler, name):
-        super().__init__(compiler)
-        self.name = name
-        self.namespace = compiler.types._safe_name(name)
-        self.__properties = {}
+    def copy_ref_from(self, other):
+        self.selector = other.selector
+        self.boolvar = other.boolvar
 
-    def __str__(self):
-        return 'UserNamespace(%s)' % self.name
+    def copy_from(self, compiler, other):
+        self.selector = compiler.insn_def(i.CopyInsn(other.selector))
+        self.boolvar = other.boolvar
 
-    def create(self, name, create_var, define):
-        return UserDefNsInstance()
-
-    def get_property(self, instance, prop):
-        if prop in self.__properties:
-            return self.__properties[prop]
-        return super().get_property(instance, prop)
-
-    def add_var(self, name, symbol):
-        assert name not in self.__properties
-        self.__properties[name] = symbol
-
-    # Temp
-    def add_func_member(self, name, ret_type, params, inline, async):
-        assert name not in self.__properties
-        type = UserDefNsFuncType(self, ret_type, params, inline, async)
-        func = type.create(name, None, None)
-        self.__properties[name] = Temporary(type, func)
-        return type, func
-
-    def _get_properties(self):
-        return self.__properties
-
-    def _make_intrinsic(self, name, func):
-        assert name in self.__properties
-        old_fn = self.__properties[name]
-        old_fn.value.create_block('entry').add(i.Return())
-        old_fn.value.end()
-        old_fn.type.is_intrinsic = True
-        self.__properties[name] = Temporary(old_fn.type, func)
+    def add_bool_var(self, var):
+        if self.boolvar is None:
+            self.boolvar = var
+        else:
+            self.boolvar = self.boolvar.type.dispatch_operator('&&',
+                                                          self.boolvar, var)

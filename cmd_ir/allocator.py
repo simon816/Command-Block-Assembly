@@ -10,6 +10,9 @@ class Allocator(TopVisitor):
         return super().visit(top)
 
     def visit_global(self, name, var):
+        if var.proxy_set:
+            # Special case for assember - it already allocates
+            return name, var
         var.set_proxy(GlobalScoreVariable(var.type, Var('g%d_%s' % (
             self.offset, name))))
         self.offset += 1
@@ -22,6 +25,9 @@ class Allocator(TopVisitor):
 class FuncAllocator(FuncVisitor):
 
     def visit(self, func):
+        # Special case for assember - it already finalizes
+        if func.finalized:
+            return
         self.reg_offset = 0
         self.nbt_offset = 0
         self.use_scores = True
@@ -40,8 +46,11 @@ class FuncAllocator(FuncVisitor):
             self.nbt_offset += 1
         return name, var
 
-def default_allocation(top):
-    optimizer = Optimizer()
-    optimizer.optimize(top)
-    Allocator().visit(top)
-    optimizer.optimize(top)
+def default_allocation(top, opt_level):
+    if opt_level:
+        optimizer = Optimizer()
+        optimizer.optimize(top)
+        Allocator().visit(top)
+        optimizer.optimize(top)
+    else:
+        Allocator().visit(top)
