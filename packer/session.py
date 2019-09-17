@@ -1,7 +1,7 @@
 from commands import CommandBlock, Cmd
-from placer import CommandPlacer
+from .placer import CommandPlacer
 from cmd_ir.core import FuncWriter
-from datapack import Advancement
+from .datapack import Advancement
 
 class Scope:
 

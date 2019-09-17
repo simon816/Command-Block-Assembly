@@ -1,5 +1,5 @@
-from session import Session
-from assembler import Assembler
+from packer.session import Session
+from asm import Assembler
 
 from cmd_ir.core_types import CmdFunction, VirtualString
 from cmd_ir.core import Pragma

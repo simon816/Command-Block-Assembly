@@ -20,7 +20,7 @@ MCC is composed of the following components:
 
 Command Block Language (CBL) is a C++ inspired programming language specifically designed for Minecraft commands.
 
-CBL has been designed to abstract away from commands to the point where you aren't even aware of the underlying limitations.
+CBL has been designed to abstract away from commands to the point where you don't need to consider the underlying mechanics.
 
 The syntax is similar to C++ in a lot of ways. It also takes from Java's idea of having no pointers in the language.
 
@@ -280,17 +280,19 @@ To get an idea of the hierarchy of components, here is a diagram:
 |        Command IR         |   |  Datapack Definition  |
 |                           |   +---------|-------------+
 +---------------------------+----+        |
-|                                |  <-----+
-|      Command Abstraction       |
-|                                |
-+--------------------------------+----------------------+
-|                  Minecraft Commands                   |
+|                                |  <-----+-----+
+|      Command Abstraction       |              |
++--------------------------------+---------+    |
+|             Minecraft Commands           |    v
++------------------------------------------+------------+
+|                       Datapack                        |
 +-------------------------------------------------------+
 ```
 
 # Running MCC
 
 You will need to generate the standalone parsers (from [Lark](https://github.com/lark-parser/lark)) using the `./build-parsers.sh` script.
+If on Windows, run the `python` commands in that script from the root of this project.
 
 The Lark python package needs to be installed, `pip` can be used on the `requirements.txt` file. It is recommended to use `virtualenv`.
 
@@ -302,14 +304,14 @@ Alternatively, you don't need to create the standalone parsers if you keep Lark 
 
 MCC is implemented in python. Currently it is not bundled into an executable so it must be invoked using the python interpreter.
 
-MCC is invoked by `python main.py` (If python 3 is not your default python command then run `python3 main.py`).
+MCC is invoked by `python mcc.py` (If python 3 is not your default python command then run `python3 mcc.py`).
 
 Command help text:
 ```
-usage: main.py [-h] [-o outfile] [-E] [-c] [-S] [-dump-asm] [-O {0,1}]
-               [-dump-ir] [--dummy-datapack] [--stats] [--dump-commands]
-               [--c-page-size SIZE]
-               infile [infile ...]
+usage: mcc.py [-h] [-o outfile] [-E] [-c] [-S] [-dump-asm] [-O {0,1}]
+              [-dump-ir] [--dummy-datapack] [--stats] [--dump-commands]
+              [--c-page-size SIZE]
+              infile [infile ...]
 
 Command line tool for the Minecraft Compiler Collection
 
@@ -372,7 +374,7 @@ are ignored if they are not relevant for the desired action.
 
 ## Examples
 
-Compiling `examples/fib.asm` into a datapack` fib.zip`:
+Compiling `examples/fib.asm` into a datapack `fib.zip`:
 ```
 python main.py examples/fib.asm examples/fib.dpd
 ```

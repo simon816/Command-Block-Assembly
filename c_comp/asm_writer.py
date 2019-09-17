@@ -1,4 +1,4 @@
-from asm_reader import AsmReader
+from asm.asm_reader import AsmReader
 
 class AsmStringBackend:
 

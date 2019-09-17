@@ -3,7 +3,7 @@ import os
 import json
 import zipfile
 
-from placer import Rel
+from .placer import Rel
 
 def write_once_property(name, validator, default=None):
     def setter(self, value):

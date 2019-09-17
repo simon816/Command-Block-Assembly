@@ -95,10 +95,10 @@ class CDispatcher(Dispatcher):
             return iter(self.output)
 
     def make_top(self, args):
-        from compiler.compiler import Compiler
-        from compiler.preprocessor import Preprocessor
-        from compiler.parser_ import Parser
-        from compiler.asm_extensions import ExtendedAssembler
+        from c_comp.compiler import Compiler
+        from c_comp.preprocessor import Preprocessor
+        from c_comp.parser_ import Parser
+        from c_comp.asm_extensions import ExtendedAssembler
         pre = Preprocessor(self.text_file().read(), self.infile.name)
         code = pre.transform()
         if args.E:
@@ -124,7 +124,7 @@ class ASMDispatcher(Dispatcher):
     def make_top(self, args):
         if args.E:
             return None
-        from assembler import Assembler
+        from asm import Assembler
         assembler = Assembler()
         assembler.parse(self.text_file().read(), self.infile.name)
         assembler.finish()
@@ -145,7 +145,7 @@ class DPDDispatcher(Dispatcher):
 
     def parse_pos(self, p):
         assert p
-        from placer import Rel
+        from packer.placer import Rel
         return Rel(int(p[1:]) if p[1:] else 0) if p[0] == '~' else int(p)
 
     def parse_coord(self, coord):
@@ -178,7 +178,7 @@ def link(tops, args):
     return final_top
 
 def apply_pragmas(top, args):
-    from compiler.asm_extensions import CPragma
+    from c_comp.asm_extensions import CPragma
     from cbl.compiler import CBLPragma
     pragmas = {
         'c_compiler': CPragma(),
@@ -187,10 +187,10 @@ def apply_pragmas(top, args):
     return top.run_pragmas(pragmas)
 
 def write_datapack(top, dispatchers, pragma_results, args):
-    from session import Session
-    from datapack import (DatapackDefinition, DummyWriter,
-                          DataPackWriter, DebugWriterWrapper)
-    from placer import Rel
+    from packer.session import Session
+    from packer.datapack import (DatapackDefinition, DummyWriter,
+                                 DataPackWriter, DebugWriterWrapper)
+    from packer.placer import Rel
     dpd = DatapackDefinition()
     for dispatcher in dispatchers:
         dispatcher.add_to_datapack(dpd, args)
@@ -206,7 +206,7 @@ def write_datapack(top, dispatchers, pragma_results, args):
         writer = DebugWriterWrapper(writer)
     writer.open()
     if 'c_compiler' in pragma_results:
-        from compiler.asm_extensions import CompilerSession
+        from c_comp.asm_extensions import CompilerSession
         page_size = args.c_page_size
         # don't bother with memory if not used
         if pragma_results['c_compiler'] != 'USE_MEM':
@@ -320,9 +320,12 @@ def build_argparser():
 
     return parser
 
-if __name__ == '__main__':
+def start():
     parser = build_argparser()
     args = parser.parse_args()
+    run_with_args(args)
+
+def run_with_args(args):
     # Ensure files are closed properly
     with contextlib.ExitStack() as stack:
         for file in args.infile:

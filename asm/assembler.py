@@ -1,4 +1,4 @@
-from asm_reader import AsmReader
+from .asm_reader import AsmReader
 from cmd_ir.core import *
 from cmd_ir.instructions import *
 from cmd_ir.variables import GlobalScoreVariable, VarType

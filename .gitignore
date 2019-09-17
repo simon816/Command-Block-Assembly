@@ -3,6 +3,6 @@ __pycache__/
 env/
 
 # License incompatible
-compiler/parser_gen.py
+c_comp/parser_gen.py
 cmd_ir/parser_gen.py
 cbl/parser_gen.py
