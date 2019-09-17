@@ -8,13 +8,13 @@ def make_block_name(block_id, props):
     return block_id + ('' if not props else '[%s]' % ','.join(
         '%s=%s' % item for item in prop_dict.items()))
 
-def is_block(visitor, expr):
-    assert len(expr.args) >= 2, "is_block takes at least 2 arguments"
+def block_is(visitor, expr):
+    assert len(expr.args) >= 2, "block_is takes at least 2 arguments"
     args = []
     for arg in expr.args:
         arg_val = visitor.visit_expression(arg)
         assert isinstance(arg_val, IR.LiteralString), \
-               "All arguments to is_block must be constant strings"
+               "All arguments to block_is must be constant strings"
         args.append(arg_val)
     loc, block, *props = map(lambda a:a.val, args)
     # TODO possible use of ExecSel
@@ -23,13 +23,13 @@ def is_block(visitor, expr):
     visitor.emit(IR.Test(cmd, res))
     return res
 
-def set_block(visitor, expr):
-    assert len(expr.args) >= 2, "set_block takes at least 2 arguments"
+def block_set(visitor, expr):
+    assert len(expr.args) >= 2, "block_set takes at least 2 arguments"
     args = []
     for arg in expr.args:
         arg_val = visitor.visit_expression(arg)
         assert isinstance(arg_val, IR.LiteralString), \
-               "All arguments to set_block must be constant strings"
+               "All arguments to block_set must be constant strings"
         args.append(arg_val)
     loc, block, *props = map(lambda a:a.val, args)
     cmd = 'setblock %s %s' % (loc, make_block_name(block, props))
@@ -37,6 +37,6 @@ def set_block(visitor, expr):
 
 def exports():
     return {
-        'is_block': is_block,
-        'set_block': set_block,
+        'block_is': block_is,
+        'block_set': block_set,
     }

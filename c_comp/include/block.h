@@ -8,8 +8,8 @@
 #ifndef __BLOCK_H
 #define __BLOCK_H
 
-int is_block(const char *location, const char *block_id, ...);
+int block_is(const char *location, const char *block_id, ...);
 
-void set_block(const char *location, const char *block_id, ...);
+void block_set(const char *location, const char *block_id, ...);
 
 #endif /* __BLOCK_H */

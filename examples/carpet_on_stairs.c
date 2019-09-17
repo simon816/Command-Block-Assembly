@@ -213,67 +213,67 @@ EVENT(minecraft:tick,, main_tick)
 {
     select_entities(sel_match(type, armor_stand), sel_match(tag, carpetted_stairs)) {
         at_this_entity() {
-            if(!is_block("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
+            if(!block_is("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
                 break_carpetted_colors();
             }
-            if(dt_result && is_block("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
-                if(is_block("~ ~ ~", "#minecraft:stairs", "facing=east")) {
+            if(dt_result && block_is("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "facing=east")) {
                     update_this_entity_data(update_data(Pose.Head.0, 0.0f), update_data(Pose.Head.1, 90.0f));
                 }
 
-                if(is_block("~ ~ ~", "#minecraft:stairs", "facing=west")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "facing=west")) {
                     update_this_entity_data(update_data(Pose.Head.0, 0.0f), update_data(Pose.Head.1, 270.0f));
                 }
 
-                if(is_block("~ ~ ~", "#minecraft:stairs", "facing=south")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "facing=south")) {
                     update_this_entity_data(update_data(Pose.Head.0, 0.0f), update_data(Pose.Head.1, 180.0f));
                 }
 
-                if(is_block("~ ~ ~", "#minecraft:stairs", "facing=north")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "facing=north")) {
                     update_this_entity_data(update_data(Pose.Head.0, 0.0f), update_data(Pose.Head.1, 0.0f));
                 }
 
-                if(is_block("~ ~ ~", "#minecraft:stairs", "shape=straight")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "shape=straight")) {
                     set_stairs_straight();
                 }
-                if(is_block("~ ~ ~", "#minecraft:stairs", "shape=outer_right")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "shape=outer_right")) {
                     set_stairs_outer_right();
                 }
-                if(is_block("~ ~ ~", "#minecraft:stairs", "shape=outer_left")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "shape=outer_left")) {
                     set_stairs_outer_left();
                 }
-                if(is_block("~ ~ ~", "#minecraft:stairs", "shape=inner_right")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "shape=inner_right")) {
                     set_stairs_inner_right();
                 }
-                if(is_block("~ ~ ~", "#minecraft:stairs", "shape=inner_left")) {
+                if(block_is("~ ~ ~", "#minecraft:stairs", "shape=inner_left")) {
                     set_stairs_inner_left();
                 }
             }
-            if (is_block("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
+            if (block_is("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
                 direction = 0;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "facing=east"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "facing=east"))
                     facing = 1;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "facing=west"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "facing=west"))
                     facing = 2;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "facing=north"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "facing=north"))
                     facing = 3;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "facing=south"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "facing=south"))
                     facing = 4;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "shape=straight"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "shape=straight"))
                     shape = 1;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "shape=outer_right"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "shape=outer_right"))
                     shape = 2;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "shape=outer_left"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "shape=outer_left"))
                     shape = 3;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "shape=inner_right"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "shape=inner_right"))
                     shape = 4;
-                if (is_block("~ ~ ~", "#minecraft:stairs", "shape=inner_left"))
+                if (block_is("~ ~ ~", "#minecraft:stairs", "shape=inner_left"))
                     shape = 5;
                 direction = facing += shape;
                 dt_result = pre_direction -= direction;
                 pre_direction = direction;
             }
-            if(is_block("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
+            if(block_is("~ ~ ~", "#minecraft:stairs", "half=bottom")) {
                 set_this_entity_rotation(0, 0);
             }
         }
@@ -281,10 +281,10 @@ EVENT(minecraft:tick,, main_tick)
 
     select_entities(sel_match(tag, carpetted_slabs)) {
         at_this_entity() {
-            if(!is_block("~ ~ ~", "#minecraft:slabs", "type=bottom")) {
+            if(!block_is("~ ~ ~", "#minecraft:slabs", "type=bottom")) {
                 break_carpetted_colors();
             }
-            if(is_block("~ ~ ~", "#minecraft:stairs", "type=bottom")) {
+            if(block_is("~ ~ ~", "#minecraft:stairs", "type=bottom")) {
                 set_this_entity_rotation(0, 0);
             }
         }
@@ -292,13 +292,13 @@ EVENT(minecraft:tick,, main_tick)
 
     select_entities(sel_match(tag, carpetted_carpetable)) {
         at_this_entity() {
-            if (!is_block("~ ~ ~", "#boomber:carpet_and_stairs/carpetable")) {
+            if (!block_is("~ ~ ~", "#boomber:carpet_and_stairs/carpetable")) {
                 break_carpetted_colors();
             }
-            if (is_block("~ ~ ~", "#boomber:carpet_and_stairs/carpetable")) {
+            if (block_is("~ ~ ~", "#boomber:carpet_and_stairs/carpetable")) {
                 set_this_entity_rotation(0, 0);
             }
-            if (is_block("~ ~-1 ~", "#boomber:carpet_and_stairs/carpet_block_blacklist")) {
+            if (block_is("~ ~-1 ~", "#boomber:carpet_and_stairs/carpet_block_blacklist")) {
                 break_carpetted_colors();
             }
         }
@@ -325,12 +325,12 @@ void found_ ## the_type ## _ ## color() \
             } \
         } \
     } \
-    if (!success) {position_at(~, ~1, ~) { if (success = is_block("~ ~ ~", "minecraft: ## color ## _carpet")) { set_block("~ ~ ~", "air"); } }} \
-    if (!success) {position_at(~, ~-1, ~) { if (success = is_block("~ ~ ~", "minecraft: ## color ## _carpet")) { set_block("~ ~ ~", "air"); } }} \
-    if (!success) {position_at(~1, ~, ~) { if (success = is_block("~ ~ ~", "minecraft: ## color ## _carpet")) { set_block("~ ~ ~", "air"); } }} \
-    if (!success) {position_at(~-1, ~, ~) { if (success = is_block("~ ~ ~", "minecraft: ## color ## _carpet")) { set_block("~ ~ ~", "air"); } }} \
-    if (!success) {position_at(~, ~, ~1) { if (success = is_block("~ ~ ~", "minecraft: ## color ## _carpet")) { set_block("~ ~ ~", "air"); } }} \
-    if (!success) {position_at(~, ~, ~-1) { if (success = is_block("~ ~ ~", "minecraft: ## color ## _carpet")) { set_block("~ ~ ~", "air"); } }} \
+    if (!success) {position_at(~, ~1, ~) { if (success = block_is("~ ~ ~", "minecraft: ## color ## _carpet")) { block_set("~ ~ ~", "air"); } }} \
+    if (!success) {position_at(~, ~-1, ~) { if (success = block_is("~ ~ ~", "minecraft: ## color ## _carpet")) { block_set("~ ~ ~", "air"); } }} \
+    if (!success) {position_at(~1, ~, ~) { if (success = block_is("~ ~ ~", "minecraft: ## color ## _carpet")) { block_set("~ ~ ~", "air"); } }} \
+    if (!success) {position_at(~-1, ~, ~) { if (success = block_is("~ ~ ~", "minecraft: ## color ## _carpet")) { block_set("~ ~ ~", "air"); } }} \
+    if (!success) {position_at(~, ~, ~1) { if (success = block_is("~ ~ ~", "minecraft: ## color ## _carpet")) { block_set("~ ~ ~", "air"); } }} \
+    if (!success) {position_at(~, ~, ~-1) { if (success = block_is("~ ~ ~", "minecraft: ## color ## _carpet")) { block_set("~ ~ ~", "air"); } }} \
     distance = 9000; \
 }
 
@@ -343,32 +343,32 @@ void find_ ## the_type ## _ ## color() \
         exec_align(xyz) { \
             position_at(~0.5, ~0.5, ~0.5) { \
                 select_entities_not_matching(sel_match(type, armor_stand), sel_match(tag, carpetted_ ## the_type), sel_match(distance, ..0.7)) { \
-                    if (is_block("~ ~ ~", "the_block") && is_block("~ ~1 ~", "minecraft: ## color ## _carpet")) {  \
+                    if (block_is("~ ~ ~", "the_block") && block_is("~ ~1 ~", "minecraft: ## color ## _carpet")) {  \
                         found_ ## the_type ## _ ## color(); \
                     } \
                 } \
                 select_entities_not_matching(sel_match(type, armor_stand), sel_match(tag, carpetted_ ## the_type), sel_match(distance, ..0.7)) { \
-                    if (is_block("~ ~ ~", "the_block") && is_block("~ ~-1 ~", "minecraft: ## color ## _carpet")) {  \
+                    if (block_is("~ ~ ~", "the_block") && block_is("~ ~-1 ~", "minecraft: ## color ## _carpet")) {  \
                         found_ ## the_type ## _ ## color(); \
                     }  \
                 } \
                 select_entities_not_matching(sel_match(type, armor_stand), sel_match(tag, carpetted_ ## the_type), sel_match(distance, ..0.7)) { \
-                    if (is_block("~ ~ ~", "the_block") && is_block("~1 ~ ~", "minecraft: ## color ## _carpet")) {  \
+                    if (block_is("~ ~ ~", "the_block") && block_is("~1 ~ ~", "minecraft: ## color ## _carpet")) {  \
                         found_ ## the_type ## _ ## color(); \
                     }  \
                 } \
                 select_entities_not_matching(sel_match(type, armor_stand), sel_match(tag, carpetted_ ## the_type), sel_match(distance, ..0.7)) { \
-                    if (is_block("~ ~ ~", "the_block") && is_block("~-1 ~ ~", "minecraft: ## color ## _carpet")) {  \
+                    if (block_is("~ ~ ~", "the_block") && block_is("~-1 ~ ~", "minecraft: ## color ## _carpet")) {  \
                         found_ ## the_type ## _ ## color(); \
                     }  \
                 } \
                 select_entities_not_matching(sel_match(type, armor_stand), sel_match(tag, carpetted_ ## the_type), sel_match(distance, ..0.7)) { \
-                    if (is_block("~ ~ ~", "the_block") && is_block("~ ~ ~1", "minecraft: ## color ## _carpet")) {  \
+                    if (block_is("~ ~ ~", "the_block") && block_is("~ ~ ~1", "minecraft: ## color ## _carpet")) {  \
                         found_ ## the_type ## _ ## color(); \
                     }  \
                 } \
                 select_entities_not_matching(sel_match(type, armor_stand), sel_match(tag, carpetted_ ## the_type), sel_match(distance, ..0.7)) { \
-                    if (is_block("~ ~ ~", "the_block") && is_block("~ ~ ~-1", "minecraft: ## color ## _carpet")) {  \
+                    if (block_is("~ ~ ~", "the_block") && block_is("~ ~ ~-1", "minecraft: ## color ## _carpet")) {  \
                         found_ ## the_type ## _ ## color(); \
                     }  \
                 } \
