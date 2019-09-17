@@ -8,15 +8,22 @@ Pair = namedtuple('Pair', 'left right min max')
 
 class ArraySupport:
 
+    index_type = VarType.i32
+
     def __init__(self, compiler):
         self.compiler = compiler
         self.max_size = 0
         self.getter = None
         self.setter = None
-        self.index_type = VarType.i32
 
     def allocate(self, size):
         self.max_size = max(self.max_size, size)
+
+    def finish(self):
+        if self.getter:
+            self.compiler.pragma('array_support_getter', self.max_size)
+        if self.setter:
+            self.compiler.pragma('array_support_setter', self.max_size)
 
     def get(self, array, index):
         self.lazy_load_get()
@@ -24,54 +31,58 @@ class ArraySupport:
         # TODO type
         val = self.compiler.create_var('arrval', VarType.i32)
         ret_args = (val,)
-        self.compiler.add_insn(Invoke(self.getter[0], args, ret_args))
+        self.compiler.add_insn(Invoke(self.getter, args, ret_args))
         return val
 
     def set(self, array, index, value):
         self.lazy_load_set()
         args = (array.value, index.value, value.value)
-        self.compiler.add_insn(Invoke(self.setter[0], args, None))
+        self.compiler.add_insn(Invoke(self.setter, args, None))
         return value.value
 
     def lazy_load_get(self):
         if self.getter is None:
-            func = self.compiler.define_function('_internal/array_get')
-            arrparam = func.preamble.define(ParameterInsn(VarType.nbt))
-            indexparam = func.preamble.define(ParameterInsn(self.index_type))
-            # TODO type
-            retvar = func.preamble.define(ReturnVarInsn(VarType.i32))
-            self.getter = (func, arrparam, indexparam, retvar)
+            # TODO customize return type
+            self.getter = self.compiler.extern_function('_internal/array_get', (
+                (VarType.nbt, 'byval'), (self.index_type, 'byval')), (VarType.i32,))
 
     def lazy_load_set(self):
         if self.setter is None:
-            func = self.compiler.define_function('_internal/array_set')
-            arrparam = func.preamble.define(ParameterInsn(VarType.nbt))
-            indexparam = func.preamble.define(ParameterInsn(self.index_type))
-            # TODO type
-            valparam = func.preamble.define(ParameterInsn(VarType.i32))
-            self.setter = (func, arrparam, indexparam, valparam)
+            # TODO customise value type
+            self.setter = self.compiler.extern_function('_internal/array_set', (
+                (VarType.nbt, 'byref'), (self.index_type, 'byval'),
+                (VarType.i32, 'byval')), None)
 
-    def generate(self):
-        if self.getter is not None:
-            func, _, index, _ = self.getter
-            self._gen_for(func, 'get', index, self._gen_getter)
-        if self.setter is not None:
-            func, _, index, _ = self.setter
-            self._gen_for(func, 'set', index, self._gen_setter)
+    @classmethod
+    def gen_getter(cls, top, size):
+        func = top.define_function('_internal/array_get')
+        arrparam = func.preamble.define(ParameterInsn(VarType.nbt, 'byval'))
+        indexparam = func.preamble.define(ParameterInsn(cls.index_type, 'byval'))
+        retvar = func.preamble.define(ReturnVarInsn(VarType.i32))
+        cls._gen_for(size, func, 'get', indexparam, cls._gen_getter, arrparam, retvar)
 
-    def _gen_getter(self, block, indexvar, indexval):
-        _, arr, _, retvar = self.getter
+    @classmethod
+    def gen_setter(cls, top, size):
+        func = top.define_function('_internal/array_set')
+        arrparam = func.preamble.define(ParameterInsn(VarType.nbt, 'byref'))
+        indexparam = func.preamble.define(ParameterInsn(cls.index_type, 'byval'))
+        valparam = func.preamble.define(ParameterInsn(VarType.i32, 'byval'))
+        cls._gen_for(size, func, 'set', indexparam, cls._gen_setter, arrparam, valparam)
+
+    @staticmethod
+    def _gen_getter(block, indexvar, indexval, arr, retvar):
         path = VirtualString('[%d]' % indexval)
         path_var = block.define(NBTSubPath(arr, path, retvar.type))
         block.add(SetScore(retvar, path_var))
 
-    def _gen_setter(self, block, indexvar, indexval):
-        _, arr, _, value = self.setter
+    @staticmethod
+    def _gen_setter(block, indexvar, indexval, arr, value):
         path = VirtualString('[%d]' % indexval)
         path_var = block.define(NBTSubPath(arr, path, value.type))
         block.add(SetScore(path_var, value))
 
-    def _gen_for(self, func, prefix, indexparam, gen_callback):
+    @staticmethod
+    def _gen_for(size, func, prefix, indexparam, gen_callback, *cb_args):
         entry = func.create_block('entry')
         # Copy to local variable due to register allocation speedup
         index = func.preamble.define(DefineVariable(indexparam.type))
@@ -92,8 +103,8 @@ class ArraySupport:
             if pair.right:
                 block.add(branch(func, index, pair.right))
             if pair.min == pair.max:
-                gen_callback(block, index, pair.min)
-        root = generate_bin_tree(self.max_size, callback)
+                gen_callback(block, index, pair.min, *cb_args)
+        root = generate_bin_tree(size, callback)
         entry.add(Call(func.get_or_create_block(pair_name(root))))
         entry.add(Return())
         func.end()

@@ -14,8 +14,6 @@ def open_file(name, *args, **kwargs):
         return os.fdopen(sys.stdout.fileno(), *args, **kwargs)
     return open(name, *args, **kwargs)
 
-C_COMPILER = 'c_compiler'
-
 class Dispatcher:
 
     def __init__(self, file, name_no_ext):
@@ -119,7 +117,6 @@ class CDispatcher(Dispatcher):
         assembler = ExtendedAssembler()
         assembler.consume_reader(CDispatcher.OutputReader(compile_output))
         assembler.finish()
-        assembler.top.toolchain_vars[C_COMPILER] = assembler.use_mem
         return assembler.top
 
 class ASMDispatcher(Dispatcher):
@@ -175,14 +172,21 @@ class DPDDispatcher(Dispatcher):
 def link(tops, args):
     from cmd_ir.core import TopLevel
     final_top = TopLevel.linker(*tops)
-    from cmd_ir.allocator import default_allocation
     if args.dump_ir:
         print(final_top.serialize())
         exit(0)
-    default_allocation(final_top, args.O)
     return final_top
 
-def write_datapack(top, dispatchers, args):
+def apply_pragmas(top, args):
+    from compiler.asm_extensions import CPragma
+    from cbl.compiler import CBLPragma
+    pragmas = {
+        'c_compiler': CPragma(),
+        'cbl_compiler': CBLPragma(),
+    }
+    return top.run_pragmas(pragmas)
+
+def write_datapack(top, dispatchers, pragma_results, args):
     from session import Session
     from datapack import (DatapackDefinition, DummyWriter,
                           DataPackWriter, DebugWriterWrapper)
@@ -201,11 +205,11 @@ def write_datapack(top, dispatchers, args):
     if args.dump_commands:
         writer = DebugWriterWrapper(writer)
     writer.open()
-    if C_COMPILER in top.toolchain_vars:
+    if 'c_compiler' in pragma_results:
         from compiler.asm_extensions import CompilerSession
         page_size = args.c_page_size
         # don't bother with memory if not used
-        if not top.toolchain_vars[C_COMPILER]:
+        if pragma_results['c_compiler'] != 'USE_MEM':
             page_size = 0
         session = CompilerSession(dpd.place_loc, writer, dpd.namespace,
                                   dpd.spawn_loc, dpd.gen_cleanup, page_size)
@@ -258,7 +262,10 @@ def main(args):
     if no_linking:
         return
     top = link(tops, args)
-    write_datapack(top, dispatchers, args)
+    pragma_results = apply_pragmas(top, args)
+    from cmd_ir.allocator import default_allocation
+    default_allocation(top, args.O)
+    write_datapack(top, dispatchers, pragma_results, args)
 
 def build_argparser():
     parser = argparse.ArgumentParser(description="Command line tool for the Minecraft Compiler Collection")

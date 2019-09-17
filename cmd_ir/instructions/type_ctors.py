@@ -294,16 +294,21 @@ class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
 class ParameterInsn(DefineVariable):
     """Add a required parameter of a given type to a function."""
 
-    argdocs = ["Parameter type"]
+    args = [VarType, str]
+    argnames = 'type passtype'
+    argdocs = ["Parameter type", "Parameter pass type (byref or byval)"]
     insn_name = 'parameter'
     inline_copyable = False
 
+    def validate(self):
+        assert self.passtype in ('byref', 'byval')
+
     def construct(self):
-        return ParameterVariable(self.type)
+        return ParameterVariable(self.type, self.passtype)
 
     def activate(self, seq):
         var = super().activate(seq)
-        seq.holder.add_parameter(self.type)
+        seq.holder.add_parameter(self.type, self.passtype)
         return var
 
 class ReturnVarInsn(DefineVariable):

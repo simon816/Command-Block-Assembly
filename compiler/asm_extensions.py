@@ -1,8 +1,10 @@
 from session import Session
 from assembler import Assembler
 
-from cmd_ir.core_types import CmdFunction
-from cmd_ir.instructions import RunCommand, SetScore, AddScore, SubScore
+from cmd_ir.core_types import CmdFunction, VirtualString
+from cmd_ir.core import Pragma
+from cmd_ir.instructions import (RunCommand, SetScore, AddScore, SubScore,
+                                 PragmaInsn)
 from cmd_ir.variables import VarType, GlobalScoreVariable
 
 import commands as c
@@ -145,6 +147,15 @@ class MemSetFn(RunCommand):
     def copy(self):
         return MemSetFn(self._ass)
 
+class CPragma(Pragma):
+
+    def reduce(self, acc, val):
+        # Either USE_MEM or empty string
+        return val or acc
+
+    def apply(self, top, value):
+        return value
+
 class ExtendedAssembler(Assembler):
 
     def __init__(self):
@@ -163,6 +174,11 @@ class ExtendedAssembler(Assembler):
                                                     c.Var('memory_address')))
         self.mem_buf.set_proxy(GlobalScoreVariable(VarType.i32,
                                                    c.Var('memory_buffer')))
+
+    def finish(self):
+        val = 'USE_MEM' if self.use_mem else ''
+        self.top.preamble.add(PragmaInsn('c_compiler', VirtualString(val)))
+        super().finish()
 
     def handle_mov_ind(self, src, s_off, dest, d_off):
         """Move indirect src to indirect dest"""

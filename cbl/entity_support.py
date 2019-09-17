@@ -54,7 +54,8 @@ class EntityPointer(UserDefinedInstance):
 
     def elocal_access(self, objective):
         block, sender = self.as_entity()
-        var = block.define(i.CreateEntityLocalAccess(objective, sender))
+        var = self.sup.compiler.insn_def(
+            i.CreateEntityLocalAccess(objective, sender))
         return var
 
 class EntityTypeInstance:
@@ -222,6 +223,10 @@ class EntitySupport:
         self._get_or_create = None
         self._current_sender = None
 
+    @staticmethod
+    def objective():
+        return i.DefineObjective(i.VirtualString('__uid'), None)
+
     def extend_entity_type(self, type):
         type.instance_class = EntityPointer
         type._nbtwrapped = False
@@ -233,7 +238,9 @@ class EntitySupport:
     def assign_pointer_to_sender(self, ptr):
         assert isinstance(ptr, EntityPointer)
         if self._get_or_create is None:
-            self._get_or_create = self._create_func()
+            self._get_or_create = self.compiler.extern_function(
+                '_internal/entity_ptr', None, (i.VarType.i32,))
+            self.uid_obj = self.compiler.global_def('__uid', self.objective())
         retvars = (ptr._var,)
         self.compiler.add_insn(i.Invoke(self._get_or_create, None, retvars))
 
@@ -264,20 +271,24 @@ class EntitySupport:
 
         return block, sender # sender for convenience
 
-    def _create_func(self):
-        func = self.compiler.define_function('_internal/entity_ptr')
+    def finish(self):
+        if self._get_or_create:
+            self.compiler.pragma('entity_support_ptr', None)
+
+    @classmethod
+    def gen_get_or_create(cls, top, _):
+        func = top.define_function('_internal/entity_ptr')
         func.preamble.add(i.PureInsn())
         retvar = func.preamble.define(i.ReturnVarInsn(i.VarType.i32))
         entry = func.create_block('entry')
         set_uid = func.create_block('set_uid')
         end = func.create_block('end')
 
-        self.uid_obj = self.compiler.global_def('__uid', i.DefineObjective(
-            i.VirtualString('__uid'), None))
+        uid_obj = top.preamble.add(cls.objective(), True, '__uid')
         sender = entry.define(i.CreateSelector(i.SelectorType.SENDER))
-        self_uid = entry.define(i.CreateEntityLocalAccess(self.uid_obj, sender))
-        next_uid = entry.define(i.CreateEntityLocalAccess(
-            self.uid_obj, self.compiler.top.lookup('_global_entity')))
+        self_uid = entry.define(i.CreateEntityLocalAccess(uid_obj, sender))
+        next_uid = entry.define(i.CreateEntityLocalAccess(uid_obj,
+                                      top.lookup('_global_entity')))
         entry.add(i.RangeBr(self_uid, 0, 0, set_uid, end))
         set_uid.add(i.SetScore(self_uid, next_uid))
         set_uid.add(i.AddScore(next_uid, 1))

@@ -29,6 +29,11 @@ class Branch(SingleCommandInsn):
     def get_cmd(self):
         return c.Function(self.label.global_name)
 
+    def serialize(self, holder):
+        if self.label == self.label._func._exitblock:
+            return 'ret'
+        return super().serialize(holder)
+
 class Call(Branch):
     """'calls' a label instead of branching. The label must be tagged with the
     'function' modifier. Control will resume to the next instruction after the
@@ -107,7 +112,14 @@ class Invoke(Insn):
         if self.fnargs:
             for i, arg in enumerate(self.fnargs):
                 if isinstance(arg, argtype):
-                    yield TupleQueryResult(self, 'fnargs', i, self.fnargs_type,
+                    allow_type = self.fnargs_type
+                    # Even if incorrect number args, don't crash here,
+                    # let apply() provide the error
+                    if i < len(self.func.params):
+                        p_type, ppass = self.func.params[i]
+                        if ppass == 'byref':
+                            allow_type = Variable
+                    yield TupleQueryResult(self, 'fnargs', i, allow_type,
                                            READ)
         if self.retvars:
             for i, var in enumerate(self.retvars):
@@ -136,7 +148,7 @@ class Invoke(Insn):
         ret_start = len(allargs)
         if self.retvars:
             # default return variable = default for the type
-            allargs.extend([var.type for var in self.retvars])
+            allargs.extend(var.type for var in self.retvars)
 
         # Save registers
         reg_start = len(allargs)
@@ -159,6 +171,17 @@ class Invoke(Insn):
                 reg.realign_frame(1)
                 src.clone_to(reg, out)
                 reg.realign_frame(-1)
+
+        # Mutate pass-by-reference arguments
+        if self.fnargs:
+            for i, (ptype, ppass) in enumerate(self.func.params):
+                if ppass == 'byref':
+                    src = LocalStackVariable(ptype, args_start + i)
+                    arg = self.fnargs[i]
+                    assert isinstance(arg, Variable), "%s passed by value!" % arg
+                    src.realign_frame(1)
+                    src.clone_to(arg, out)
+                    src.realign_frame(-1)
 
         # Copy return values into return variables
         if self.retvars:

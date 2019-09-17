@@ -1,6 +1,7 @@
 """Basic Commands and Instructions"""
 
-from ._core import Insn, SingleCommandInsn, ConstructorInsn, BasicBlock
+from ._core import (Insn, SingleCommandInsn, ConstructorInsn, BasicBlock,
+                    PreambleOnlyInsn, VoidApplicationInsn)
 from ..core_types import (CmdFunction,
                           Opt,
                           Position,
@@ -21,6 +22,19 @@ from ..nbt import NBTCompound
 from .text import TextObject
 
 import commands as c
+
+class PragmaInsn(PreambleOnlyInsn, VoidApplicationInsn):
+    """Set a pragma value. Pragmas are implementation defined and generally
+    should not be configured by end users."""
+
+    top_preamble_only = True
+    args = [str, VirtualString]
+    argnames = 'key value'
+    argdocs = ["Pragma name", "Pragma value"]
+    insn_name = 'pragma'
+
+    def activate(self, seq):
+        seq.holder.pragmas.append((self.key, str(self.value)))
 
 class CopyInsn(ConstructorInsn):
     """Creates a deep copy of an object. Only certain object types can be

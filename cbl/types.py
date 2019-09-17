@@ -95,8 +95,16 @@ class Type:
     def ir_type(self):
         raise TypeError('%s does not have an IR type' % self)
 
+    @property
+    def is_primitive(self):
+        return True
+
     def create_parameter(self, name):
-        return self.compiler.define(name, i.ParameterInsn(self.ir_type))
+        passtype = 'byval' if self.is_primitive else 'byref'
+        def create_param(vname, var_type):
+            return self.compiler.define(vname, i.ParameterInsn(var_type, passtype))
+        with self.compiler.set_create_var(create_param):
+            return self.create(name)
 
     def to_parameters(self):
         return (self.ir_type,)
@@ -105,7 +113,10 @@ class Type:
         return (self.ir_type,)
 
     def create_return(self, name):
-        return self.compiler.define(name, i.ReturnVarInsn(self.ir_type))
+        def create_ret(vname, var_type):
+            return self.compiler.define(vname, i.ReturnVarInsn(var_type))
+        with self.compiler.set_create_var(create_ret):
+            return self.create(name)
 
     def as_arguments(self, instance):
         return [self.as_variable(instance)]
@@ -665,7 +676,9 @@ class FunctionContainer:
     def ir_param_types(self):
         p_types = []
         for p in self.fn_type.params:
-            p_types.extend(p.type.to_parameters())
+            for ptype in p.type.to_parameters():
+                passtype = 'byval' if p.type.is_primitive else 'byref'
+                p_types.append((ptype, passtype))
         return tuple(p_types)
 
     @property
@@ -679,17 +692,13 @@ class FunctionContainer:
         return self.__real_fn
 
     def _get_or_create_extern(self):
-        from cmd_ir.core import ExternFunction
         if self.__extern_fn is None:
-            extern = ExternFunction(self.name, self.ir_param_types,
-                                    self.ir_ret_types)
-            self.compiler.top.store(self.name, extern)
-            self.__extern_fn = extern
+            self.__extern_fn = self.compiler.extern_function(
+                self.name, self.ir_param_types, self.ir_ret_types)
         return self.__extern_fn
 
     def extern_if_needed(self):
         if self.__real_fn is None:
-            print("externing", self.name)
             self._get_or_create_extern()
 
     def set_as_intrinsic(self, intrinsic):
@@ -740,6 +749,10 @@ class ArrayType(Type):
     def ir_type(self):
         return i.VarType.nbt
 
+    @property
+    def is_primitive(self):
+        return False
+
     def initialize(self, instance):
         self.compiler.array_support.allocate(self.size)
         self._init_array(instance)
@@ -788,6 +801,9 @@ class WrappedType(Type):
     def get_property(self, instance, prop):
         return self.wrapped.get_property(instance, prop)
 
+    def as_variable(self, instance):
+        return self.wrapped.as_variable(instance)
+
 class ArrayTypeElementProxy(WrappedType):
 
     def dispatch_operator(self, op, left, right=None):
@@ -821,12 +837,12 @@ class EventNameInstance:
     def new_event(self):
         assert self.__name is not None
         event = i.CreateEvent(i.VirtualString(self.__name))
-        return self.compiler.global_def(name, event)
+        return self.compiler.global_def(self.__name, event)
 
     def add_condition(self, event, condition):
         # TODO type checking etc
         path = i.VirtualString('.'.join(condition.path))
-        assert type(condition.value.value) == str
+        assert type(condition.value.value) == str, condition.value
         value = i.VirtualString(condition.value.value)
         self.compiler.top.preamble.add(i.AddEventCondition(event, path, value))
 
@@ -868,7 +884,6 @@ class Types:
     def __init__(self):
         self._tdict = {}
         self._reverse = {}
-        self._flatnames = set()
 
     def add(self, type_name, type_instance):
         if type_name in self._tdict:
@@ -879,16 +894,6 @@ class Types:
 
     def lookup(self, type_name):
         return self._tdict.get(type_name)
-
-    def _safe_name(self, name):
-        name = name.lower()
-        if name in self._flatnames:
-            i = 0
-            while '%s%d' % (name, i) in self._flatnames:
-                i += 1
-            name = '%s%d' % (name, i)
-        self._flatnames.add(name)
-        return name
 
     def name_for(self, type):
         return self._reverse[type]
@@ -1051,7 +1056,7 @@ class UserDefinedType(Type):
         self.__fn_members = {}
         self.__static_members = {}
         self.__operators = {}
-        self.namespace = compiler.types._safe_name(name)
+        self.namespace = name
         self._nbtwrapped = False
         self.__variables_finished = False
         self.__finished = False
@@ -1064,6 +1069,10 @@ class UserDefinedType(Type):
         if self._nbtwrapped:
             return i.VarType.nbt
         raise TypeError('%s does not have an IR type' % self)
+
+    @property
+    def is_primitive(self):
+        return False
 
     def __str__(self):
         return 'UserType(%s)' % self.name
@@ -1121,19 +1130,6 @@ class UserDefinedType(Type):
             return 1
         return sum(t.effective_var_size() for t in self.__var_members.values())
 
-    def create_parameter(self, name):
-        #print("Create param", name)
-        if self._nbtwrapped:
-            this = super().create_parameter(name)
-            def create_var(subname, var_type):
-                assert subname == name, var_type == i.VarType.nbt
-                return this
-        else:
-            def create_var(vname, var_type):
-                return self.compiler.define(vname, i.ParameterInsn(var_type))
-        with self.compiler.set_create_var(create_var):
-            return self.create(name)
-
     def to_parameters(self):
         if self._nbtwrapped:
             return super().to_parameters()
@@ -1141,18 +1137,6 @@ class UserDefinedType(Type):
         for m_type in self.__var_members.values():
             params.extend(m_type.to_parameters())
         return params
-
-    def create_return(self, name):
-        if self._nbtwrapped:
-            this = super().create_return(name)
-            def create_var(subname, var_type):
-                assert subname == name, var_type == i.VarType.nbt
-                return this
-        else:
-            def create_var(vname, var_type):
-                return self.compiler.define(vname, i.ReturnVarInsn(var_type))
-        with self.compiler.set_create_var(create_var):
-            return self.create(name)
 
     def to_returns(self):
         if self._nbtwrapped:

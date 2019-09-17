@@ -262,6 +262,16 @@ class VariableHolder:
             if isinstance(var, Variable):
                 var.reset_usage()
 
+class Pragma(metaclass=abc.ABCMeta):
+
+    @abc.abstractmethod
+    def reduce(self, acc, val):
+        pass
+
+    @abc.abstractmethod
+    def apply(self, top, value):
+        pass
+
 class TopLevel(VariableHolder):
 
     def __init__(self):
@@ -270,9 +280,8 @@ class TopLevel(VariableHolder):
         self.finished = False
         self.store('pos_util', PosUtilEntity())
         self.store('_global_entity', GlobalEntity())
-        # Internal referencing to the toolchain
-        # Needed for the C compiler
-        self.toolchain_vars = {}
+        # Internal directives. Implementation defined.
+        self.pragmas = []
 
     def get_or_create_func(self, name):
         return self.scope.get_or_create(name, self._create_func)
@@ -291,7 +300,7 @@ class TopLevel(VariableHolder):
             mapping = {func: real_func}
             for var in self.scope.values():
                 if isinstance(var, IRFunction):
-                    for block in var.blocks:
+                    for block in var.allblocks:
                         block.apply_mapping(ExternFunction, mapping)
             func = real_func
         return func
@@ -364,7 +373,7 @@ class TopLevel(VariableHolder):
         for top in tops:
             assert top.finished
             out.preamble.insns.extend(top.preamble.insns)
-            out.toolchain_vars.update(top.toolchain_vars)
+            out.pragmas.extend(top.pragmas)
             for name, var in top.scope.items():
                 if isinstance(var, VisibleFunction):
                     if isinstance(var, ExternFunction):
@@ -385,13 +394,30 @@ class TopLevel(VariableHolder):
             for extern in externlist:
                 # Externs of the same name must have same signature
                 extern.expect_signature(replacement)
-                extern_mapping[extern] = replacement
+                if replacement != extern:
+                    extern_mapping[extern] = replacement
+            if not concrete:
+                # Put any unresolved externs back
+                out.store(name, new_extern)
         # Replace ExternFunction references in all blocks
         if extern_mapping:
             for block in all_blocks:
                 block.apply_mapping(ExternFunction, extern_mapping)
         out.end()
         return out
+
+    def run_pragmas(self, known_pragmas):
+        final = {}
+        for (p_key, p_val) in self.pragmas:
+            assert p_key in known_pragmas
+            if p_key in final:
+                final[p_key] = known_pragmas[p_key].reduce(final[p_key], p_val)
+            else:
+                final[p_key] = p_val
+        results = {}
+        for p_key, p_val in final.items():
+            results[p_key] = known_pragmas[p_key].apply(self, p_val)
+        return results
 
 class VisibleFunction(FunctionLike):
 
@@ -413,12 +439,12 @@ class VisibleFunction(FunctionLike):
         if self.params:
             assert args is not None, "Missing args"
             assert len(args) == len(self.params), "Incorrect number of args"
-            for argtype, argval in zip(self.params, args):
+            for (ptype, ppass), argval in zip(self.params, args):
                 if type(argval) == int:
-                    assert argtype == VarType.i32, "Literal int on non i32"
+                    assert ptype == VarType.i32, "Literal int on non i32"
                 else:
                     assert isinstance(argval, Variable), "Arg must be variable, got %s" % argval
-                    assert argval.type == argtype, "Arg type mismatch"
+                    assert argval.type == ptype, "Arg type mismatch"
         else:
             assert args is None, "Args when no params"
 
@@ -441,15 +467,17 @@ class ExternFunction(VisibleFunction):
 
     def __init__(self, global_name, params=None, returns=None):
         self._gname = global_name
-        self.params = params or []
-        self.returns = returns or []
+        self.params = list(params or [])
+        self.returns = list(returns or [])
+        for (ptype, ppass) in self.params:
+            assert ppass in ['byval', 'byref']
 
     @property
     def finished(self):
         return True
 
     def writeout(self, writer, temp_gen):
-        assert False, "Exern function not linked: %s" % self._gname
+        assert False, "Extern function not linked: %s" % self._gname
 
     @property
     def global_name(self):
@@ -488,13 +516,12 @@ class ExternFunction(VisibleFunction):
         return False
 
     def serialize(self):
-        def serialize(typelist):
-            if not typelist:
-                return 'NULL'
-            return '(%s)' % ', '.join(t.name for t in typelist)
-        return 'extern function %s %s %s\n' % (self._gname,
-                                               serialize(self.params),
-                                               serialize(self.returns))
+        params = 'NULL' if not self.params else \
+                 '(%s)' % ', '.join('%s:%s' % (t.name, p) \
+                                    for (t, p) in self.params)
+        returns = 'NULL' if not self.returns else \
+                  '(%s)' % ', '.join(t.name for t in self.returns)
+        return 'extern function %s %s %s\n' % (self._gname, params, returns)
 
     def __str__(self):
         return 'Extern(%s)' % self._gname
@@ -526,8 +553,8 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._use += 1
         self.entry_point_usage()
 
-    def add_parameter(self, vtype):
-        self.params.append(vtype)
+    def add_parameter(self, vtype, passtype):
+        self.params.append((vtype, passtype))
 
     def add_return(self, vtype):
         self.returns.append(vtype)
@@ -618,8 +645,8 @@ class IRFunction(VisibleFunction, VariableHolder):
         if not self.finished:
             self.__future_expect_sig.append(other)
             return
-        assert self.params == other.params
-        assert self.returns == other.returns
+        assert self.params == other.params, (self.params, other.params)
+        assert self.returns == other.returns, (self.returns, other.returns)
 
     def end(self):
         assert self.is_defined
@@ -672,6 +699,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         scope_mapping = {}
         argiter = iter(args or [])
         retiter = iter(retvars or [])
+        entry_insns = []
 
         for name, var in self.scope.items():
             if isinstance(var, BasicBlock):
@@ -681,16 +709,32 @@ class IRFunction(VisibleFunction, VariableHolder):
                 new_block.is_function = var.is_function
                 new_block.defined = var.defined
             elif isinstance(var, ParameterVariable):
-                scope_mapping[var] = next(argiter)
+                if var.passtype == 'byval':
+                    arg_var = next(argiter)
+                    name = other.name_for(arg_var)
+                    copy_var = other.create_var(name + '_copy', arg_var.type)
+                    from .instructions import SetScore
+                    entry_insns.append(SetScore(copy_var, arg_var))
+                    scope_mapping[var] = copy_var
+                else:
+                    scope_mapping[var] = next(argiter)
             elif isinstance(var, ReturnVariable):
                 scope_mapping[var] = next(retiter)
 
+        # Check iterators have been consumed
+        assert all(False for _ in argiter)
+        assert all(False for _ in retiter)
+
         self._inline_seq(self.preamble, other.preamble, scope_mapping)
+
+        entry_block = block_mapping[self.blocks[0]]
+        for insn in entry_insns:
+            entry_block.add(insn)
 
         for old_block, new_block in block_mapping.items():
             self._inline_seq(old_block, new_block, scope_mapping)
 
-        return block_mapping[self.blocks[0]], block_mapping[self._exitblock]
+        return entry_block, block_mapping[self._exitblock]
 
     def configure_parameters(self, hasownstackframe):
         # Linked to InvokeInsn

@@ -9,7 +9,7 @@ from .entity_support import (EntitySupport, EntityTypeType,
                              RuntimeEntityPosType)
 from .intrinsic_support import IntrinsicSupport
 
-from cmd_ir.core import TopLevel
+from cmd_ir.core import TopLevel, Pragma
 from cmd_ir.variables import VarType
 from cmd_ir.core_types import SelectorType
 from cmd_ir.instructions import *
@@ -22,6 +22,35 @@ FuncDeclaration = namedtuple('FuncDeclaration', 'name ret_type params ' + \
 CtorDeclaration = namedtuple('CtorDeclaration', 'params inline')
 
 ConstructorArgs = namedtuple('ConstructorArgs', 'args')
+
+class CBLPragma(Pragma):
+
+    def __init__(self):
+        self.pragmas = {
+            'array_support_getter': (max, ArraySupport.gen_getter),
+            'array_support_setter': (max, ArraySupport.gen_setter),
+            'entity_support_ptr': (lambda a,b: None,
+                                   EntitySupport.gen_get_or_create),
+        }
+
+    def reduce(self, acc, val):
+        import json
+        acc = json.loads(acc)
+        new = json.loads(val)
+        for key, val in new.items():
+            if key in acc:
+                acc[key] = self.pragmas[key][0](acc[key], val)
+            else:
+                assert key in self.pragmas
+                acc[key] = val
+        return json.dumps(acc)
+
+    def apply(self, top, value):
+        import json
+        vals = json.loads(value)
+        for key, val in vals.items():
+            assert key in self.pragmas
+            self.pragmas[key][1](top, val)
 
 class SymbolTable:
 
@@ -140,7 +169,8 @@ class Compiler(Transformer_WithPre):
 
     def compile(self, program, filename):
         self.compile_unit(program, filename)
-        self.array_support.generate()
+        self.array_support.finish()
+        self.entity_support.finish()
         for fn_container in self.possible_extern:
             fn_container.extern_if_needed()
         self.top.end()
@@ -204,6 +234,11 @@ class Compiler(Transformer_WithPre):
         self.loop_attacher = LoopAttacher(cont, brk, self, parent)
         return self.loop_attacher
 
+    def pragma(self, key, value):
+        import json
+        val = json.dumps({key: value})
+        self.top.preamble.add(PragmaInsn('cbl_compiler', VirtualString(val)))
+
     def dispatch_operator(self, op, left, right=None):
         return left.type.dispatch_operator(op, left, right)
 
@@ -227,9 +262,19 @@ class Compiler(Transformer_WithPre):
         assert name not in self._global_func_names, \
                "Function '%s' already defined" % name
         self._global_func_names.add(name)
-        # All functions must be lower-case
-        ir_name = name.lower()
-        return self.top.define_function(ir_name)
+        return self.top.define_function(self.safe_name(name))
+
+    def extern_function(self, name, params, returns):
+        from cmd_ir.core import ExternFunction
+        ir_name = self.safe_name(name)
+        extern = ExternFunction(ir_name, params, returns)
+        self.top.store(ir_name, extern)
+        return extern
+
+    def safe_name(self, name):
+        # All functions must be lower-case, use the "-" character to escape
+        # uppercase letters
+        return ''.join(c.lower() + '-' if c.isupper() else c for c in name)
 
     def add_insn(self, insn):
         self.block.add(insn)
@@ -363,7 +408,7 @@ class Compiler(Transformer_WithPre):
         func_sym = self._declare_function(func_decl, True)
         func = func_sym.value.get_or_create_definition()
         if event_handler is not None:
-            self.top.preamble.add(EventHandler(func, event_handler.value))
+            self.top.preamble.add(EventHandler(func, event_handler))
         if not func_decl.is_operator and not func_decl.inline:
             func.preamble.add(ExternInsn())
         if func_decl.inline:

@@ -88,7 +88,7 @@ intrinsic_extension {
     }
 
     SelectorFilter Entity::has_tag(string tag) Python: {
-        return this.has_tag_filter(self.compiler, args['tag'].value)
+        return this.has_tag_filter(compiler, args['tag'].value)
     }
 
     reconfigure_type Entity Python: {

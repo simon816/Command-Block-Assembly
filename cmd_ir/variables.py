@@ -390,9 +390,11 @@ class GlobalVariable(ProxyVariable):
 
 class ParameterVariable(ProxyVariable):
 
-    def __init__(self, type):
+    def __init__(self, type, passtype):
+        byref = passtype == 'byref'
         # Always written to - stop this getting eliminated
-        super().__init__(type, always_write=True)
+        super().__init__(type, always_write=True, always_read=byref)
+        self.passtype = passtype
 
 class ReturnVariable(ProxyVariable):
 

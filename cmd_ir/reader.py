@@ -14,7 +14,7 @@ except ImportError:
 
 from .core_types import *
 
-from .core import TopLevel, ExternFunction
+from .core import TopLevel, ExternFunction, IRFunction
 from .instructions import Insn, ConstructorInsn, SetScore, SimpleOperationInsn
 
 class BuildProgram(Interpreter):
@@ -38,12 +38,25 @@ class BuildProgram(Interpreter):
         if isinstance(returns, Token):
             returns = self.token_to_val(returns)
         from .variables import VarType
-        params = [VarType._init_from_parser(p) for p in params or []]
+        params = [(VarType._init_from_parser(params[i*2]), params[(i*2)+1]) \
+            for i in range(len(params or []) // 2)]
         returns = [VarType._init_from_parser(r) for r in returns or []]
         existing = self.top.lookup_func(name)
         extern = ExternFunction(name, params, returns)
         if existing:
             existing.expect_signature(extern)
+            if not existing.finished and \
+               not isinstance(existing, ExternFunction):
+                # This is a forward-referenced function, replace references
+                # with our extern
+                mapping = {existing: extern}
+                for var in self.top.scope.values():
+                    if isinstance(var, IRFunction):
+                        var.preamble.apply_mapping(IRFunction, mapping)
+                        for block in var.blocks:
+                            block.apply_mapping(IRFunction, mapping)
+                # Direct replacement
+                self.top.scope[name] = extern
         else:
             self.top.store(name, extern)
 

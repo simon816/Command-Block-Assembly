@@ -4,7 +4,9 @@ preamble: "preamble" "{" instruction* "}"
 
 ?body: function | extern_func
 
-extern_func: "extern" "function" FUNC_NAME (typelist|NULL) (typelist|NULL) NEWLINE
+extern_func: "extern" "function" FUNC_NAME (extern_params|NULL) (extern_returns|NULL) NEWLINE
+extern_params: "(" IDENT ":" IDENT ("," IDENT ":" IDENT)* ")"
+extern_returns: "(" IDENT ("," IDENT)* ")"
 
 function: "function" FUNC_NAME "{" function_body "}"
 
@@ -23,9 +25,7 @@ operand_list: (operand ("," operand)*)?
 operand: IDENT | atom | tuple
 ?atom: ESCAPED_STRING | SIGNED_INT | VAR_NAME | FUNC_REF | BLOCK_REF | NULL | SIGNED_FLOAT
 
-tuple: "(" atom ["," atom] ")"
-
-typelist: "(" IDENT ["," IDENT] ")"
+tuple: "(" atom ("," atom)* ")"
 
 LABEL: CNAME ":"
 IDENT: CNAME
