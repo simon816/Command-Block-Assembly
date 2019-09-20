@@ -1,21 +1,27 @@
 from .variables import (GlobalScoreVariable, LocalScoreVariable,
-                              LocalStackVariable)
+                              LocalStackVariable, GlobalNbtVariable)
 from .optimizers import Optimizer, TopVisitor, FuncVisitor
 from commands import Var
 
 class Allocator(TopVisitor):
 
     def visit(self, top):
-        self.offset = 0
+        self.score_offset = 0
+        self.nbt_offset = 0
         return super().visit(top)
 
     def visit_global(self, name, var):
         if var.proxy_set:
             # Special case for assember - it already allocates
             return name, var
-        var.set_proxy(GlobalScoreVariable(var.type, Var('g%d_%s' % (
-            self.offset, name))))
-        self.offset += 1
+        if var.type.isnumeric:
+            real_var = GlobalScoreVariable(var.type, Var('g%d_%s' % (
+                self.score_offset, name)))
+            self.score_offset += 1
+        else:
+            real_var = GlobalNbtVariable(var.type, self.nbt_offset)
+            self.nbt_offset += 1
+        var.set_proxy(real_var)
         return name, var
 
     def visit_function(self, name, func):

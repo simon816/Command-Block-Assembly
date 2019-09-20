@@ -2,6 +2,13 @@
 def escape(text):
     return text.replace('\\', '\\\\').replace('"', '\\"')
 
+opposites = {
+    'north': 'south',
+    'east': 'west',
+    'south': 'north',
+    'west': 'east'
+}
+
 class Rel:
     def __init__(self, offset=0):
         self.offset = offset
@@ -69,12 +76,16 @@ class CommandPlacer:
         direction = 'south'
         if rotate:
             direction = 'east'
+        if block.opposite:
+            direction = opposites[direction]
         state['facing'] = direction
 
         state_str = '[' + ','.join([k+'='+v for k,v in state.items()]) + ']'
-
-        data = '{TrackOutput:0b,auto:%db,Command:"%s"}' % (
-            1 if block.auto else 0, escape(command))
+        data = ('{TrackOutput:0b,auto:%db,Command:"%s",' \
+               + 'UpdateLastExecution:%db}') % (
+                   1 if block.auto else 0,
+                   escape(command),
+                   1 if block.single_use else 0)
 
         block = block_type + state_str + data
 

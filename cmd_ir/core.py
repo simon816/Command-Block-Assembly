@@ -442,6 +442,8 @@ class VisibleFunction(FunctionLike):
             for (ptype, ppass), argval in zip(self.params, args):
                 if type(argval) == int:
                     assert ptype == VarType.i32, "Literal int on non i32"
+                elif type(argval) == float:
+                    assert ptype == VarType.q10, "Literal float on non q10"
                 else:
                     assert isinstance(argval, Variable), "Arg must be variable, got %s" % argval
                     assert argval.type == ptype, "Arg type mismatch"
@@ -709,15 +711,18 @@ class IRFunction(VisibleFunction, VariableHolder):
                 new_block.is_function = var.is_function
                 new_block.defined = var.defined
             elif isinstance(var, ParameterVariable):
-                if var.passtype == 'byval':
-                    arg_var = next(argiter)
+                arg_var = next(argiter)
+                if isinstance(arg_var, (float, int)):
+                    assert var.passtype == 'byval'
+                    scope_mapping[var] = arg_var
+                elif var.passtype == 'byval':
                     name = other.name_for(arg_var)
                     copy_var = other.create_var(name + '_copy', arg_var.type)
                     from .instructions import SetScore
                     entry_insns.append(SetScore(copy_var, arg_var))
                     scope_mapping[var] = copy_var
                 else:
-                    scope_mapping[var] = next(argiter)
+                    scope_mapping[var] = arg_var
             elif isinstance(var, ReturnVariable):
                 scope_mapping[var] = next(retiter)
 

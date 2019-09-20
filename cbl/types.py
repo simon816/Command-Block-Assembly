@@ -1159,7 +1159,7 @@ class UserDefinedType(Type):
         return super().dispatch_operator(op, left, right)
 
     def operator_assign(self, left, right):
-        assert right.type == self
+        assert right.type == self, right.type
         if self._nbtwrapped:
             self.compiler.add_insn(i.SetScore(as_var(left), as_var(right)))
         else:

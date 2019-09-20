@@ -106,3 +106,14 @@ intrinsic_extension {
     }
 
 }
+
+namespace Util {
+    Entity pos_util;
+}
+
+intrinsic_extension {
+    reconfigure_type Util Python: {
+        pos_util = the_type.get_static_member('pos_util')
+        pos_util.value.set_fixed_var(compiler.top.lookup('pos_util'))
+    }
+}

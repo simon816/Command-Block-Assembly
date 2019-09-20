@@ -12,13 +12,16 @@ class Scope:
         self.bossbars = {}
         self.teams = {}
         assert all(type(c) == int for c in block_pos), \
-        "Block position must be absolute (for now). Use --place-location"
+        "Block position must be absolute (for now). Fix your DPD"
         self.util_pos = '%d %d %d' % block_pos
+        self.zero_tick_pos = '%d %d %d' % (block_pos[0], block_pos[1],
+                                           block_pos[2] + 1)
         self._global_tag = self.namespace + '_global'
         self._pos_tag = self.namespace + '_pos_util'
         self._global_used = False
         self._pos_entity_used = False
         self._util_block_used = False
+        self._zero_tick_used = False
 
     def objective(self, name):
         if name not in self.objectives:
@@ -46,6 +49,11 @@ class Scope:
     def get_util_block(self):
         self._util_block_used = True
         return self.util_pos
+
+    def get_zero_tick_block(self):
+        self._util_block_used = True
+        self._zero_tick_used = True
+        return self.zero_tick_pos
 
     def function_name(self, name):
         if name not in self.func_names:
@@ -113,13 +121,19 @@ class Session:
         self.placer = CommandPlacer(pos)
         self.writer = writer
         self.scope = Scope(namespace, pos)
-        self.add_util_command_block()
         self.entity_pos = ' '.join(map(str, entity_pos))
         self.create_cleanup = create_cleanup
 
-    def add_util_command_block(self):
-        block = CommandBlock(Cmd(''), conditional=False, mode='REPEAT')
-        self.placer.place((((block, ''), []),))
+    def add_command_blocks(self):
+        repeatblock = CommandBlock(Cmd(''), conditional=False, mode='REPEAT')
+        line = [((repeatblock, ''), [])]
+        if self.scope._zero_tick_used:
+            dispatch_a = CommandBlock(Cmd(''), conditional=False, mode='CHAIN')
+            dispatch_b = CommandBlock(Cmd(''), conditional=False, mode='CHAIN',
+                                      opposite=True, single_use=False)
+            line.append(((dispatch_a, ''), []))
+            line.append(((dispatch_b, ''), []))
+        self.placer.place(line)
 
     def load_function_table(self, known_functions):
         self.scope.add_function_names(known_functions)
@@ -223,6 +237,7 @@ class Session:
             clean.append('team remove %s' % name)
 
         if self.scope._util_block_used:
+            self.add_command_blocks()
             setup.extend(self.placer.output())
             clean.extend(self.placer.cleanup())
 

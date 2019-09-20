@@ -1,11 +1,14 @@
 import abc
 
 class CommandBlock:
-    def __init__(self, command, conditional=True, mode='CHAIN', auto=True):
+    def __init__(self, command, conditional=True, mode='CHAIN', auto=True,
+                 opposite=False, single_use=True):
         self.command = command
         self.cond = conditional
         self.mode = mode
         self.auto = auto
+        self.opposite = opposite
+        self.single_use = single_use
 
     def resolve(self, scope):
         return self.command.resolve(scope)
@@ -144,6 +147,11 @@ class NbtPath(Resolvable):
 
     def resolve(self, scope):
         return self.path
+
+    def __eq__(self, other):
+        if type(other) != type(self):
+            return False
+        return self.path == other.path
 
 class Path(NbtPath):
 
@@ -404,15 +412,19 @@ class BlockReference(BlockOrEntityRef):
     def resolve(self, scope):
         return 'block %s' % self.pos.resolve(scope)
 
-class UtilBlockPos(WorldPos):
+class _UtilBlockPos(WorldPos):
 
-    def __init__(self):
+    def __init__(self, is_zero_tick):
         self.block_pos = True
+        self.is_zero_tick = is_zero_tick
 
     def resolve(self, scope):
+        if self.is_zero_tick:
+            return scope.get_zero_tick_block()
         return scope.get_util_block()
 
-UtilBlockPos = UtilBlockPos()
+UtilBlockPos = _UtilBlockPos(False)
+ZeroTickBlockPos = _UtilBlockPos(True)
 
 class DataGet(Command):
 

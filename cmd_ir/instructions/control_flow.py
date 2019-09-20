@@ -7,7 +7,7 @@ from ..core_types import (Opt,
                           )
 from ..variables import (Variable, VarType, LocalStackVariable,
                          VirtualStackPointer)
-from ..nbt import NBTList, NBTType, NBTCompound, FutureNBTString
+from ..nbt import NBTList, NBTType, NBTCompound, FutureNBTString, NBTByte
 import commands as c
 
 class Branch(SingleCommandInsn):
@@ -87,7 +87,7 @@ class Invoke(Insn):
     argnames = 'func fnargs retvars'
     argdocs = ["Function to invoke", "Parameters to pass to the function",
                "Tuple of `Variable`s to place return values into"]
-    fnargs_type = (int, Variable)
+    fnargs_type = (int, float, Variable)
     retvars_type = Opt(Variable)
     insn_name = 'invoke'
     is_branch = True
@@ -338,6 +338,76 @@ class SetCommandBlockFromStack(SingleCommandInsn):
         return c.DataModifyFrom(c.UtilBlockPos.ref, c.NbtPath('Command'),
              'set', c.GlobalEntity.ref, c.StackPath(STACK_HEAD, 'cmd'))
 
+def _zero_tick_set(out, arg, is_func):
+    blk = c.ZeroTickBlockPos.ref
+    if is_func:
+        tag = NBTCompound()
+        tag.set('Command', FutureNBTString(c.Function(arg.global_name)))
+        tag.set('UpdateLastExecution', NBTByte(0))
+        out.write(c.DataMerge(blk, tag))
+    else:
+        path, entity = arg
+        out.write(c.DataModifyFrom(blk, c.NbtPath('Command'), 'set',
+                                   entity.ref, path.subpath('.cmd')))
+        out.write(c.DataModifyValue(blk, c.NbtPath('UpdateLastExecution'),
+                                    'set', NBTByte(0)))
+
+class ZeroTickSet(Insn):
+    """Sets the special zero-tick command block to the given function
+    or function reference. The function will execute in the same tick once
+    control is returned to the command block."""
+
+    args = [(Variable, FunctionLike)]
+    argnames = 'ref'
+    argdocs = ["Function reference"]
+    insn_name = 'zero_tick_set'
+
+    def validate(self):
+        if isinstance(self.ref, Variable):
+            assert self.ref.type == VarType.nbt
+
+    def declare(self):
+        if isinstance(self.ref, Variable):
+            self.ref.usage_read()
+        else:
+            self.ref.usage()
+
+    def apply(self, out, func):
+        is_func = not isinstance(self.ref, Variable)
+        if is_func:
+            arg = self.ref
+        else:
+            arg = self.ref._direct_nbt()
+            assert arg is not None
+        _zero_tick_set(out, arg, is_func)
+
+class SetZeroTickFromStack(Insn):
+    """Sets the special zero-tick command block to execute the function
+    at the top of the global stack. The function will execute in the same
+    tick once control is returned to the command block."""
+
+    args = []
+    argnames = ''
+    insn_name = 'set_zero_tick_from_stack'
+
+    def apply(self, out, func):
+        arg = (c.StackPath(STACK_HEAD, None), c.GlobalEntity)
+        _zero_tick_set(out, arg, False)
+
+class ClearZeroTick(Insn):
+    """Remove any function from the special zero-tick command block and clear
+    the zero-tick flag."""
+
+    args = []
+    argnames = ''
+    insn_name = 'clear_zero_tick'
+
+    def apply(self, out, func):
+        blk = c.ZeroTickBlockPos.ref
+        out.write(c.DataRemove(blk, c.NbtPath('Command')))
+        out.write(c.DataModifyValue(blk, c.NbtPath('UpdateLastExecution'),
+                                    'set', NBTByte(1)))
+
 # application defined in IRFunction
 class Return(VoidApplicationInsn):
     """Return from a function."""
@@ -420,7 +490,7 @@ class PushFunction(SingleCommandInsn):
     def get_cmd(self):
         tag = NBTCompound()
         tag.set('cmd', FutureNBTString(c.Function(self.func.global_name)))
-        return c.DataModifyStack(None, None, 'append', tag, c.StackFrameHead)
+        return c.DataModifyStack(None, None, 'append', tag)
 
 class PushNewStackFrame(Insn):
     """(Internal) Create a new stackframe."""

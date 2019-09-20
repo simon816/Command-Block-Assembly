@@ -416,7 +416,7 @@ class ConstantFolding(BlockVisitor):
         return new if changed else insn
 
     def get_val(self, val):
-        if type(val) == int:
+        if type(val) in (int, float):
             return val
         if val in self.varvals:
             return self.varvals[val]

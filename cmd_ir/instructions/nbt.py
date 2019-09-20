@@ -8,10 +8,11 @@ from ..core_types import (VirtualString,
                           EntityRef,
                           CmdFunction,
                           EntitySelection,
+                          FunctionLike,
                           )
 from ..variables import (Variable, VarType, VirtualNbtVariable,
                          EntityLocalNbtVariable)
-from ..nbt import NBTType, NBTList, NBTBase, NBTCompound
+from ..nbt import NBTType, NBTList, NBTBase, NBTCompound, FutureNBTString
 
 import commands as c
 
@@ -123,14 +124,36 @@ class NBTDataGetter(ConstructorInsn):
             target = c.EntityReference(self.target.as_resolve())
         return NBTGetterFunc(target, str(self.path), self.scale)
 
-class NBTAssign(SingleCommandInsn):
-    """Sets NBT data on the given variable (which must have type 'nbt')."""
+class FuncRefInsn(ConstructorInsn):
+    """Create an NBT compound value that refers to the given function.
+    Caveat: The function must be defined before this instruction is used."""
+
+    args = [FunctionLike]
+    argnames = 'func'
+    argdocs = ["Function to create a reference to"]
+    insn_name = 'func_ref'
+    rettype = NBTCompound
+
+    def declare(self):
+        self.func.usage()
+
+    def construct(self):
+        tag = NBTCompound()
+        self._set_value(tag)
+        return tag
+
+    def _set_value(self, tag):
+        tag.set('cmd', FutureNBTString(c.Function(self.func.global_name)))
+
+    def changed(self, prop):
+        self._set_value(self._value)
+
+class _ModifyNBTVariable(SingleCommandInsn):
 
     args = [Variable, NBTBase]
     access = [WRITE, READ]
     argnames = 'var nbt'
     argdocs = ["Variable to set the value on", "NBT value"]
-    insn_name = 'nbt_assign'
 
     def validate(self):
         assert self.var.type is VarType.nbt
@@ -140,10 +163,32 @@ class NBTAssign(SingleCommandInsn):
 
     def get_cmd(self):
         direct = self.var._direct_nbt()
-        assert direct is not None
+        assert direct is not None, self.var
         path, entity = direct
-        return c.DataModifyValue(entity.ref, path, 'set', self.nbt)
+        return self.modify_cmd(entity.ref, path, self.nbt)
 
+
+class NBTAssign(_ModifyNBTVariable):
+    """Sets NBT data on the given variable (which must have type 'nbt')."""
+
+    insn_name = 'nbt_assign'
+
+    def modify_cmd(self, entity, path, nbt):
+        return c.DataModifyValue(entity, path, 'set', nbt)
+
+class NBTListVarAppend(_ModifyNBTVariable):
+    """Appends NBT data to the given nbt variable. The variable must point
+    to an NBT list, else it will fail at runtime."""
+
+    insn_name = 'nbt_var_append'
+
+    def modify_cmd(self, entity, path, nbt):
+        return c.DataModifyValue(entity, path, 'append', nbt)
+
+
+# TODO problem if this is not in the preamble - optimizers may make
+# copies and change the root, but the constructed variable is not updated
+# Solution - make it preamble only
 class NBTSubPath(ConstructorInsn):
     """Create a derivative NBT variable from a sub-path of a parent NBT
     variable."""
