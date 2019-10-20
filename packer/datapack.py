@@ -66,44 +66,26 @@ class _ZipWriteIO(io.StringIO):
 
 class DataPackWriter:
 
-    def __init__(self, directory, name, write_zip):
-        self.dir = directory
-        self.name = name
+    def __init__(self, outfile, namespace):
+        self.outfile = outfile
+        self.namespace = namespace
         self.metadata = {
             "pack_format": 1,
             "description": ""
         }
-        self.write_zip = write_zip
-
         self.func_count = 0
         self.command_count = 0
+        self.zip = None
 
     def set_description(self, description):
         self.metadata['description'] = description
 
-    def delete_existing(self):
-        if self.write_zip:
-            file = os.path.join(self.dir, self.name + '.zip')
-            try:
-                os.remove(file)
-            except FileNotFoundError as e:
-                pass
-            return
-        import shutil
-        try:
-            shutil.rmtree(os.path.join(self.dir, self.name))
-        except FileNotFoundError as e:
-            pass
-
     def open(self):
-        if self.write_zip:
-            file = os.path.join(self.dir, self.name + '.zip')
-            self.zip = zipfile.ZipFile(file, 'w', zipfile.ZIP_DEFLATED)
+        self.zip = zipfile.ZipFile(self.outfile, 'w', zipfile.ZIP_DEFLATED)
 
     def close(self):
         self.write_metadata()
-        if self.write_zip:
-            self.zip.close()
+        self.zip.close()
 
     def write_metadata(self):
         with self.open_file('pack.mcmeta') as f:
@@ -134,19 +116,11 @@ class DataPackWriter:
 
     def open_data(self, name, namespace=None):
         if namespace is None:
-            namespace = self.name
+            namespace = self.namespace
         return self.open_file(os.path.join('data', namespace, name))
 
     def open_file(self, path):
-        if self.write_zip:
-            return _ZipWriteIO(path, self.zip)
-        path = os.path.join(self.dir, self.name, path)
-        try:
-            os.makedirs(os.path.dirname(path))
-        except FileExistsError as e:
-            pass
-        return open(path, 'w', encoding='utf8')
-
+        return _ZipWriteIO(path, self.zip)
 
 class Advancement:
 

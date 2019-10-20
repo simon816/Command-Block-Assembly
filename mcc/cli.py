@@ -198,9 +198,8 @@ def write_datapack(top, dispatchers, pragma_results, args):
     if args.dummy_datapack:
         writer = DummyWriter()
     else:
-        path = args.o or dpd.namespace
-        data_dir, filename = os.path.split(path)
-        writer = DataPackWriter(data_dir, filename, True)
+        path = args.o or (dpd.namespace + '.zip')
+        writer = DataPackWriter(path, dpd.namespace)
         writer.set_description(dpd.description)
     if args.dump_commands:
         writer = DebugWriterWrapper(writer)
