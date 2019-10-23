@@ -14,11 +14,10 @@ intrinsic_extension {
 
     async void Game::tick() Python: {
         assert not args
-        tr = compiler.func.create_block('yield_trampoline')
-        tr.add(i.ClearCommandBlock())
-        compiler.block.add(i.SetCommandBlock(tr))
-        compiler.block = tr
-        from .containers import LiteralInt
-        return LiteralInt(compiler.type('int'), 1)
+        cb = compiler.func.create_block('yield_tick')
+        compiler.add_insn(i.SetCommandBlock(cb))
+        cb.add(i.ClearCommandBlock())
+        from .containers import AsyncReturn, FuncCallRet
+        return AsyncReturn(FuncCallRet(compiler.type('void'), None, _instance), cb)
     }
 }

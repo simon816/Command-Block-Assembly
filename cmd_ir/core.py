@@ -40,10 +40,11 @@ class FuncWriter(metaclass=abc.ABCMeta):
 
 class CmdWriter:
 
-    def __init__(self, temp_gen):
+    def __init__(self, func_writer, temp_gen):
         self.pre = []
         self.out = []
         self.post = []
+        self.func_writer = func_writer
         self.temp_gen = temp_gen
 
     def prepend(self, cmd):
@@ -540,6 +541,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._entryblock = self.uniq('0entry', self._create_super_block)
         self._entryblock.is_entry = True
         self._exitblock = self.uniq('0ret', self._create_super_block)
+        self.post_exit_insns = []
         self._varsfinalized = False
         self._is_extern = False
         self._is_pure = False
@@ -667,7 +669,8 @@ class IRFunction(VisibleFunction, VariableHolder):
         assert self.finished
         self.preamble.apply(writer)
         for block in self.allblocks:
-            writer.write_function(block.global_name, block.writeout(temp_gen))
+            writer.write_function(block.global_name, block.writeout(writer,
+                                                                    temp_gen))
 
     def get_registers(self):
         assert self._varsfinalized
@@ -739,7 +742,13 @@ class IRFunction(VisibleFunction, VariableHolder):
         for old_block, new_block in block_mapping.items():
             self._inline_seq(old_block, new_block, scope_mapping)
 
-        return entry_block, block_mapping[self._exitblock]
+        exit_block = block_mapping[self._exitblock]
+        from .instructions import RunDeferredCallback
+        for insn in self.post_exit_insns:
+            # Only post exit insn supported for now
+            assert isinstance(insn, RunDeferredCallback)
+
+        return entry_block, exit_block
 
     def configure_parameters(self, hasownstackframe):
         # Linked to InvokeInsn
@@ -791,6 +800,8 @@ class IRFunction(VisibleFunction, VariableHolder):
             self._entryblock.add(PushNewStackFrame(tuple(var.type for var \
                                                          in vars[::-1])))
             self._exitblock.add(PopStack())
+        for insn in self.post_exit_insns:
+            self._exitblock.add(insn)
         # Always branch to real entry point
         self._entryblock.add(Branch(self.blocks[0]))
         return vars
@@ -860,8 +871,8 @@ class BasicBlock(FunctionLike, InstructionSeq):
             return Branch(self._func._exitblock)
         return insn
 
-    def writeout(self, temp_gen):
-        writer = CmdWriter(temp_gen)
+    def writeout(self, func_writer, temp_gen):
+        writer = CmdWriter(func_writer, temp_gen)
         for insn in self.insns:
             insn.apply(writer, self._func)
         if self.needs_success_tracker:

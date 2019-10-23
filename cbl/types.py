@@ -711,7 +711,14 @@ class FunctionContainer:
         return self.__real_fn.invoke(instance, args)
 
     def invoke(self, args, ret_args):
-        self.compiler.add_insn(i.Invoke(self.ir_func, args, ret_args))
+        callback = None
+        if self.fn_type.is_async:
+            callback = self.compiler.create_block('async_cb')
+            insn = i.DeferredInvoke(self.ir_func, callback, args, ret_args)
+        else:
+            insn = i.Invoke(self.ir_func, args, ret_args)
+        self.compiler.add_insn(insn)
+        return callback
 
 class FunctionType(Type):
 

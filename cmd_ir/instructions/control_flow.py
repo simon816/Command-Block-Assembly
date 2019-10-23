@@ -2,12 +2,13 @@
 
 from ._core import (Insn, SingleCommandInsn, READ, WRITE, VoidApplicationInsn,
                     TupleQueryResult, STACK_HEAD)
-from ..core import BasicBlock, VisibleFunction, FunctionLike
+from ..core import BasicBlock, VisibleFunction, FunctionLike, CmdWriter
 from ..core_types import (Opt,
                           )
 from ..variables import (Variable, VarType, LocalStackVariable,
                          VirtualStackPointer)
-from ..nbt import NBTList, NBTType, NBTCompound, FutureNBTString, NBTByte
+from ..nbt import (NBTBase, NBTList, NBTType, NBTCompound, FutureNBTString,
+                   NBTByte)
 import commands as c
 
 class Branch(SingleCommandInsn):
@@ -64,6 +65,9 @@ def make_stack_frame_from(values, out):
         elif isinstance(val, VarType):
             vtype = val
             default = val.default_val
+        elif isinstance(val, NBTBase):
+            stack.append(val)
+            continue
         else:
             assert False, val
         item.set(vtype.nbt_path_key, vtype.nbt_type.new(default))
@@ -131,6 +135,11 @@ class Invoke(Insn):
         # Validate arguments and return type
         self.func.validate_args(self.fnargs, self.retvars)
 
+        frame = self.setup_frame(out, func)
+        out.write(c.Function(self.func.global_name))
+        self.destroy_frame(out, frame)
+
+    def setup_frame(self, out, func):
         # See also: IRFunction.configure_parameters
         # Build invocation frame
         # list of:
@@ -158,9 +167,18 @@ class Invoke(Insn):
             registers = [var for var in registers if var not in self.retvars]
         allargs.extend(registers)
 
+        self.allargs_hook(allargs)
+
         if allargs:
             make_stack_frame_from(allargs, out)
-        out.write(c.Function(self.func.global_name))
+
+        return registers, reg_start, args_start, ret_start, allargs
+
+    def allargs_hook(self, allargs):
+        pass
+
+    def destroy_frame(self, out, frame):
+        registers, reg_start, args_start, ret_start, allargs = frame
 
         # Restore registers
         if registers:
@@ -196,6 +214,55 @@ class Invoke(Insn):
         # Pop invocation frame
         if allargs:
             out.write(c.DataRemove(c.GlobalEntity.ref, c.StackPath(STACK_HEAD)))
+
+class DeferredInvoke(Invoke):
+    """Invokes an 'open' function. i.e. a function that does not return
+    to the caller immediately. The function must call the callback function
+    once complete, use run_callback_on_exit for this."""
+
+    args = [VisibleFunction, BasicBlock, Opt(tuple), Opt(tuple)]
+    access = [READ, READ, READ, WRITE]
+    argnames = 'func retblock fnargs retvars'
+    argdocs = ["Function to invoke", "Block to jump after invoke is finished",
+               "Parameters to pass to the function",
+               "Tuple of `Variable`s to place return values into"]
+    insn_name = 'deferred_invoke'
+    # This causes the function to be "closed" which prevents deferring
+    #is_block_terminator = True
+
+    def declare(self):
+        super().declare()
+        self.retblock.usage()
+
+    def allargs_hook(self, allargs):
+        tr_name = self.retblock._name + '/trampoline'
+        tr_nbt = NBTCompound()
+        tr_nbt.set('cmd', FutureNBTString(c.Function(tr_name)))
+        # Stick callback on the end of the stackframe
+        allargs.append(tr_nbt)
+
+    def apply(self, out, func):
+        # TODO verify self.func has run_callback_on_exit
+        self.func.validate_args(self.fnargs, self.retvars)
+
+        # Create a trampoline function as the real callback
+        tr_name = self.retblock._name + '/trampoline'
+        out.func_writer.write_func_table([tr_name])
+
+        # Setup frame and call function as before
+        frame = self.setup_frame(out, func)
+        out.write(c.Function(self.func.global_name))
+
+        # Write frame destruction to the trampoline function
+        tr_out = CmdWriter(out.func_writer, out.temp_gen)
+        self.destroy_frame(tr_out, frame)
+        # Clear zero tick block
+        tr_out.write(_zt.clear())
+        tr_out.write(_zt.reset_last_exec())
+
+        # Finally, make the trampoline bounce to the desired callback
+        tr_out.write(c.Function(self.retblock.global_name))
+        out.func_writer.write_function(tr_name, tr_out.get_output())
 
 def _branch_apply(out, if_true, if_false, apply):
     inverted = not if_true
@@ -300,6 +367,45 @@ def make_yield_tick(block, func, callback):
     tr.add(Branch(callback))
     block.add(SetCommandBlock(tr))
 
+class UtilBlockFunctions:
+
+    block = c.UtilBlockPos.ref
+
+    def make_set_func_nbt(self, func):
+        tag = NBTCompound()
+        tag.set('Command', FutureNBTString(c.Function(func.global_name)))
+        return tag
+
+    def cmd_set_func(self, func):
+        return c.DataMerge(self.block, self.make_set_func_nbt(func))
+
+    def cmd_set_from(self, path, entity):
+        return c.DataModifyFrom(self.block, c.NbtPath('Command'), 'set',
+                                entity.ref, path.subpath('.cmd'))
+
+    def clear(self):
+        return c.DataRemove(self.block, c.NbtPath('Command'))
+
+class ZeroTickFunctions(UtilBlockFunctions):
+
+    block = c.ZeroTickBlockPos.ref
+
+    def make_set_func_nbt(self, func):
+        tag = super().make_set_func_nbt(func)
+        tag.set('UpdateLastExecution', NBTByte(0))
+        return tag
+
+    def clear_last_exec(self):
+        return c.DataModifyValue(self.block, c.NbtPath('UpdateLastExecution'),
+                                 'set', NBTByte(0))
+
+    def reset_last_exec(self):
+        return c.DataModifyValue(self.block, c.NbtPath('UpdateLastExecution'),
+                                 'set', NBTByte(1))
+
+_ut = UtilBlockFunctions()
+_zt = ZeroTickFunctions()
+
 class SetCommandBlock(SingleCommandInsn):
     """Sets the special command block to run the given function on the next
     tick."""
@@ -312,9 +418,7 @@ class SetCommandBlock(SingleCommandInsn):
         self.func.usage()
 
     def get_cmd(self):
-        tag = NBTCompound()
-        tag.set('Command', FutureNBTString(c.Function(self.func.global_name)))
-        return c.DataMerge(c.UtilBlockPos.ref, tag)
+        return _ut.cmd_set_func(self.func)
 
 class ClearCommandBlock(SingleCommandInsn):
     """Remove any value from the special command block."""
@@ -324,35 +428,20 @@ class ClearCommandBlock(SingleCommandInsn):
     insn_name = 'clear_command_block'
 
     def get_cmd(self):
-        return c.DataRemove(c.UtilBlockPos.ref, c.NbtPath('Command'))
+        return _ut.clear()
 
 class SetCommandBlockFromStack(SingleCommandInsn):
-    """Copies the value from the top of the stack into the special command
-    block."""
+    """Copies the value from the top of the global stack into the special
+    command block."""
 
     args = []
     argnames = ''
     insn_name = 'set_command_block_from_stack'
 
     def get_cmd(self):
-        return c.DataModifyFrom(c.UtilBlockPos.ref, c.NbtPath('Command'),
-             'set', c.GlobalEntity.ref, c.StackPath(STACK_HEAD, 'cmd'))
+        return _ut.cmd_set_from(c.StackPath(STACK_HEAD, None), c.GlobalEntity)
 
-def _zero_tick_set(out, arg, is_func):
-    blk = c.ZeroTickBlockPos.ref
-    if is_func:
-        tag = NBTCompound()
-        tag.set('Command', FutureNBTString(c.Function(arg.global_name)))
-        tag.set('UpdateLastExecution', NBTByte(0))
-        out.write(c.DataMerge(blk, tag))
-    else:
-        path, entity = arg
-        out.write(c.DataModifyFrom(blk, c.NbtPath('Command'), 'set',
-                                   entity.ref, path.subpath('.cmd')))
-        out.write(c.DataModifyValue(blk, c.NbtPath('UpdateLastExecution'),
-                                    'set', NBTByte(0)))
-
-class ZeroTickSet(Insn):
+class SetZeroTick(Insn):
     """Sets the special zero-tick command block to the given function
     or function reference. The function will execute in the same tick once
     control is returned to the command block."""
@@ -360,7 +449,7 @@ class ZeroTickSet(Insn):
     args = [(Variable, FunctionLike)]
     argnames = 'ref'
     argdocs = ["Function reference"]
-    insn_name = 'zero_tick_set'
+    insn_name = 'set_zero_tick'
 
     def validate(self):
         if isinstance(self.ref, Variable):
@@ -373,13 +462,14 @@ class ZeroTickSet(Insn):
             self.ref.usage()
 
     def apply(self, out, func):
-        is_func = not isinstance(self.ref, Variable)
-        if is_func:
-            arg = self.ref
+        if isinstance(self.ref, Variable):
+            direct = self.ref._direct_nbt()
+            assert direct is not None
+            path, entity = direct
+            out.write(_zt.cmd_set_from(path, entity))
+            out.write(_zt.clear_last_exec())
         else:
-            arg = self.ref._direct_nbt()
-            assert arg is not None
-        _zero_tick_set(out, arg, is_func)
+            out.write(_zt.cmd_set_func(func))
 
 class SetZeroTickFromStack(Insn):
     """Sets the special zero-tick command block to execute the function
@@ -391,8 +481,21 @@ class SetZeroTickFromStack(Insn):
     insn_name = 'set_zero_tick_from_stack'
 
     def apply(self, out, func):
-        arg = (c.StackPath(STACK_HEAD, None), c.GlobalEntity)
-        _zero_tick_set(out, arg, False)
+        out.write(_zt.cmd_set_from(c.StackPath(STACK_HEAD, None),
+                                    c.GlobalEntity))
+        out.write(_zt.clear_last_exec())
+
+class RunDeferredCallback(Insn):
+    """(Internal) Copies the callback function from the stackframe
+    into the zero tick block. See deferred_invoke."""
+
+    args = []
+    argnames = ''
+    insn_name = 'run_deferred_callback'
+
+    def apply(self, out, func):
+        out.write(_zt.cmd_set_from(c.StackFrameHead(-1), c.GlobalEntity))
+
 
 class ClearZeroTick(Insn):
     """Remove any function from the special zero-tick command block and clear
@@ -403,10 +506,8 @@ class ClearZeroTick(Insn):
     insn_name = 'clear_zero_tick'
 
     def apply(self, out, func):
-        blk = c.ZeroTickBlockPos.ref
-        out.write(c.DataRemove(blk, c.NbtPath('Command')))
-        out.write(c.DataModifyValue(blk, c.NbtPath('UpdateLastExecution'),
-                                    'set', NBTByte(1)))
+        out.write(_zt.clear())
+        out.write(_zt.reset_last_exec())
 
 # application defined in IRFunction
 class Return(VoidApplicationInsn):

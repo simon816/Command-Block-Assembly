@@ -418,6 +418,8 @@ class Compiler(Transformer_WithPre):
     def _process_function_def(self, func_sym, body):
         self.func = func_sym.value.get_or_create_definition()
         self.funcsym = func_sym
+        if func_sym.type.is_async:
+            self.func.preamble.add(RunCallbackOnExit())
         self.block = self.func.create_block('entry')
         with self.scope:
             for param in func_sym.type.params:
@@ -433,11 +435,7 @@ class Compiler(Transformer_WithPre):
                 self.ret_param = None
             with self.entity_support.set_sender(sender.value):
                 self.transform(body)
-        if func_sym.type.is_async:
-            assert not self.block.is_terminated()
-            self.block.add(SetCommandBlockFromStack())
-            self.block.add(PopStack())
-        elif not self.block.is_terminated():
+        if not self.block.is_terminated():
             self.block.add(Return())
         self.func.end()
         self.block = None
@@ -647,7 +645,7 @@ class Compiler(Transformer_WithPre):
             self.block = begin
             self.transform(body)
             self.block.add(Branch(cond_block))
-            self.block = cond_label
+            self.block = cond_block
             cond = self.transform(cond)
             self.block.add(RangeBr(self.as_var(cond), 0, 0, end, begin))
             self.block = end
@@ -721,6 +719,11 @@ class Compiler(Transformer_WithPre):
                    "Cannot return value in void function"
             self.dispatch_operator('=', self.ret_param, expr)
         self.add_insn(Return())
+
+    def expression_statement(self, expr):
+        # Force type and value to be present (e.g. check AsyncReturn)
+        expr.type
+        expr.value
 
     # == Expressions == #
 
@@ -800,11 +803,10 @@ class Compiler(Transformer_WithPre):
 
     def pre_await_expression(self, tree, post_transform):
         assert self.funcsym.type.is_async
-        cb = self.create_block('async_cb')
-        self.add_insn(PushFunction(cb))
         expr = self.transform(tree.children[0])
-        #self.block.add(Branch(cb))
-        self.block = cb
+        assert isinstance(expr, AsyncReturn)
+        self.block = expr.callback
+        return expr.ret
 
     def unary_expression(self, op, expr):
         return self.dispatch_operator(op.value, expr)
@@ -817,7 +819,6 @@ class Compiler(Transformer_WithPre):
         if isinstance(func_ref.type, TypeType):
             return func_ref.type.constructor(func_ref, fn_args)
         assert isinstance(func_ref.type, FunctionType)
-        # TODO verify await is used
         if func_ref.type.is_async:
             assert self.funcsym.type.is_async
         if func_ref.type.is_intrinsic:
@@ -836,8 +837,12 @@ class Compiler(Transformer_WithPre):
         else:
             ret_args = None
             retobj = None
-        func_ref.type.invoke(func_ref, args, ret_args)
-        return FuncCallRet(r_type, retobj, func_ref)
+        async_callback = func_ref.type.invoke(func_ref, args, ret_args)
+        ret = FuncCallRet(r_type, retobj, func_ref)
+        if func_ref.type.is_async:
+            return AsyncReturn(ret, async_callback)
+        assert async_callback is None
+        return ret
 
     def member_access_expr(self, var, dot, property):
         propvar = var.type.get_property(var, property.value)

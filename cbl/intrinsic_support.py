@@ -13,6 +13,7 @@ class NativeExec(IntrinsicFunction):
         scope = dict(args=arg_dict,
                      i=i,
                      compiler=self.compiler,
+                     _instance=instance,
                      __name__=__name__)
         # "this" not present in static functions
         if isinstance(instance, UserDefSymbol):

@@ -1,6 +1,7 @@
 """Function Properties"""
 
 from ._core import PreambleOnlyInsn, VoidApplicationInsn
+from .control_flow import RunDeferredCallback
 
 class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
     """Marks the function as externally visible. The function will not
@@ -41,3 +42,17 @@ class InlineInsn(PreambleOnlyInsn, VoidApplicationInsn):
 
     def activate(self, seq):
         seq.holder.set_inline()
+
+class RunCallbackOnExit(PreambleOnlyInsn, VoidApplicationInsn):
+    """Converts this function into an async function - one that
+    does not return immediately, but instead invokes a callback
+    when it eventually exits. Call this function with deferred_invoke."""
+
+    args = []
+    argnames = ''
+    func_preamble_only = True
+    inline_copyable = False
+    insn_name = 'run_callback_on_exit'
+
+    def activate(self, seq):
+        seq.holder.post_exit_insns.append(RunDeferredCallback())

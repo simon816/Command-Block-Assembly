@@ -153,6 +153,9 @@ class NbtPath(Resolvable):
             return False
         return self.path == other.path
 
+    def __repr__(self):
+        return '%s(%s)' % (self.__class__.__name__, self.path)
+
 class Path(NbtPath):
 
     def resolve(self, scope):

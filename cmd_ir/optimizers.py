@@ -209,9 +209,13 @@ class InvokeInliner(BlockVisitor):
     def visit_insn(self, insn):
         new_attach = self.reattach_block
         if isinstance(insn, Invoke) and insn.func.is_inline:
+            deferred = isinstance(insn, DeferredInvoke)
             #print("Inlining invoke to function:", insn.func)
             entry, exit = self.inline_function(insn.func, insn.fnargs,
                                                insn.retvars)
+            if deferred:
+                exit.add(Branch(insn.retblock))
+                exit = insn.retblock
             new_attach = exit
             insn = Branch(entry)
             insn.declare()
