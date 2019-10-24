@@ -203,11 +203,13 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
         return newvar
 
     def push_to_stack(self, out):
+        self.as_nbt_variable(out).push_to_stack(out)
+
+    def as_nbt_variable(self, out):
         # Create a virtual variable to store the value as NBT
-        # then ask it to push itself to the stack
-        dest = WorkingNbtVariable(self.type)
-        self.clone_to(dest, out)
-        dest.push_to_stack(out)
+        var = WorkingNbtVariable(self.type)
+        self.clone_to(var, out)
+        return var
 
     def realign_frame(self, shift):
         pass
@@ -284,6 +286,9 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
                                        self.entity.ref, self.path))
         else:
             super().clone_to(other, out)
+
+    def as_nbt_variable(self, out):
+        return self
 
     def push_to_stack(self, out):
         # out-of-bounds stack path

@@ -376,17 +376,17 @@ are ignored if they are not relevant for the desired action.
 
 Compiling `examples/fib.asm` into a datapack `fib.zip`:
 ```
-python main.py examples/fib.asm examples/fib.dpd
+python mcc.py examples/fib.asm examples/fib.dpd
 ```
 
 Compiling `examples/hdd_driver.c` into Command IR `examples/hdd_driver.ir`:
 ```
-python main.py examples/hdd_driver.c -S
+python mcc.py examples/hdd_driver.c -S
 ```
 
 Compiling `mylib.cmdl` into an object file, statically linking `myprogram.cmdl` with the object and `examples/fib.ir`,
 then using `mydatapack.dpd` to create `mysuperdatapack.zip`:
 ```
-python main.py mylib.cmdl -c
-python main.py mylib.o myprogram.cmdl examples/fib.ir mydatapack.dpd -o mysuperdatapack.zip
+python mcc.py mylib.cmdl -c
+python mcc.py mylib.o myprogram.cmdl examples/fib.ir mydatapack.dpd -o mysuperdatapack.zip
 ```

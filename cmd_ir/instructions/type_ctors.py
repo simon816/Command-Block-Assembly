@@ -290,6 +290,12 @@ class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
         if ref is not None:
             name = ref.objective.objective
             out.write_objective(name, None)
+        nbt = self._value._direct_nbt()
+        if nbt is not None:
+            path, entity = nbt
+            initval = self.type.nbt_type.new(self.type.default_val).serialize()
+            init_spec = '{%s:%s}' % (self.type.nbt_path_key, initval)
+            out.write_global_nbt(init_spec)
 
 class ParameterInsn(DefineVariable):
     """Add a required parameter of a given type to a function."""

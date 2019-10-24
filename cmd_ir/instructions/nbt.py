@@ -1,7 +1,7 @@
 """NBT Instructions"""
 
 from ._core import (ConstructorInsn, VoidApplicationInsn, SingleCommandInsn,
-                    READ, WRITE)
+                    Insn, READ, WRITE)
 from ..core_types import (VirtualString,
                           Opt,
                           BlockRef,
@@ -148,9 +148,9 @@ class FuncRefInsn(ConstructorInsn):
     def changed(self, prop):
         self._set_value(self._value)
 
-class _ModifyNBTVariable(SingleCommandInsn):
+class _ModifyNBTVariable(Insn):
 
-    args = [Variable, NBTBase]
+    args = [Variable, (NBTBase, Variable)]
     access = [WRITE, READ]
     argnames = 'var nbt'
     argdocs = ["Variable to set the value on", "NBT value"]
@@ -160,31 +160,57 @@ class _ModifyNBTVariable(SingleCommandInsn):
 
     def declare(self):
         self.var.usage_write()
+        if isinstance(self.nbt, Variable):
+            self.nbt.usage_read()
 
-    def get_cmd(self):
+    def apply(self, out, func):
         direct = self.var._direct_nbt()
         assert direct is not None, self.var
-        path, entity = direct
-        return self.modify_cmd(entity.ref, path, self.nbt)
+        dest_path, dest_entity = direct
+        if isinstance(self.nbt, Variable):
+            src_path, src_entity = self.nbt.as_nbt_variable(out)._direct_nbt()
+            out.add(c.DataModifyFrom(dest_entity.ref, dest_path, self.action,
+                                     src_entity.ref, src_path))
+        else:
+            out.add(c.DataModifyValue(dest_entity.ref, dest_path,
+                                      self.action, self.nbt))
 
 
 class NBTAssign(_ModifyNBTVariable):
     """Sets NBT data on the given variable (which must have type 'nbt')."""
 
     insn_name = 'nbt_assign'
-
-    def modify_cmd(self, entity, path, nbt):
-        return c.DataModifyValue(entity, path, 'set', nbt)
+    action = 'set'
 
 class NBTListVarAppend(_ModifyNBTVariable):
     """Appends NBT data to the given nbt variable. The variable must point
     to an NBT list, else it will fail at runtime."""
 
     insn_name = 'nbt_var_append'
+    action = 'append'
 
-    def modify_cmd(self, entity, path, nbt):
-        return c.DataModifyValue(entity, path, 'append', nbt)
+class NBTDataRemove(SingleCommandInsn):
+    """Removes NBT data associated with an NBT variable.
+    Note that if the variable represents an index into an array, the
+    variable may take on a new value after deleting."""
 
+    args = [Variable]
+    access = [WRITE]
+    argnames = 'nbtvar'
+    argdocs = ["The NBT variable to delete"]
+    insn_name = 'nbt_remove'
+
+    def validate(self):
+        assert self.nbtvar.type is VarType.nbt
+
+    def declare(self):
+        self.nbtvar.usage_write()
+
+    def get_cmd(self):
+        direct = self.nbtvar._direct_nbt()
+        assert direct is not None
+        path, entity = direct
+        return c.DataRemove(entity.ref, path)
 
 # TODO problem if this is not in the preamble - optimizers may make
 # copies and change the root, but the constructed variable is not updated

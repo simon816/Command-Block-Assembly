@@ -38,6 +38,10 @@ class FuncWriter(metaclass=abc.ABCMeta):
     def write_objective(self, name, criteria):
         pass
 
+    @abc.abstractmethod
+    def write_global_nbt(self, init_spec):
+        pass
+
 class CmdWriter:
 
     def __init__(self, func_writer, temp_gen):

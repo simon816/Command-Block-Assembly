@@ -123,6 +123,7 @@ class Session:
         self.scope = Scope(namespace, pos)
         self.entity_pos = ' '.join(map(str, entity_pos))
         self.create_cleanup = create_cleanup
+        self._global_nbt = []
 
     def add_command_blocks(self):
         repeatblock = CommandBlock(Cmd(''), conditional=False, mode='REPEAT')
@@ -146,6 +147,9 @@ class Session:
 
     def define_team(self, name, display):
         self.scope.add_team(name, display)
+
+    def add_global_nbt(self, subpath):
+        self._global_nbt.append(subpath)
 
     def add_function(self, name, commands):
         self.writer.write_function(name, [cmd.resolve(self.scope)
@@ -196,7 +200,8 @@ class Session:
     def create_load_function(self):
         setup_name = self._unique_func('setup')
 
-        itemtag = '{stack:[],globals:[],working:{int:0}}}'
+        global_nbt = ','.join(self._global_nbt)
+        itemtag = '{stack:[],globals:[%s],working:{int:0}}}' % global_nbt
         item = '{id:"minecraft:stone",Count:1b,tag:%s' % itemtag
         globalnbt = ('{Tags:["%s"],ArmorItems:[%s],NoAI:1b,Invisible:1b,' + \
                'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
@@ -289,6 +294,9 @@ class _SessionWriter(FuncWriter):
 
     def write_objective(self, name, criteria):
         self.session.define_objective(name, criteria)
+
+    def write_global_nbt(self, init_spec):
+        self.session.add_global_nbt(init_spec)
 
     def write_setup_function(self, func):
         self.event_handlers.append(('minecraft:load', None, func.global_name))
