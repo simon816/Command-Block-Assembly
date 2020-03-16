@@ -2,8 +2,13 @@ import contextlib
 
 import cmd_ir.instructions as i
 
-from .types import Type, DecimalType, UserDefinedInstance, UserDefSymbol
-from .containers import Temporary, LiteralInt, LiteralDec
+from .native_type import NativeType
+from .base_types import DecimalType
+from .cbl_type import CBLTypeInstance, CBLType
+from .struct_type import StructuredType, StructTypeInstance
+from .function_type import IntrinsicCallable
+from .containers import Temporary, LiteralInt, LiteralDec, InstanceSymbol, \
+     Parameter, DelegatedWrite
 
 class EntityFilterExpression:
 
@@ -16,17 +21,50 @@ class EntityFilterExpression:
         compiler.add_insn(i.SetSelector(selector, self.sel_key,
                                         i.VirtualString(self.sel_val)))
 
-class EntityPointer(UserDefinedInstance):
+class EntityCollection(CBLTypeInstance):
 
-    def __init__(self, type, var, var_members, fn_members):
-        # Don't init vars in super, we do it here
-        super().__init__(type, var, {}, fn_members)
-        compiler = type.compiler
+    def __init__(self, func_members, func_properties):
+        super().__init__(func_members, func_properties)
+        self.selector = None
+        self.boolvar = None
+
+    def copy_from(self, compiler, other):
+        self.selector = compiler.insn_def(i.CopyInsn(other.selector))
+        self.boolvar = other.boolvar
+
+    def add_bool_var(self, var):
+        if self.boolvar is None:
+            self.boolvar = var
+        else:
+            self.boolvar = self.boolvar.type.dispatch_operator('&&',
+                                                          self.boolvar, var)
+class EntityCollectionType(CBLType):
+
+    def allocate(self, compiler, namehint):
+        return EntityCollection(self.get_func_members(),
+                                self.get_func_properties())
+
+    def effective_var_size(self):
+        return 0
+
+    def _copy_impl(self, compiler, this, other):
+        this.value.copy_from(compiler, other.value)
+        return other
+
+class EntityPointer(CBLTypeInstance):
+
+    def __init__(self, compiler, type, var):
+        super().__init__({}, {})
         self.sup = compiler.entity_support
+        self.__ptr_var = var
         self.__fixed_var = None
-        self.construct_var('type', RuntimeEntityTypeType(compiler), self)
-        self.construct_var('pos', RuntimeEntityPosType(compiler), self)
-        self.construct_var('world', compiler.type('World'), self)
+
+    def ctor_from(self, ptr):
+        self.__ptr_var = ptr.variable
+
+    @property
+    def variable(self):
+        return self.__ptr_var
 
     def set_fixed_var(self, var):
         self.__fixed_var = var
@@ -37,7 +75,7 @@ class EntityPointer(UserDefinedInstance):
             block.set_is_function()
             self.sup.compiler.add_insn(i.Call(block))
             return block, self.__fixed_var
-        return self.sup.as_entity(self._var)
+        return self.sup.as_entity(self.variable)
 
     def at_entity(self):
         block = self.sup.compiler.create_block('at_entity')
@@ -52,11 +90,28 @@ class EntityPointer(UserDefinedInstance):
         res = EntityFilterExpression(self, 'tag', tag)
         return Temporary(compiler.type('SelectorFilter'), res)
 
-    def elocal_access(self, objective):
+    def elocal_access(self, compiler, objective):
         block, sender = self.as_entity()
-        var = self.sup.compiler.insn_def(
-            i.CreateEntityLocalAccess(objective, sender))
-        return var
+        var = compiler.insn_def(i.CreateEntityLocalAccess(objective, sender))
+        return var, block
+
+class EntityPointerType(CBLType):
+
+    def allocate(self, compiler, namehint):
+        var = compiler.create_var(namehint + '_ptr', i.VarType.i32)
+        return EntityPointer(compiler, self, var)
+
+    @property
+    def ir_type(self):
+        return i.VarType.i32
+
+    def as_variable(self, instance):
+        return instance.variable
+
+    def _copy_impl(self, compiler, this, other):
+        this.value.ctor_from(other.value)
+#        compiler.add_insn(i.SetScore(this.value.variable, other.value.variable))
+        return other
 
 class EntityTypeInstance:
 
@@ -72,40 +127,21 @@ class EntityTypeInstance:
         assert self.__name is not None
         return self.__name
 
-class EntityTypeType(Type):
+class EntityTypeType(NativeType):
 
-    def create(self, name):
+    def allocate(self, compiler, namehint):
         return EntityTypeInstance()
-
-class RuntimeEntityTypeType(Type):
-
-    def create(self, name, ptr):
-        return ptr
-
-    def operator_eq(self, left, right):
-        # TODO formalize these requirements
-        assert isinstance(left.value, EntityPointer)
-        assert isinstance(right.type, EntityTypeType)
-        from .entity_support import EntityFilterExpression
-        res = EntityFilterExpression(left.value, 'type', right.value.name)
-        return Temporary(self.compiler.type('SelectorFilter'), res)
-
-class RuntimeEntityWorldType(Type):
-
-    def create(self, name, ptr):
-        return ptr
 
 class PositionComponent:
 
-    def __init__(self, compiler, epos, idx):
+    def __init__(self, compiler, ptr, idx):
         self.compiler = compiler
-        assert not epos.has_offset(), "TODO"
-        self.epos = epos
+        self.ptr = ptr
         self.path = i.VirtualString('Pos[%d]' % idx)
         self.idx = idx
 
     def _create_var(self):
-        block, sender = self.epos.ptr.as_entity()
+        block, sender = self.ptr.as_entity()
         var = block.define(i.EntityLocalNBT(i.VarType.q10, sender, self.path))
         return block, var
 
@@ -126,95 +162,159 @@ class PositionComponent:
         return res
 
     def tp_offset(self, offset):
-        block, sender = self.epos.ptr.as_entity()
+        block, sender = self.ptr.as_entity()
         vec = [0, 0, 0]
         vec[self.idx] = offset
         components = [block.define(i.CreateRelPos(c)) for c in vec]
         pos = block.define(i.CreatePosition(*components))
         block.add(i.TeleportInsn(sender, pos))
 
-class PosComponentType(DecimalType):
+class EntityPosComponentType(DecimalType):
 
-    def create(self, name, epos, index):
-        return PositionComponent(self.compiler, epos, index)
+    def complete_type(self, compiler):
+        dec = compiler.type('decimal')
+        params = (Parameter(dec, 'other', False),)
+        type, func = self.add_operator_member(compiler, '=', dec, params, True)
+        func.set_as_intrinsic(IntrinsicCallable(self._assign_dec))
+        super().complete_type(compiler)
 
-    def new_temporary(self, namehint='tmp'):
-        val = super().create(namehint)
-        super().initialize(val)
-        return Temporary(self.compiler.type('decimal'), val)
+    def _assign_dec(self, compiler, fncontainer, args):
+        other = args[1]
+        with fncontainer.this.open_write() as (block, var):
+            block.add(i.SetScore(var, other.type.as_variable(other.value)))
+        return other
 
-    def write_ctx(self, instance):
-        if not isinstance(instance.value, PositionComponent):
-            return super().write_ctx(instance)
-        return instance.value.open_write()
+    def as_arguments(self, instance):
+        return ()
+
+    def as_returns(self, instance):
+        return ()
+
+    def new_temporary(self, compiler, namehint='tmp'):
+        val = super().allocate(compiler, namehint)
+        dec = compiler.type('decimal')
+        tmp = Temporary(dec, val)
+        dec.run_constructor(compiler, tmp, ())
+        return tmp
 
     def as_variable(self, instance):
-        if not isinstance(instance, PositionComponent):
-            return super().as_variable(instance)
         return instance.open_read()
 
     def operator_add_assign(self, left, right):
-        if isinstance(right, (LiteralInt, LiteralDec)) \
-           and left.value.epos is not None:
+        if isinstance(right, (LiteralInt, LiteralDec)):
             left.value.tp_offset(right.value)
-            return self.as_variable(left.value)
+            return left
         return super().operator_add_assign(left, right)
 
     def operator_sub_assign(self, left, right):
-        if isinstance(right, (LiteralInt, LiteralDec)) \
-           and left.value.epos is not None:
+        if isinstance(right, (LiteralInt, LiteralDec)):
             left.value.tp_offset(-right.value)
-            return self.as_variable(left.value)
+            return left
         return super().operator_add_assign(left, right)
 
-class EntityPosition:
-
-    def __init__(self, ptr, xoff=0, yoff=0, zoff=0):
-        self._members = {}
-        self.ptr = ptr
-        self.xoff = xoff
-        self.yoff = yoff
-        self.zoff = zoff
-        compiler = ptr.sup.compiler
-        var_type = PosComponentType(compiler)
-        self.add_member('x', var_type, compiler, self, 0)
-        self.add_member('y', var_type, compiler, self, 1)
-        self.add_member('z', var_type, compiler, self, 2)
-
-    def add_member(self, name, type, *args):
-        self._members[name] = UserDefSymbol(self, type, type.create(*args))
-
-    def offset(self, x, y, z):
-        return EntityPosition(self.ptr, self.xoff + x, self.yoff + y,
-                              self.zoff + z)
-
-    def has_offset(self):
-        return any((self.xoff, self.yoff, self.zoff))
-
-class RuntimeEntityPosType(Type):
-
-    def create(self, name, ptr):
-        return EntityPosition(ptr)
-
-    def operator_assign(self, left, right):
-        assert right.type == self.compiler.type('vec3d'), "TODO"
-        components = tuple(c.value for c in right.value)
-        assert all(type(c) == float for c in components), "TODO"
-        block, sender = left.value.ptr.as_entity()
-        pos = block.define(i.CreatePosition(*components))
-        block.add(i.TeleportInsn(sender, pos))
-        return right
-
-    def operator_add(self, left, right):
-        assert right.type == self.compiler.type('vec3d')
-        components = tuple(c.value for c in right.value)
-        assert all(type(c) == float for c in components), "TODO"
-        return Temporary(self, left.value.offset(*components))
-
-    def get_property(self, instance, prop):
-        if prop in ['x', 'y', 'z']:
-            return instance.value._members[prop]
+    def get_property(self, compiler, instance, prop):
+        if prop == 'decval':
+            val = self.new_temporary(compiler, 'decval')
+            val.type.dispatch_operator(compiler, '=', val, instance)
+            return val
         return super().get_property(instance, prop)
+
+    def coerce_to(self, compiler, container, type):
+        if type == compiler.type('decimal'):
+            var = self.as_variable(container.value)
+            return Temporary(type, var)
+        return super().coerce_to(compiler, container, type)
+
+class EntityLocalType(NativeType):
+
+    def instantiate(self, compiler, args):
+        val_type, = args
+        from .base_types import IntType
+        supported_types = (IntType,)
+        if isinstance(val_type, supported_types):
+            t = EntityLocalDerivedType(val_type)
+            t.typename = self.typename + '/' + val_type.typename
+            t.complete_type(compiler)
+            return t
+        assert False, "Invalid type argument %s" % val_type
+
+class BoundEnitityLocal(DelegatedWrite):
+
+    def __init__(self, compiler, type, ptr, objective):
+        self.type = type
+        self.__compiler = compiler
+        self.__objective = objective
+        self.__ptr = ptr
+
+    @property
+    def value(self):
+        return self.read(self.__compiler)
+
+    def as_ptr(self, compiler):
+        return self.__ptr.elocal_access(compiler, self.__objective)
+
+    def write(self, compiler, other):
+        othervar = other.type.as_variable(other.value)
+        var, block = self.as_ptr(compiler)
+        block.add(i.SetScore(var, othervar))
+        return other
+
+    def read(self, compiler):
+        tmp = self.type.allocate(compiler, 'elocal_tmp')
+        var, block = self.as_ptr(compiler)
+        block.add(i.SetScore(tmp, var))
+        return tmp
+
+class EntityLocalInstance(CBLTypeInstance):
+
+    def __init__(self, l_type, objective):
+        super().__init__({}, {})
+        self.__obj = objective
+        self.__global = None
+        self._l_type = l_type
+
+    @property
+    def objective(self):
+        return self.__obj
+
+    def get_member(self, compiler, name):
+        if name == 'global':
+            if self.__global is None:
+                ge = compiler.top.lookup('_global_entity')
+                ela = i.CreateEntityLocalAccess(self.__obj, ge)
+                val = compiler.insn_def(ela)
+                self.__global = InstanceSymbol(self, self._l_type, val)
+            return self.__global
+        return super().get_member(compiler, name)
+
+class EntityLocalDerivedType(CBLType):
+
+    def __init__(self, l_type):
+        super().__init__()
+        self._l_type = l_type
+
+    def complete_type(self, compiler):
+        eparam = Parameter(compiler.type('Entity'), 'entity', False)
+        type, func = self.add_operator_member(compiler, '[]', self._l_type,
+                                              (eparam,), True)
+        func.set_as_intrinsic(IntrinsicCallable(self.__subscript))
+        super().complete_type(compiler)
+
+    def allocate(self, compiler, namehint):
+        # TODO: May want to allow changing the objective name
+        objdef = i.DefineObjective(i.VirtualString(namehint), None)
+        objective = compiler.global_def(namehint, objdef)
+        return EntityLocalInstance(self._l_type, objective)
+
+    def get_property(self, compiler, container, prop):
+        if prop == 'global':
+            return container.value.get_member(compiler, 'global')
+        return super().get_property(compiler, container, prop)
+
+    def __subscript(self, compiler, fncontainer, args):
+        ptr = compiler.entity_support.get_pointer(args[1])
+        return BoundEnitityLocal(compiler, self._l_type, ptr,
+                                 args[0].value.objective)
 
 class EntitySupport:
 
@@ -227,13 +327,9 @@ class EntitySupport:
     def objective():
         return i.DefineObjective(i.VirtualString('__uid'), None)
 
-    def extend_entity_type(self, type):
-        type.instance_class = EntityPointer
-        type._nbtwrapped = False
-        type.override_create_this = self._create_ptr
-
-    def _create_ptr(self, name):
-        yield self.compiler.create_var(name + '_ptr', i.VarType.i32)
+    def get_pointer(self, container):
+        assert container.type == self.compiler.type('Entity')
+        return container.value.get_member(self.compiler, '_ptr').value
 
     def assign_pointer_to_sender(self, ptr):
         assert isinstance(ptr, EntityPointer)
@@ -241,14 +337,20 @@ class EntitySupport:
             self._get_or_create = self.compiler.extern_function(
                 '_internal/entity_ptr', None, (i.VarType.i32,))
             self.uid_obj = self.compiler.global_def('__uid', self.objective())
-        retvars = (ptr._var,)
+        retvars = (ptr.variable,)
         self.compiler.add_insn(i.Invoke(self._get_or_create, None, retvars))
+
+    def construct_sender(self):
+        _ptr_type = self.compiler.type('__EntityPtr')
+        val = _ptr_type.allocate(self.compiler, 'sender')
+        self.assign_pointer_to_sender(val)
+        return Temporary(_ptr_type, val)
 
     @contextlib.contextmanager
     def set_sender(self, ptr):
         assert isinstance(ptr, EntityPointer)
         old_sender = self._current_sender
-        self._current_sender = ptr._var
+        self._current_sender = ptr.variable
         yield
         self._current_sender = old_sender
 

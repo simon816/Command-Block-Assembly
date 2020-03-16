@@ -197,9 +197,11 @@ class Invoke(Insn):
                     src = LocalStackVariable(ptype, args_start + i)
                     arg = self.fnargs[i]
                     assert isinstance(arg, Variable), "%s passed by value!" % arg
-                    src.realign_frame(1)
+                    # The mutated arguments are on frame 0
+                    # We want to copy them to where they were from (now frame 1)
+                    arg.realign_frame(1)
                     src.clone_to(arg, out)
-                    src.realign_frame(-1)
+                    arg.realign_frame(-1)
 
         # Copy return values into return variables
         if self.retvars:

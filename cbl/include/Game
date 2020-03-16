@@ -6,7 +6,7 @@ namespace Game {
 intrinsic_extension {
 
     reconfigure_type Game Python: {
-        entities = the_type.get_static_member('entities')
+        entities = the_type.metatype.instance['entities']
         insn = i.CreateSelector(i.SelectorType.ALL_ENTITIES)
         all_entities = compiler.global_def('all_entities', insn)
         entities.value.selector = all_entities

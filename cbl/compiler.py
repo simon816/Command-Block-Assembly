@@ -1,25 +1,38 @@
 from collections import namedtuple
+import contextlib
 
 from .parser_ import Parser, Transformer_WithPre, v_args
-from .types import *
+from .struct_type import StructuredType
+from .cbl_type import CBLTypeMeta
+from .native_type import as_var, IRVarType
+from .function_type import FunctionDispatchType, FunctionType, Invokable, \
+     InstanceFunctionType
+from .base_types import VoidType, BoolType, IntType, DecimalType, StringType, \
+     BlockTypeType, ItemTypeType, EventType, TextType
+from .types import Types
 from .containers import *
-from .array_support import ArraySupport
+from .array_support import ArraySupport, ArrayType
 from .entity_support import (EntitySupport, EntityTypeType,
-                             RuntimeEntityTypeType,
-                             RuntimeEntityPosType)
+                             EntityPosComponentType, EntityPointerType,
+                             EntityLocalType, EntityCollectionType)
 from .intrinsic_support import IntrinsicSupport
 
 from cmd_ir.core import TopLevel, Pragma
 from cmd_ir.variables import VarType
 from cmd_ir.core_types import SelectorType
-from cmd_ir.instructions import *
+import cmd_ir.instructions as i
 
 EventCondition = namedtuple('EventCondition', 'path value')
-VarDeclaration = namedtuple('VarDeclaration', 'type name')
 
+VarDeclaration = namedtuple('VarDeclaration', 'type name')
 FuncDeclaration = namedtuple('FuncDeclaration', 'name ret_type params ' + \
                              'is_operator inline async typespace')
-CtorDeclaration = namedtuple('CtorDeclaration', 'params inline')
+CtorDeclaration = namedtuple('CtorDeclaration', 'params inline typespace')
+PropertyDeclaration = namedtuple('PropertyDeclaration', 'prop')
+
+FunctionDefinition = namedtuple('FunctionDefinition', 'decl body event_handler')
+CtorDefinition = namedtuple('CtorDefinition', 'decl init_list body')
+MemberInit = namedtuple('MemberInit', 'member args')
 
 ConstructorArgs = namedtuple('ConstructorArgs', 'args')
 
@@ -60,9 +73,8 @@ class SymbolTable:
 
     def declare(self, name, type, compiler):
         assert name not in self.symbols, "Cannot redeclare symbol %s" % name
-        value = type.create(name)
+        value = type.allocate(compiler, name)
         assert value is not None, "%s didn't create a value for %s!" % (type, name)
-        type.initialize(value)
         symbol = self.symbols[name] = Symbol(type, name, value)
         return symbol
 
@@ -154,7 +166,6 @@ class Compiler(Transformer_WithPre):
         self.intrinsic_support = IntrinsicSupport(self)
         self.func = None
         self.funcsym = None
-        self.typedef = None
         self.block = None
         self.include_file('__builtin__')
 
@@ -193,31 +204,32 @@ class Compiler(Transformer_WithPre):
     # === Setup === #
 
     def add_core_types(self):
-        self.add_type('void', VoidType(self))
-        self.add_type('int', IntType(self))
-        self.add_type('bool', BoolType(self))
-        self.add_type('decimal', DecimalType(self))
-        self.add_type('string', StringType(self))
+        self.add_type('void', VoidType())
+        self.add_type('string', StringType())
+        self.add_base_type('int', IntType())
+        self.add_base_type('bool', BoolType())
+        self.add_base_type('decimal', DecimalType())
+        self.add_type('IRVariable', IRVarType())
 
-        self.add_type('EntityLocal', EntityLocalType(self))
+        self.add_base_type('__EntityPtr', EntityPointerType())
+        self.add_type('EntityLocal', EntityLocalType())
+        self.add_base_type('EntityPosComponent', EntityPosComponentType())
+        self.add_type('EntityType', EntityTypeType())
+        self.add_type('EntityCollection', EntityCollectionType())
 
-        self.add_type('EntityType', EntityTypeType(self))
-        self.add_type('RuntimeEntityType', RuntimeEntityTypeType(self))
-
-        self.add_type('SelectorFilter', SelectorFilterType(self))
-
-        self.add_type('Event', EventType(self))
-        self.add_type('BlockType', BlockTypeType(self))
-        self.add_type('ItemType', ItemTypeType(self))
+        self.add_type('BlockType', BlockTypeType())
+        self.add_type('ItemType', ItemTypeType())
+        self.add_type('Event', EventType())
+        self.add_type('Text', TextType())
 
     # === Support / Helpers === #
 
     def diag_debug(self):
         out = []
-        if self.typedef is not None:
-            out.append('Defining type: %s' % self.typedef.typename)
+        # TODO out.append('Defining type: %s' % self.typedef.typename)
         if self.func is not None:
-            out.append('Compiling function %s' % self.funcsym.name)
+            out.append('Compiling function %s%s' % (self.funcsym.name,
+                                              self.funcsym.type.param_str()))
             if self.block is not None:
                 out.append('Current basic block: %s' % self.block.global_name)
                 prev = self.block.serialize().split('\n')
@@ -237,10 +249,11 @@ class Compiler(Transformer_WithPre):
     def pragma(self, key, value):
         import json
         val = json.dumps({key: value})
-        self.top.preamble.add(PragmaInsn('cbl_compiler', VirtualString(val)))
+        self.top.preamble.add(i.PragmaInsn('cbl_compiler',
+                                           i.VirtualString(val)))
 
     def dispatch_operator(self, op, left, right=None):
-        return left.type.dispatch_operator(op, left, right)
+        return left.type.dispatch_operator(self, op, left, right)
 
     def __create_var(self, namehint, var_type):
         if self.func is None:
@@ -286,7 +299,14 @@ class Compiler(Transformer_WithPre):
 
     def add_type(self, name, type):
         self.types.add(name, type)
-        self.scope.store(name, Symbol(TypeType(self), name, type))
+        type.typename = name
+        metatype = type.metatype
+        if metatype is not None:
+            self.scope.store(name, Symbol(metatype, name, type))
+
+    def add_base_type(self, name, type):
+        self.add_type(name, type)
+        type.complete_type(self)
 
     def global_def(self, namehint, insn):
         return self.top.preamble.add(insn, True, namehint)
@@ -304,28 +324,21 @@ class Compiler(Transformer_WithPre):
     def insn_def(self, insn):
         return self.block.define(insn)
 
-    def as_var(self, symbol):
-        return symbol.type.as_variable(symbol.value)
-
     def _declare_function(self, decl, has_definition):
         if decl.typespace is not None:
-            static = decl.typespace.is_namespace_type
+            type = decl.typespace
+            static = False # TODO
             if decl.is_operator:
                 assert not decl.async
                 assert not static
-                fn_type, func = decl.typespace.overload_operator(decl.name,
-                    decl.ret_type, decl.params, decl.inline)
-                symbol = Temporary(fn_type, func)
+                fn_type, func = type.lookup_operator(decl.name, decl.params)
             else:
-                action = decl.typespace.add_func_member
-                # Check if already have this function
-                if decl.typespace.has_member(decl.name):
-                    action = decl.typespace.get_func_member
-                fn_type, func = action(decl.name, decl.ret_type, decl.params,
-                                       decl.inline, decl.async, static)
-                symbol = Symbol(fn_type, decl.name, func)
+                fn_type, func = type.lookup_function_member(decl.name,
+                                                            decl.params)
+            # TODO check fn_type matches decl
+            symbol = Symbol(fn_type, decl.name, func)
         else:
-            fn_type = FunctionType(self, decl.ret_type, decl.params,
+            fn_type = FunctionType(decl.ret_type, decl.params,
                                    decl.inline, decl.async)
             existing = self.scope.lookup(decl.name)
             if existing is not None:
@@ -337,9 +350,27 @@ class Compiler(Transformer_WithPre):
             self.possible_extern.append(symbol.value)
         return symbol
 
+    def _construct_variable_from_decl(self, decl, init=None):
+        if init is not None:
+            if isinstance(init, ConstructorArgs):
+                ctor_args = init.args
+            else:
+                # Assignment initialization - use copy constructor
+                ctor_args = (init,)
+        else:
+            # Use default constructor if no init
+            ctor_args = ()
+        self._construct_variable(decl.name, decl.type, ctor_args)
 
-    def _declare_var(self, decl):
-        return self.scope.declare_symbol(decl.name, decl.type)
+    def _construct_variable(self, name, type, args):
+        sym = self.scope.declare_symbol(name, type)
+        type.run_constructor(self, sym, args)
+        return sym
+
+    def _construct_tmp(self, name, type, args):
+        tmp = Temporary(type, type.allocate(self, name))
+        type.run_constructor(self, tmp, args)
+        return tmp
 
     # === Tree Traversal === #
 
@@ -356,10 +387,16 @@ class Compiler(Transformer_WithPre):
         for node in tree.children:
             decl = self.transform(node)
             if isinstance(decl, VarDeclaration):
-                self._declare_var(decl)
+                self._construct_variable_from_decl(decl)
             elif isinstance(decl, FuncDeclaration):
                 assert not decl.is_operator, "TODO"
                 self._declare_function(decl, False)
+            elif isinstance(decl, FunctionDefinition):
+                self.process_func_definition(decl)
+            elif isinstance(decl, CtorDefinition):
+                self.process_ctor_definition(decl)
+            elif decl is not None:
+                assert False, decl
 
     def var_declaration(self, type, name):
         return VarDeclaration(type, name.value)
@@ -371,15 +408,12 @@ class Compiler(Transformer_WithPre):
         else:
             ret_type, name, params = children
             typespace = None
-        if self.typedef is not None:
-            assert typespace is None
-            typespace = self.typedef
         is_op = name.type == 'OPERATORS'
         return FuncDeclaration(name.value, ret_type, params, is_op, False,
                                False, typespace)
 
     def ctor_declaration(self, params=[]):
-        return CtorDeclaration(params, True) # Always inline for now
+        return CtorDeclaration(params, True, None) # Always inline for now
 
     def inline_func_decl(self, _, decl):
         return decl._replace(inline=True)
@@ -394,8 +428,14 @@ class Compiler(Transformer_WithPre):
     def param_list(self, *params):
         return params
 
-    def param_declaration(self, p_type, p_name):
-        return Parameter(p_type, p_name.value)
+    def param_declaration(self, p_type, p2, p3=None):
+        if p3 is not None:
+            p_name = p3.value
+            byref = True
+        else:
+            p_name = p2.value
+            byref = False
+        return Parameter(p_type, p_name, byref)
 
     def pre_function_definition(self, tree, post_transform):
         if len(tree.children) == 3:
@@ -405,60 +445,108 @@ class Compiler(Transformer_WithPre):
             func_decl, body = tree.children
             event_handler = None
         func_decl = self.transform(func_decl)
+        return FunctionDefinition(func_decl, body, event_handler)
+
+    def process_func_definition(self, func_def):
+        func_decl = func_def.decl
+        body = func_def.body
+        event_handler = func_def.event_handler
         func_sym = self._declare_function(func_decl, True)
         func = func_sym.value.get_or_create_definition()
         if event_handler is not None:
-            self.top.preamble.add(EventHandler(func, event_handler))
+            self.top.preamble.add(i.EventHandler(func, event_handler))
         if not func_decl.is_operator and not func_decl.inline:
-            func.preamble.add(ExternInsn())
+            func.preamble.add(i.ExternInsn())
         if func_decl.inline:
-            func.preamble.add(InlineInsn())
+            func.preamble.add(i.InlineInsn())
         self._process_function_def(func_sym, body)
 
-    def _process_function_def(self, func_sym, body):
+    def _process_function_def(self, func_sym, body, pre_body_hook=None):
         self.func = func_sym.value.get_or_create_definition()
         self.funcsym = func_sym
         if func_sym.type.is_async:
-            self.func.preamble.add(RunCallbackOnExit())
+            self.func.preamble.add(i.RunCallbackOnExit())
         self.block = self.func.create_block('entry')
         with self.scope:
-            for param in func_sym.type.params:
-                p = param.type.create_parameter(param.name)
-                sym = Symbol(param.type, param.name, p)
-                self.scope.store(param.name, sym)
-            sender = self.scope.declare_symbol('sender', self.type('Entity'))
-            self.entity_support.assign_pointer_to_sender(sender.value)
+            self._allocate_parameters(func_sym.type.params)
+            sender_ptr = self.entity_support.construct_sender()
+            sender = self._construct_variable('sender', self.type('Entity'),
+                                              (sender_ptr,))
             rtype = func_sym.type.ret_type
             if rtype != self.type('void'):
-                self.ret_param = Temporary(rtype, rtype.create_return('ret'))
+                self.ret_param = self._allocate_return(rtype)
             else:
                 self.ret_param = None
-            with self.entity_support.set_sender(sender.value):
+            with self.entity_support.set_sender(sender_ptr.value):
+                if pre_body_hook:
+                    pre_body_hook()
                 self.transform(body)
         if not self.block.is_terminated():
-            self.block.add(Return())
+            self.block.add(i.Return())
         self.func.end()
         self.block = None
         self.func = None
         self.funcsym = None
 
+    def _allocate_parameters(self, params):
+        for param in params:
+            ptype = param.type
+            passtype = 'byref' if param.by_ref else 'byval'
+            def create_param(vname, var_type):
+                return self.define(vname, i.ParameterInsn(var_type, passtype))
+            with self.set_create_var(create_param):
+                p = ptype.allocate(self, param.name)
+                sym = Symbol(ptype, param.name, p)
+                self.scope.store(param.name, sym)
+
+    def _allocate_return(self, type):
+        def create_return(vname, var_type):
+            return self.define(vname, i.ReturnVarInsn(var_type))
+        with self.set_create_var(create_return):
+            return Temporary(type, type.allocate(self, 'ret_' + type.typename))
+
     def pre_ctor_definition(self, tree, post_transform):
-        assert self.typedef is not None
-        ctor_decl, body = tree.children
+        if len(tree.children) == 2:
+            ctor_decl, body = tree.children
+            init_list = None
+        else:
+            ctor_decl, init_list, body = tree.children
         ctor_decl = self.transform(ctor_decl)
-        fn_type, func = self.typedef.add_constructor(ctor_decl.params,
-                                                     ctor_decl.inline)
+        return CtorDefinition(ctor_decl, init_list, body)
+
+    def process_ctor_definition(self, ctor_def):
+        ctor_decl = ctor_def.decl
+        type = ctor_decl.typespace
+        assert type is not None
+        init_list = ctor_def.init_list
+        body = ctor_def.body
+        ctor = type.lookup_constructor(ctor_decl.params)
+        assert ctor, "No such constructor with parameters %s" % (
+            ctor_decl.params,)
+        fn_type, func = ctor
+        # TODO check inline is the same
         ctor_sym = Symbol(fn_type, None, func) # No name for this symbol
         if ctor_decl.inline:
             func = ctor_sym.value.get_or_create_definition()
-            func.preamble.add(InlineInsn())
-        self._process_function_def(ctor_sym, body)
+            func.preamble.add(i.InlineInsn())
+        def construct_members():
+            this = self.scope.lookup('this')
+            inits = {}
+            if init_list is not None:
+                inits = { init.member: init.args \
+                          for init in self.transform(init_list) }
+            this.type.do_construction(self, this.value, inits)
+        self._process_function_def(ctor_sym, body, construct_members)
 
-    def pre_top_ctor_definition(self, tree, post_transform):
-        type_name, ctor_def = tree.children
-        self.typedef = self.transform(type_name)
-        self.transform(ctor_def)
-        self.typedef = None
+    def top_ctor_definition(self, type, ctor_def):
+        # Set the typespace on the declaration
+        return ctor_def._replace(decl=ctor_def.decl._replace(typespace=type))
+
+    def ctor_init_list(self, *init_list):
+        return init_list
+
+    def ctor_init(self, name, *args):
+        return MemberInit(name.value, args)
 
     def pre_event_handler(self, tree, post_transform):
         event, *conditions = tree.children
@@ -484,67 +572,149 @@ class Compiler(Transformer_WithPre):
         return ConstructorArgs(ctor_args)
 
     def var_init_declaration(self, decl, init=None):
-        symbol = self._declare_var(decl)
-        if init is not None:
-            if isinstance(init, ConstructorArgs):
-                symbol.type.run_constructor(symbol.value, init.args)
-            else:
-                self.dispatch_operator('=', symbol, init)
+        self._construct_variable_from_decl(decl, init)
+
+    def property_decl(self, prop):
+        return PropertyDeclaration(prop)
+
+    def property_def(self, prop):
+        return PropertyDeclaration(prop)
 
     def type_declaration(self, name):
-        assert False, "TODO"
-        #self.add_type(name.value, UnfinishedType(self))
+        # If the type already exists, don't add
+        if self.types.lookup(name.value) is None:
+            self.add_type(name.value, StructuredType())
 
     def pre_type_definition(self, tree, post_transform):
-        name, *decls = tree.children
-        type = UserDefinedType(self, name.value)
-        self.add_type(name.value, type)
-        self.typedef = type
+        name, params, parent, *decls = tree.children
+        params = self.transform(params)
+        parent = self.transform(parent)
+        if params is not None:
+            assert False, params
+        type = self.types.lookup(name.value)
+        if type is not None and type.incomplete:
+            pass
+            # If type is not incomplete, add_type below will
+            # spit out a useful error message
+        else:
+            type = StructuredType()
+            self.add_type(name.value, type)
+        if parent is not None:
+            type.extend_from(parent)
+        ctor_definitions = []
+        func_definitions = []
         with self.scope:
             for decl_node in decls:
                 decl = self.transform(decl_node)
-                if isinstance(decl, VarDeclaration):
-                    type.add_var_member(decl.name, decl.type)
-                elif isinstance(decl, FuncDeclaration):
-                    self._declare_function(decl, False)
-                elif isinstance(decl, CtorDeclaration):
-                    ftype, func = type.add_constructor(decl.params, decl.inline)
-                    self.possible_extern.append(func)
-                elif decl is not None:
-                    assert False, decl
-        type.finalize()
-        self.typedef = None
+                self.process_decl_or_def(type, decl, ctor_definitions,
+                                         func_definitions)
+        type.complete_type(self)
+        for ctor_def in ctor_definitions:
+            # Set the typespace on the declaration
+            ctor_def = ctor_def._replace(decl=ctor_def.decl._replace(
+                typespace=type))
+            self.process_ctor_definition(ctor_def)
+
+        for func_def in func_definitions:
+            # Set the typespace on the declaration
+            func_def = func_def._replace(decl=func_def.decl._replace(
+                typespace=type))
+            self.process_func_definition(func_def)
+
+    def process_decl_or_def(self, type, decl, ctor_definitions,
+                            func_definitions):
+        if isinstance(decl, VarDeclaration):
+            type.add_variable_member(decl.name, decl.type)
+        elif isinstance(decl, FuncDeclaration):
+            self.declare_function_on_type(type, decl)
+        elif isinstance(decl, CtorDeclaration):
+            t, func = type.add_constructor(self, decl.params, decl.inline)
+            self.possible_extern.append(func)
+        elif isinstance(decl, CtorDefinition):
+            type.add_constructor(self, decl.decl.params,
+                                 decl.decl.inline)
+            ctor_definitions.append(decl)
+        elif isinstance(decl, FunctionDefinition):
+            self.declare_function_on_type(type, decl.decl)
+            func_definitions.append(decl)
+        elif isinstance(decl, PropertyDeclaration):
+            prop = decl.prop
+            if isinstance(prop, VarDeclaration):
+                type.add_variable_property(prop.name, prop.type)
+            elif isinstance(prop, FunctionDefinition):
+                self.declare_function_property_on_type(type, prop.decl)
+                func_definitions.append(prop)
+            elif isinstance(prop, FuncDeclaration):
+                self.declare_function_property_on_type(type, prop)
+            else:
+                assert False, prop
+        elif decl is not None:
+            assert False, decl
+
+    def declare_function_on_type(self, type, decl):
+        assert decl.typespace is None, "Cannot create function declaration " \
+                + "of a type within a type definition"
+        if decl.is_operator:
+            assert not decl.async, "Operator declaration cannot be async"
+            r = type.add_operator_member(self, decl.name, decl.ret_type,
+                                         decl.params, decl.inline)
+        else:
+            r = type.add_function_member(self, decl.name, decl.ret_type,
+                                         decl.params, decl.inline, decl.async)
+        t, func = r
+        self.possible_extern.append(func)
+
+    def declare_function_property_on_type(self, type, decl):
+        assert not decl.is_operator
+        assert not decl.async
+        # assert not static TODO when we get static
+        set_param = None
+        if decl.params:
+            assert len(decl.params) == 1
+            set_param = decl.params[0]
+        t, func = type.add_function_property(self, decl.name, decl.ret_type,
+                                             decl.inline, set_param)
+        self.possible_extern.append(func)
+
+    def maybe_type_params(self, *params):
+        return tuple(p.value for p in params) or None
+
+    def maybe_extends(self, supertype=None):
+        return supertype
 
     def type_name(self, name, *type_args):
         t = self.type(name.value)
-        return t.instantiate(tuple(self.type(t) for t in type_args))
+        return t.instantiate(self, tuple(self.type(t) for t in type_args))
 
     def pre_namespace_definition(self, tree, post_transform):
         name, *decls = tree.children
-        type = UserDefinedType(self, name.value)
-        type.is_namespace_type = True
+        type = StructuredType()
         self.add_type(name.value, type)
-        # TODO temp for FuncDeclaration
-        self.typedef = type
+        ctor_defs = []
+        func_defs = []
+        mtype = type.metatype
         with self.scope:
             for decl_node in decls:
                 decl = self.transform(decl_node)
-                if isinstance(decl, VarDeclaration):
-                    sym = self.scope.declare_symbol(decl.name, decl.type)
-                    type.add_static_var_member(decl.name, sym)
-                elif isinstance(decl, FuncDeclaration):
-                    self._declare_function(decl, False)
-                elif isinstance(decl, CtorDeclaration):
-                    assert False
-                elif decl is not None:
-                    assert False, decl
-        self.typedef = None
+                self.process_decl_or_def(mtype, decl, ctor_defs, func_defs)
+                assert not ctor_defs
+            mtype.complete_type(self)
+            mtype.create_meta(self, name.value)
+
+            for func_def in func_defs:
+                # Set the typespace on the declaration
+                func_def = func_def._replace(decl=func_def.decl._replace(
+                    typespace=mtype))
+                self.process_func_definition(func_def)
 
     def pre_intrinsic(self, tree, post_transform):
         self.intrinsic_support.traverse(tree.children)
 
     def native_definition(self, func_decl, py_code):
         self.intrinsic_support.native_definition(func_decl, py_code.value[1:-1])
+
+    def native_ctor_decl(self, type, decl):
+        return decl._replace(typespace=type)
 
     def type_configure(self, type_name, py_code):
         self.intrinsic_support.type_configure(type_name, py_code.value[1:-1])
@@ -561,14 +731,14 @@ class Compiler(Transformer_WithPre):
     def pre_while_statement(self, tree, post_transform):
         cond, body = tree.children
         with self.loop(continue_='while', break_='end_while') as (begin, end):
-            self.block.add(Branch(begin))
+            self.block.add(i.Branch(begin))
             self.block = begin
             cond = self.transform(cond)
             body_block = self.func.create_block('while_body')
-            self.block.add(RangeBr(self.as_var(cond), 0, 0, end, body_block))
+            self.block.add(i.RangeBr(as_var(cond), 0, 0, end, body_block))
             self.block = body_block
             self.transform(body)
-            self.block.add(Branch(begin))
+            self.block.add(i.Branch(begin))
             self.block = end
 
     def pre_for_statement(self, tree, post_transform):
@@ -578,35 +748,35 @@ class Compiler(Transformer_WithPre):
             self.transform(init)
             cond_block = self.func.create_block('for')
             body_block = self.func.create_block('for_body')
-            self.block.add(Branch(cond_block))
+            self.block.add(i.Branch(cond_block))
             self.block = cond_block
             cond = self.transform(cond)
             if cond:
-                self.block.add(RangeBr(self.as_var(cond), 0, 0, end, body_block))
+                self.block.add(i.RangeBr(as_var(cond), 0, 0, end, body_block))
             else:
-                self.block.add(Branch(body_block))
+                self.block.add(i.Branch(body_block))
             self.block = body_block
             self.transform(body)
-            self.block.add(Branch(after_block))
+            self.block.add(i.Branch(after_block))
             self.block = after_block
             self.transform(after)
-            self.block.add(Branch(cond_block))
+            self.block.add(i.Branch(cond_block))
             self.block = end
 
     def pre_for_in_statement(self, tree, post_transform):
         loop_var, iter_expr, body = tree.children
         iter_expr = self.transform(iter_expr)
         assert iter_expr.type == self.type('EntityCollection'), iter_expr
-        exec = self.block.define(CreateExec())
-        self.block.add(ExecAsEntity(exec, iter_expr.value.selector))
+        exec = self.block.define(i.CreateExec())
+        self.block.add(i.ExecAsEntity(exec, iter_expr.value.selector))
         trampoline = self.func.create_block('for_in_trampoline')
         break_flag = self.create_var('brkflg', VarType.i32)
-        self.block.add(SetScore(break_flag, 0))
-        self.block.add(ExecRun(exec, trampoline))
+        self.block.add(i.SetScore(break_flag, 0))
+        self.block.add(i.ExecRun(exec, trampoline))
         trampoline.set_is_function()
         body_block = self.func.create_block('for_in_body')
         body_block.set_is_function()
-        trampoline.add(RangeBr(break_flag, 0, 0, None, body_block))
+        trampoline.add(i.RangeBr(break_flag, 0, 0, None, body_block))
         old_block = self.block
         self.block = body_block
         with self.loop(continue_='for_in_cont', break_='for_in_brk') as \
@@ -617,7 +787,7 @@ class Compiler(Transformer_WithPre):
             skip_to_end.set_is_function()
             # skip_to_end similarly should not branch anywhere as to fall
             # back to the main loop
-            skip_to_end.add(SetScore(break_flag, 1))
+            skip_to_end.add(i.SetScore(break_flag, 1))
 
             if iter_expr.value.boolvar is not None:
                 boolvar = iter_expr.value.boolvar.value
@@ -627,9 +797,10 @@ class Compiler(Transformer_WithPre):
                 self.block = filter_true
 
             with self.scope:
-                var = self.scope.declare_symbol(loop_var.value, self.type('Entity'))
-                self.entity_support.assign_pointer_to_sender(var.value)
-                with self.entity_support.set_sender(var.value):
+                sender_ptr = self.entity_support.construct_sender()
+                self._construct_variable(loop_var.value, self.type('Entity'),
+                                         (sender_ptr,))
+                with self.entity_support.set_sender(sender_ptr.value):
                     self.transform(body)
 
         # TODO handle "return" inside body
@@ -641,13 +812,13 @@ class Compiler(Transformer_WithPre):
         with self.loop(continue_='do_while_cont', break_='do_while_end') \
              as (cond_block, end):
             begin = self.func.create_block('do_while')
-            self.block.add(Branch(begin))
+            self.block.add(i.Branch(begin))
             self.block = begin
             self.transform(body)
-            self.block.add(Branch(cond_block))
+            self.block.add(i.Branch(cond_block))
             self.block = cond_block
             cond = self.transform(cond)
-            self.block.add(RangeBr(self.as_var(cond), 0, 0, end, begin))
+            self.block.add(i.RangeBr(as_var(cond), 0, 0, end, begin))
             self.block = end
 
     def pre_if_statement(self, tree, post_transform):
@@ -660,16 +831,17 @@ class Compiler(Transformer_WithPre):
         end = self.func.create_block('end_if')
         true_block = self.func.create_block('if_true')
         false_block = self.func.create_block('if_false')
-        self.block.add(RangeBr(self.as_var(cond_expr), 0, 0, false_block, true_block))
+        self.block.add(i.RangeBr(as_var(cond_expr), 0, 0, false_block,
+                                 true_block))
         self.block = true_block
         self.transform(if_true)
-        self.block.add(Branch(end))
+        self.block.add(i.Branch(end))
         if if_false:
             self.block = false_block
             self.transform(if_false)
-            self.block.add(Branch(end))
+            self.block.add(i.Branch(end))
         else:
-            false_block.add(Branch(end))
+            false_block.add(i.Branch(end))
         self.block = end
 
     def pre_at_statement(self, tree, post_transform):
@@ -677,23 +849,23 @@ class Compiler(Transformer_WithPre):
         expr = self.transform(expr)
         if expr.type == self.type('Entity'):
             entity = expr.value
-        elif isinstance(expr.type, RuntimeEntityPosType):
+        elif expr.type == self.type('EntityPos'):
             entity = expr.value.ptr
         else:
             assert False, expr.type
         block, sender = entity.as_entity()
-        exec = block.define(CreateExec())
-        block.add(ExecAtEntity(exec, sender))
-        if isinstance(expr.type, RuntimeEntityPosType) and \
-           expr.value.has_offset():
-            x = block.define(CreateRelPos(expr.value.xoff))
-            y = block.define(CreateRelPos(expr.value.yoff))
-            z = block.define(CreateRelPos(expr.value.zoff))
-            pos = block.define(CreatePosition(x, y, z))
-            block.add(ExecuteAtPos(exec, pos))
+        exec = block.define(i.CreateExec())
+        block.add(i.ExecAtEntity(exec, sender))
+        # TODO bring back relative offsets
+        if expr.type == self.type('EntityPos') and False:
+            x = block.define(i.CreateRelPos(expr.value.xoff))
+            y = block.define(i.CreateRelPos(expr.value.yoff))
+            z = block.define(i.CreateRelPos(expr.value.zoff))
+            pos = block.define(i.CreatePosition(x, y, z))
+            block.add(i.ExecuteAtPos(exec, pos))
         body_block = self.create_block('exec_at')
         body_block.set_is_function()
-        block.add(ExecRun(exec, body_block))
+        block.add(i.ExecRun(exec, body_block))
         old_block = self.block
         self.block = body_block
         self.transform(body)
@@ -718,7 +890,7 @@ class Compiler(Transformer_WithPre):
             assert self.ret_param is not None, \
                    "Cannot return value in void function"
             self.dispatch_operator('=', self.ret_param, expr)
-        self.add_insn(Return())
+        self.add_insn(i.Return())
 
     def expression_statement(self, expr):
         # Force type and value to be present (e.g. check AsyncReturn)
@@ -738,23 +910,23 @@ class Compiler(Transformer_WithPre):
         iterable = self.transform(expr)
         col_type = self.type('EntityCollection')
         assert iterable.type == col_type
-        new_col = col_type.create('filtered')
-        new_col.copy_from(self, iterable.value)
+        tmp = self._construct_tmp('filtered', col_type, (iterable,))
+        new_col = tmp.value
         with self.scope:
             loopvar = self.scope.declare_symbol(varname.value,
                                                 self.type('Entity'))
-            loopent = loopvar.value
+            loopent = self.entity_support.get_pointer(loopvar)
             for filter_node in filters:
                 decisionvar = self.transform(filter_node)
                 if decisionvar.type == self.type('SelectorFilter'):
                     filter = decisionvar.value
-                    assert filter.ptr == loopent, "TODO"
+                    assert filter.ptr.variable == loopent.variable, "TODO"
                     filter.apply_to_selector(new_col.selector, self)
                 elif decisionvar.type == self.type('bool'):
                     new_col.add_bool_var(decisionvar)
                 else:
                     assert False, decisionvar
-        return Temporary(col_type, new_col)
+        return tmp
 
     def pre_conditional_expression(self, tree, post_transform):
         cond, if_true, if_false = tree.children
@@ -762,7 +934,7 @@ class Compiler(Transformer_WithPre):
         true_block = self.func.create_block('cond_true')
         false_block = self.func.create_block('cond_false')
         end = self.func.create_block('cond_end')
-        self.block.add(RangeBr(self.as_var(cond), 0, 0, false_block, true_block))
+        self.block.add(i.RangeBr(as_var(cond), 0, 0, false_block, true_block))
 
         # Evaluate true branch in new block
         self.block = true_block
@@ -776,17 +948,17 @@ class Compiler(Transformer_WithPre):
 
         # TODO unify true/false types
         val_type = true_val.type
-        res = Temporary(val_type, val_type.create('condres'))
+        res = Temporary(val_type, val_type.allocate(self, 'condres'))
 
         # Link true result to expr result
         self.block = end_true
         self.dispatch_operator('=', res, true_val)
-        self.block.add(Branch(end))
+        self.block.add(i.Branch(end))
 
         # Link false result to expr result
         self.block = end_false
         self.dispatch_operator('=', res, false_val)
-        self.block.add(Branch(end))
+        self.block.add(i.Branch(end))
 
         self.block = end
         return res
@@ -816,11 +988,20 @@ class Compiler(Transformer_WithPre):
 
     def function_call_expr(self, func_ref, *fn_args):
         # Special case for type constructors
-        if isinstance(func_ref.type, TypeType):
-            return func_ref.type.constructor(func_ref, fn_args)
+        if isinstance(func_ref.type, CBLTypeMeta):
+            return func_ref.type.call_constructor(self, func_ref, fn_args)
+
+        assert isinstance(func_ref.type, Invokable)
+        # Generic dispatcher for any invokable type
+        # Potentially returns a new function reference and
+        # new arguments if type coercion was needed
+        func_ref, fn_args = func_ref.type.match_arguments(self, func_ref,
+                                                          fn_args)
         assert isinstance(func_ref.type, FunctionType)
+
         if func_ref.type.is_async:
             assert self.funcsym.type.is_async
+
         if func_ref.type.is_intrinsic:
             return func_ref.type.intrinsic_invoke(func_ref, fn_args)
         if fn_args:
@@ -832,7 +1013,7 @@ class Compiler(Transformer_WithPre):
             args = None
         r_type = func_ref.type.ret_type
         if r_type != self.type('void'):
-            retobj = r_type.create('fnret')
+            retobj = r_type.allocate(self, 'fnret_' + r_type.typename)
             ret_args = tuple(r_type.as_returns(retobj))
         else:
             ret_args = None
@@ -845,7 +1026,7 @@ class Compiler(Transformer_WithPre):
         return ret
 
     def member_access_expr(self, var, dot, property):
-        propvar = var.type.get_property(var, property.value)
+        propvar = var.type.get_property(self, var, property.value)
         assert propvar is not None, \
             "%s didn't return a value for property '%s'" % (
                 var.type, property.value)
@@ -865,8 +1046,13 @@ class Compiler(Transformer_WithPre):
         assert len(components) == 3, "TODO"
         comp_type = components[0].type
         assert all(comp.type == comp_type for comp in components)
-        assert comp_type == self.type('decimal'), "TODO"
-        return Temporary(self.type('vec3d'), components)
+        if comp_type == self.type('int'):
+            vec_type = 'vec3i'
+        elif comp_type == self.type('decimal'):
+            vec_type = 'vec3d'
+        else:
+            assert False, "Vector of unrecognised type: %s" % comp_type
+        return self._construct_tmp('tmpvec', self.type(vec_type), components)
 
     def dec_literal(self, token):
         # should be float from token processor

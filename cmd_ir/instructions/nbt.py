@@ -169,11 +169,11 @@ class _ModifyNBTVariable(Insn):
         dest_path, dest_entity = direct
         if isinstance(self.nbt, Variable):
             src_path, src_entity = self.nbt.as_nbt_variable(out)._direct_nbt()
-            out.add(c.DataModifyFrom(dest_entity.ref, dest_path, self.action,
-                                     src_entity.ref, src_path))
+            out.write(c.DataModifyFrom(dest_entity.ref, dest_path, self.action,
+                                       src_entity.ref, src_path))
         else:
-            out.add(c.DataModifyValue(dest_entity.ref, dest_path,
-                                      self.action, self.nbt))
+            out.write(c.DataModifyValue(dest_entity.ref, dest_path,
+                                        self.action, self.nbt))
 
 
 class NBTAssign(_ModifyNBTVariable):
@@ -228,7 +228,8 @@ class NBTSubPath(ConstructorInsn):
     def construct(self):
         assert self.root.type is VarType.nbt
         # Needs to be getter because path might not be resolved at this stage
-        return VirtualNbtVariable(self.vartype, self._getdirect)
+        return VirtualNbtVariable(self.vartype, self._getdirect,
+                                  self.root.realign_frame)
 
     def _getdirect(self):
         path, entity = self.root._direct_nbt()

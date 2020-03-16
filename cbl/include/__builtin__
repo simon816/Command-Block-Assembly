@@ -1,50 +1,174 @@
+type vec3i {
+    int x;
+    int y;
+    int z;
+
+    constructor(int x, int y, int z);
+
+    vec3i operator *(int scalar);
+}
+
 type vec3d {
     decimal x;
     decimal y;
     decimal z;
+
+    constructor(decimal x, decimal y, decimal z);
+
+    vec3i to_int();
+    vec3d operator *(decimal scalar);
+}
+
+type EntityPos {
+    __EntityPtr _ptr;
+
+    constructor(__EntityPtr ptr);
+    property EntityPosComponent x();
+    property EntityPosComponent y();
+    property EntityPosComponent z();
+    vec3d as_vec();
+}
+
+intrinsic_extension {
+
+    EntityPos::constructor(__EntityPtr ptr) Python: {
+        this.get_member(compiler, '_ptr').value.ctor_from(args.ptr.value)
+        return void
+    }
+
 }
 
 type World {
-    void spawn(EntityType type);
+    __EntityPtr _ptr;
+
+    constructor(__EntityPtr ptr);
+    void spawn(EntityType type, vec3i pos);
+}
+
+intrinsic_extension {
+
+    World::constructor(__EntityPtr ptr) Python: {
+        this.get_member(compiler, '_ptr').value.ctor_from(args.ptr.value)
+        return void
+    }
+
+    void World::spawn(EntityType type, vec3i pos) Python: {
+        ptr = this.get_member(compiler, '_ptr').value
+        entity_id = i.VirtualString(args.type.value.name)
+        block = ptr.at_entity()
+        vec = [comp.type.as_variable(comp.value) for comp in [
+                args.pos.type.get_property(compiler, args.pos, c) for c in 'xyz']]
+        # TODO non-constant positions
+        pos = block.add(i.CreatePosition(*vec), True)
+        block.add(i.SpawnEntityInsn(entity_id, pos, None))
+        return void
+    }
+
+}
+
+type SelectorFilter {
+}
+
+type RuntimeEntityType {
+    __EntityPtr _ptr;
+
+    SelectorFilter operator==(EntityType other);
+    constructor(__EntityPtr ptr);
+}
+
+intrinsic_extension {
+
+    RuntimeEntityType::constructor(__EntityPtr ptr) Python: {
+        this.get_member(compiler, '_ptr').value.ctor_from(args.ptr.value)
+        return void
+    }
+
 }
 
 type Entity {
-    RuntimeEntityType type;
-    vec3d pos;
-    //RuntimeEntityPos facing; // TODO
-    World world;
+
+    __EntityPtr _ptr;
+
+    constructor(__EntityPtr ptr);
+
+    property EntityPos pos();
+    property World world();
+    property RuntimeEntityType type();
+//    property EntityFacing facing();
+
     Entity operator =(Entity other);
-    SelectorFilter has_tag(string tag);
     void kill();
+    SelectorFilter has_tag(string tag);
 //    void joinTeam(Team team);
+}
+
+intrinsic_extension {
+
+    Entity::constructor(__EntityPtr ptr) Python: {
+        this.get_member(compiler, '_ptr').value.ctor_from(args.ptr.value)
+        return void
+    }
+
+    EntityPos Entity::pos() Python: {
+        ptr = this.get_member(compiler, '_ptr')
+        t = compiler.type('EntityPos')
+        return compiler._construct_tmp('pos', t, (ptr,))
+    }
+
+    RuntimeEntityType Entity::type() Python: {
+        ptr = this.get_member(compiler, '_ptr')
+        t = compiler.type('RuntimeEntityType')
+        return compiler._construct_tmp('type', t, (ptr,))
+    }
+
+    RuntimeEntityType Entity::world() Python: {
+        ptr = this.get_member(compiler, '_ptr')
+        t = compiler.type('World')
+        return compiler._construct_tmp('world', t, (ptr,))
+    }
+
+    EntityPosComponent EntityPos::x() Python: {
+        from .entity_support import PositionComponent
+        from .containers import Temporary
+        ptr = this.get_member(compiler, '_ptr').value
+        t = compiler.type('EntityPosComponent')
+        v = PositionComponent(compiler, ptr, 0)
+        return Temporary(t, v)
+    }
+
+    EntityPosComponent EntityPos::y() Python: {
+        from .entity_support import PositionComponent
+        from .containers import Temporary
+        ptr = this.get_member(compiler, '_ptr').value
+        t = compiler.type('EntityPosComponent')
+        v = PositionComponent(compiler, ptr, 1)
+        return Temporary(t, v)
+    }
+
+    EntityPosComponent EntityPos::z() Python: {
+        from .entity_support import PositionComponent
+        from .containers import Temporary
+        ptr = this.get_member(compiler, '_ptr').value
+        t = compiler.type('EntityPosComponent')
+        v = PositionComponent(compiler, ptr, 2)
+        return Temporary(t, v)
+    }
+
 }
 
 type EntityCollection {
     Entity first();
     EntityCollection sortNearest();
-    EntityCollection operator =(EntityCollection other);
 }
 
 intrinsic_extension {
 
-    reconfigure_type EntityCollection Python: {
-        from .types import EntityCollection
-        def create_this(name):
-            yield None
-        the_type.override_create_this = create_this
-        the_type.instance_class = EntityCollection
-    }
-
-    EntityCollection EntityCollection::operator =(EntityCollection other) Python: {
-        this.copy_ref_from(args['other'].value)
-        return args['other']
-    }
-
     Entity EntityCollection::first() Python: {
-        from .types import EntityCollection
+        from .entity_support import EntityCollection
         from .containers import Temporary
-        new_col = EntityCollection()
-        new_col.copy_from(compiler, this)
+        t = compiler.type('EntityCollection')
+        copy = compiler._construct_tmp('sorted', t, (Temporary(t, this),))
+        new_col = copy.value
         compiler.add_insn(i.SetSelector(new_col.selector, 'limit', i.VirtualString('1')))
         assert new_col.boolvar is None, "TODO"
         exec = compiler.insn_def(i.CreateExec())
@@ -52,47 +176,37 @@ intrinsic_extension {
         body = compiler.create_block('first')
         body.set_is_function()
 
-        ptr = compiler.type('Entity').create('first')
         old_block = compiler.block
         compiler.block = body
-        compiler.entity_support.assign_pointer_to_sender(ptr)
+        ptr = compiler.entity_support.construct_sender()
         compiler.block = old_block
 
         compiler.add_insn(i.ExecRun(exec, body))
-        return Temporary(compiler.type('Entity'), ptr)
+        return compiler._construct_tmp('first', compiler.type('Entity'), (ptr,))
     }
 
     EntityCollection EntityCollection::sortNearest() Python: {
         from .containers import Temporary
-        new_col = EntityCollection()
-        new_col.copy_from(compiler, this)
-        compiler.add_insn(i.SetSelector(new_col.selector, 'sort', i.VirtualString('nearest')))
-        return Temporary(compiler.type('EntityCollection'), new_col)
+        t = compiler.type('EntityCollection')
+        copy = compiler._construct_tmp('sorted', t, (Temporary(t, this),))
+        compiler.add_insn(i.SetSelector(copy.value.selector, 'sort', i.VirtualString('nearest')))
+        return copy
     }
-
 
 }
 
 intrinsic_extension {
 
-    reconfigure_type World Python: {
-        def create_this(name, entity_ptr):
-            yield entity_ptr
-        the_type.override_create_this = create_this
-    }
-
-    void World::spawn(EntityType type) Python: {
-        entity_id = i.VirtualString(args['type'].value.name)
-        block = this._var.at_entity()
-        block.add(i.SpawnEntityInsn(entity_id, None, None))
+    SelectorFilter RuntimeEntityType::operator==(EntityType other) Python: {
+        from .entity_support import EntityFilterExpression
+        ptr = this.get_member(compiler, '_ptr').value
+        res = EntityFilterExpression(ptr, 'type', args.other.value.name)
+        from .containers import Temporary
+        return Temporary(compiler.type('SelectorFilter'), res)
     }
 
     SelectorFilter Entity::has_tag(string tag) Python: {
-        return this.has_tag_filter(compiler, args['tag'].value)
-    }
-
-    reconfigure_type Entity Python: {
-        compiler.entity_support.extend_entity_type(the_type)
+        return this.get_member(compiler, '_ptr').value.has_tag_filter(compiler, args.tag.value)
     }
 
     void Entity::kill() Python: {
@@ -101,10 +215,30 @@ intrinsic_extension {
     }
 
     Entity Entity::operator =(Entity other) Python: {
-        compiler.add_insn(i.SetScore(this._var, args['other'].value._var))
-        return args['other']
+        compiler.add_insn(i.SetScore(this._var, args.other.value._var))
+        return args.other
     }
 
+}
+
+inline vec3d EntityPos::as_vec() {
+    return vec3d(this.x.decval, this.y.decval, this.z.decval);
+}
+
+vec3i::constructor(int x, int y, int z): x(x), y(y), z(z) {}
+
+vec3d::constructor(decimal x, decimal y, decimal z): x(x), y(y), z(z) {}
+
+inline vec3i vec3d::to_int() {
+    return vec3i(this.x, this.y, this.z);
+}
+
+inline vec3d vec3d::operator*(decimal scalar) {
+    return vec3d(this.x * scalar, this.y * scalar, this.z * scalar);
+}
+
+inline vec3i vec3i::operator*(int scalar) {
+    return vec3i(this.x * scalar, this.y * scalar, this.z * scalar);
 }
 
 namespace Util {
@@ -113,7 +247,8 @@ namespace Util {
 
 intrinsic_extension {
     reconfigure_type Util Python: {
-        pos_util = the_type.get_static_member('pos_util')
-        pos_util.value.set_fixed_var(compiler.top.lookup('pos_util'))
+        pos_util = the_type.metatype.instance['pos_util']
+        ptr = compiler.entity_support.get_pointer(pos_util)
+        ptr.set_fixed_var(compiler.top.lookup('pos_util'))
     }
 }

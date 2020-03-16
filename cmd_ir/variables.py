@@ -437,9 +437,10 @@ class VirtualStackPointer(LocalStackVariable):
 
 class VirtualNbtVariable(NbtStorableVariable):
 
-    def __init__(self, type, directgetter):
+    def __init__(self, type, directgetter, realigner):
         super().__init__(type)
         self._directgetter = directgetter
+        self._realigner = realigner
 
     @property
     def path(self):
@@ -458,6 +459,9 @@ class VirtualNbtVariable(NbtStorableVariable):
     @property
     def is_read_from(self):
         return True # Prevent getting eliminated
+
+    def realign_frame(self, shift):
+        self._realigner(shift)
 
 class WorkingNbtVariable(NbtStorableVariable):
 

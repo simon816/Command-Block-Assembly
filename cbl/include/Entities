@@ -105,7 +105,7 @@ namespace Entities {
 
 intrinsic_extension {
     reconfigure_type Entities Python: {
-        for name, entity_type in the_type.get_static_members().items():
+        for name, entity_type in the_type.metatype.instance.items():
             entity_type.value.init('minecraft:' + name)
     }
 }

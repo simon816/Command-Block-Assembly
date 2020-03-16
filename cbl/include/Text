@@ -1,45 +1,36 @@
 type Text {
-    //Text operator +=(object any);
-    //Text operator <<(object any);
+    Text operator +=(IRVariable var);
+    Text operator <<(IRVariable var);
+    Text operator +=(string str);
+    Text operator <<(string str);
     void send_to_all();
 }
 
 intrinsic_extension {
 
-    reconfigure_type Text Python: {
-        def create_this(name):
-            yield compiler.define(name, i.CreateText())
-        the_type.override_create_this = create_this
+    Text Text::operator +=(IRVariable var) Python: {
+        compiler.add_insn(i.TextAppend(this.text, args.var.value))
+        return thisarg
+    }
 
-        from .containers import LiteralString, Temporary
+    Text Text::operator <<(IRVariable var) Python: {
+        compiler.add_insn(i.TextAppend(this.text, args.var.value))
+        return thisarg
+    }
 
-        def append(thistype, thisobj, right):
-            text = thistype.as_variable(thisobj)
-            if isinstance(right, LiteralString):
-                value = i.VirtualString(right.value)
-            else:
-                value = right.type.as_variable(right.value)
-            compiler.add_insn(i.TextAppend(text, value))
+    Text Text::operator <<(string str) Python: {
+        compiler.add_insn(i.TextAppend(this.text, i.VirtualString(args.str.value)))
+        return thisarg
+    }
 
-        def text_plus_eq(thistype, thisobj, right):
-            append(thistype, thisobj, right)
-            return right
-
-        the_type._make_intrinsic_op('+=', False, text_plus_eq)
-
-        def text_lshift(thistype, thisobj, right):
-            append(thistype, thisobj, right)
-            return Temporary(thistype, thisobj)
-
-        the_type._make_intrinsic_op('<<', False, text_lshift)
+    Text Text::operator +=(string str) Python: {
+        compiler.add_insn(i.TextAppend(this.text, i.VirtualString(args.str.value)))
+        return thisarg
     }
 
     void Text::send_to_all() Python: {
-        text = this._var
-        sel = compiler.define('all_players', i.CreateSelector(
-            i.SelectorType.ALL_PLAYERS))
-        compiler.add_insn(i.TextSend(text, sel))
-        from .containers import Temporary
-        return Temporary(compiler.type('void'), None)
+        sel = compiler.define('all_players', i.CreateSelector(i.SelectorType.ALL_PLAYERS))
+        compiler.add_insn(i.TextSend(this.text, sel))
+        return void
     }
 }

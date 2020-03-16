@@ -4,7 +4,7 @@ namespace Events {
 
 intrinsic_extension {
     reconfigure_type Events Python: {
-        for name, event in the_type.get_static_members().items():
+        for name, event in the_type.metatype.instance.items():
             event.value.init('minecraft:' + name)
     }
 }

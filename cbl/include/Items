@@ -793,7 +793,7 @@ namespace Items {
 
 intrinsic_extension {
     reconfigure_type Items Python: {
-        for name, item_type in the_type.get_static_members().items():
+        for name, item_type in the_type.metatype.instance.items():
             item_type.value.init('minecraft:' + name)
     }
 }

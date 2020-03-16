@@ -601,7 +601,7 @@ namespace Blocks {
 
 intrinsic_extension {
     reconfigure_type Blocks Python: {
-        for name, block_type in the_type.get_static_members().items():
+        for name, block_type in the_type.metatype.instance.items():
             block_type.value.init('minecraft:' + name)
     }
 }
