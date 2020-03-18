@@ -1,22 +1,17 @@
-type vec3i {
-    int x;
-    int y;
-    int z;
+type vec3<T> {
+    T x;
+    T y;
+    T z;
 
-    constructor(int x, int y, int z);
+    constructor(T x, T y, T z);
 
-    vec3i operator *(int scalar);
+    vec3<T> operator *(T scalar);
 }
 
-type vec3d {
-    decimal x;
-    decimal y;
-    decimal z;
-
+type vec3i is vec3<int>;
+type vec3d: vec3<decimal> {
     constructor(decimal x, decimal y, decimal z);
-
     vec3i to_int();
-    vec3d operator *(decimal scalar);
 }
 
 type EntityPos {
@@ -225,21 +220,20 @@ inline vec3d EntityPos::as_vec() {
     return vec3d(this.x.decval, this.y.decval, this.z.decval);
 }
 
-vec3i::constructor(int x, int y, int z): x(x), y(y), z(z) {}
-
-vec3d::constructor(decimal x, decimal y, decimal z): x(x), y(y), z(z) {}
+vec3d::constructor(decimal x, decimal y, decimal z): vec3<decimal>(x, y, z) {}
 
 inline vec3i vec3d::to_int() {
     return vec3i(this.x, this.y, this.z);
 }
 
-inline vec3d vec3d::operator*(decimal scalar) {
-    return vec3d(this.x * scalar, this.y * scalar, this.z * scalar);
+generic<vec3>
+vec3<T>::constructor(T x, T y, T z): x(x), y(y), z(z) {}
+
+generic<vec3>
+inline vec3<T> vec3<T>::operator*(T scalar) {
+    return vec3(T)(this.x * scalar, this.y * scalar, this.z * scalar);
 }
 
-inline vec3i vec3i::operator*(int scalar) {
-    return vec3i(this.x * scalar, this.y * scalar, this.z * scalar);
-}
 
 namespace Util {
     Entity pos_util;

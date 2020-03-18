@@ -4,11 +4,12 @@ import contextlib
 from .parser_ import Parser, Transformer_WithPre, v_args
 from .struct_type import StructuredType
 from .cbl_type import CBLTypeMeta
-from .native_type import as_var, IRVarType
+from .native_type import as_var, IRVarType, NativeType
 from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
 from .base_types import VoidType, BoolType, IntType, DecimalType, StringType, \
      BlockTypeType, ItemTypeType, EventType, TextType
+from .template_type import TemplatedType
 from .types import Types
 from .containers import *
 from .array_support import ArraySupport, ArrayType
@@ -16,6 +17,7 @@ from .entity_support import (EntitySupport, EntityTypeType,
                              EntityPosComponentType, EntityPointerType,
                              EntityLocalType, EntityCollectionType)
 from .intrinsic_support import IntrinsicSupport
+from .util import escape_function_name, safe_typename
 
 from cmd_ir.core import TopLevel, Pragma
 from cmd_ir.variables import VarType
@@ -275,19 +277,14 @@ class Compiler(Transformer_WithPre):
         assert name not in self._global_func_names, \
                "Function '%s' already defined" % name
         self._global_func_names.add(name)
-        return self.top.define_function(self.safe_name(name))
+        return self.top.define_function(escape_function_name(name))
 
     def extern_function(self, name, params, returns):
         from cmd_ir.core import ExternFunction
-        ir_name = self.safe_name(name)
+        ir_name = escape_function_name(name)
         extern = ExternFunction(ir_name, params, returns)
         self.top.store(ir_name, extern)
         return extern
-
-    def safe_name(self, name):
-        # All functions must be lower-case, use the "-" character to escape
-        # uppercase letters
-        return ''.join(c.lower() + '-' if c.isupper() else c for c in name)
 
     def add_insn(self, insn):
         self.block.add(insn)
@@ -300,6 +297,13 @@ class Compiler(Transformer_WithPre):
     def add_type(self, name, type):
         self.types.add(name, type)
         type.typename = name
+        metatype = type.metatype
+        if metatype is not None:
+            return self.scope.store(name, Symbol(metatype, name, type))
+        return None
+
+    def alias_type(self, name, type):
+        self.types.alias(type, name)
         metatype = type.metatype
         if metatype is not None:
             self.scope.store(name, Symbol(metatype, name, type))
@@ -331,10 +335,11 @@ class Compiler(Transformer_WithPre):
             if decl.is_operator:
                 assert not decl.async
                 assert not static
-                fn_type, func = type.lookup_operator(decl.name, decl.params)
+                f = type.lookup_operator(decl.name, decl.params)
             else:
-                fn_type, func = type.lookup_function_member(decl.name,
-                                                            decl.params)
+                f = type.lookup_function_member(decl.name, decl.params)
+            assert f is not None, "Lookup failed for %s" % (decl,)
+            fn_type, func = f
             # TODO check fn_type matches decl
             symbol = Symbol(fn_type, decl.name, func)
         else:
@@ -386,17 +391,20 @@ class Compiler(Transformer_WithPre):
     def pre_top_level(self, tree, post_transform):
         for node in tree.children:
             decl = self.transform(node)
-            if isinstance(decl, VarDeclaration):
-                self._construct_variable_from_decl(decl)
-            elif isinstance(decl, FuncDeclaration):
-                assert not decl.is_operator, "TODO"
-                self._declare_function(decl, False)
-            elif isinstance(decl, FunctionDefinition):
-                self.process_func_definition(decl)
-            elif isinstance(decl, CtorDefinition):
-                self.process_ctor_definition(decl)
-            elif decl is not None:
-                assert False, decl
+            self.process_top_decl(decl)
+
+    def process_top_decl(self, decl):
+        if isinstance(decl, VarDeclaration):
+            self._construct_variable_from_decl(decl)
+        elif isinstance(decl, FuncDeclaration):
+            assert not decl.is_operator, "TODO"
+            self._declare_function(decl, False)
+        elif isinstance(decl, FunctionDefinition):
+            self.process_func_definition(decl)
+        elif isinstance(decl, CtorDefinition):
+            self.process_ctor_definition(decl)
+        elif decl is not None:
+            assert False, decl
 
     def var_declaration(self, type, name):
         return VarDeclaration(type, name.value)
@@ -437,6 +445,15 @@ class Compiler(Transformer_WithPre):
             byref = False
         return Parameter(p_type, p_name, byref)
 
+    def _generic_late_decl(self, tree):
+        base_type, decl_tree = tree.children
+        t = self.type(base_type.value)
+        assert isinstance(t, TemplatedType)
+        t.add_late_decl(self, decl_tree)
+
+    def pre_generic_func_definition(self, tree, post_transform):
+        self._generic_late_decl(tree)
+
     def pre_function_definition(self, tree, post_transform):
         if len(tree.children) == 3:
             event_handler, func_decl, body = tree.children
@@ -462,6 +479,9 @@ class Compiler(Transformer_WithPre):
         self._process_function_def(func_sym, body)
 
     def _process_function_def(self, func_sym, body, pre_body_hook=None):
+        old_func = self.func
+        old_funcsym = self.funcsym
+        old_block = self.block
         self.func = func_sym.value.get_or_create_definition()
         self.funcsym = func_sym
         if func_sym.type.is_async:
@@ -484,9 +504,9 @@ class Compiler(Transformer_WithPre):
         if not self.block.is_terminated():
             self.block.add(i.Return())
         self.func.end()
-        self.block = None
-        self.func = None
-        self.funcsym = None
+        self.block = old_block
+        self.func = old_func
+        self.funcsym = old_funcsym
 
     def _allocate_parameters(self, params):
         for param in params:
@@ -503,7 +523,8 @@ class Compiler(Transformer_WithPre):
         def create_return(vname, var_type):
             return self.define(vname, i.ReturnVarInsn(var_type))
         with self.set_create_var(create_return):
-            return Temporary(type, type.allocate(self, 'ret_' + type.typename))
+            return Temporary(type, type.allocate(self, 'ret_' + \
+                                                 safe_typename(type)))
 
     def pre_ctor_definition(self, tree, post_transform):
         if len(tree.children) == 2:
@@ -538,6 +559,9 @@ class Compiler(Transformer_WithPre):
             this.type.do_construction(self, this.value, inits)
         self._process_function_def(ctor_sym, body, construct_members)
 
+    def pre_generic_ctor_definition(self, tree, post_transform):
+        self._generic_late_decl(tree)
+
     def top_ctor_definition(self, type, ctor_def):
         # Set the typespace on the declaration
         return ctor_def._replace(decl=ctor_def.decl._replace(typespace=type))
@@ -546,7 +570,12 @@ class Compiler(Transformer_WithPre):
         return init_list
 
     def ctor_init(self, name, *args):
-        return MemberInit(name.value, args)
+        # We either take an IDENT token or a type_name
+        if isinstance(name, NativeType):
+            init_name = name.typename
+        else:
+            init_name = name.value
+        return MemberInit(init_name, args)
 
     def pre_event_handler(self, tree, post_transform):
         event, *conditions = tree.children
@@ -585,20 +614,26 @@ class Compiler(Transformer_WithPre):
         if self.types.lookup(name.value) is None:
             self.add_type(name.value, StructuredType())
 
+    def type_alias(self, name, actual_type):
+        self.alias_type(name.value, actual_type)
+
     def pre_type_definition(self, tree, post_transform):
         name, params, parent, *decls = tree.children
         params = self.transform(params)
         parent = self.transform(parent)
         if params is not None:
-            assert False, params
+            type = TemplatedType(params, parent, decls)
+            self.add_type(name.value, type)
+            return
         type = self.types.lookup(name.value)
-        if type is not None and type.incomplete:
-            pass
-            # If type is not incomplete, add_type below will
+        if type is None or not type.incomplete:
+            # If type is complete, add_type will
             # spit out a useful error message
-        else:
             type = StructuredType()
             self.add_type(name.value, type)
+        self.define_type(type, parent, decls)
+
+    def define_type(self, type, parent, decls):
         if parent is not None:
             type.extend_from(parent)
         ctor_definitions = []
@@ -608,18 +643,18 @@ class Compiler(Transformer_WithPre):
                 decl = self.transform(decl_node)
                 self.process_decl_or_def(type, decl, ctor_definitions,
                                          func_definitions)
-        type.complete_type(self)
-        for ctor_def in ctor_definitions:
-            # Set the typespace on the declaration
-            ctor_def = ctor_def._replace(decl=ctor_def.decl._replace(
-                typespace=type))
-            self.process_ctor_definition(ctor_def)
+            type.complete_type(self)
+            for ctor_def in ctor_definitions:
+                # Set the typespace on the declaration
+                ctor_def = ctor_def._replace(decl=ctor_def.decl._replace(
+                    typespace=type))
+                self.process_ctor_definition(ctor_def)
 
-        for func_def in func_definitions:
-            # Set the typespace on the declaration
-            func_def = func_def._replace(decl=func_def.decl._replace(
-                typespace=type))
-            self.process_func_definition(func_def)
+            for func_def in func_definitions:
+                # Set the typespace on the declaration
+                func_def = func_def._replace(decl=func_def.decl._replace(
+                    typespace=type))
+                self.process_func_definition(func_def)
 
     def process_decl_or_def(self, type, decl, ctor_definitions,
                             func_definitions):
@@ -685,6 +720,9 @@ class Compiler(Transformer_WithPre):
     def type_name(self, name, *type_args):
         t = self.type(name.value)
         return t.instantiate(self, tuple(self.type(t) for t in type_args))
+
+    def type_name_hack(self, name, *type_args):
+        return self.type_name(name, *type_args)
 
     def pre_namespace_definition(self, tree, post_transform):
         name, *decls = tree.children
@@ -1013,7 +1051,7 @@ class Compiler(Transformer_WithPre):
             args = None
         r_type = func_ref.type.ret_type
         if r_type != self.type('void'):
-            retobj = r_type.allocate(self, 'fnret_' + r_type.typename)
+            retobj = r_type.allocate(self, 'fnret_' + safe_typename(r_type))
             ret_args = tuple(r_type.as_returns(retobj))
         else:
             ret_args = None
@@ -1042,17 +1080,17 @@ class Compiler(Transformer_WithPre):
         assert var is not None, "Undefined variable %s" % token
         return var
 
+    def parameterized_type_expr(self, base_name, *args):
+        t = self.type_name(base_name, *args)
+        return Temporary(t.metatype, t)
+
     def vector_expression(self, *components):
         assert len(components) == 3, "TODO"
         comp_type = components[0].type
         assert all(comp.type == comp_type for comp in components)
-        if comp_type == self.type('int'):
-            vec_type = 'vec3i'
-        elif comp_type == self.type('decimal'):
-            vec_type = 'vec3d'
-        else:
-            assert False, "Vector of unrecognised type: %s" % comp_type
-        return self._construct_tmp('tmpvec', self.type(vec_type), components)
+        vec3 = self.type('vec3')
+        vec_type = vec3.instantiate(self, (comp_type,))
+        return self._construct_tmp('tmpvec', vec_type, components)
 
     def dec_literal(self, token):
         # should be float from token processor

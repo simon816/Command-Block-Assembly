@@ -1,6 +1,6 @@
 start: top_level
 
-top_level: (include | scoped_declaration | function_definition | top_ctor_definition | type_definition | namespace_definition
+top_level: (include | scoped_declaration | generic_func_definition | generic_ctor_definition | type_definition | namespace_definition
             | intrinsic)*
 
 include: "include" ESCAPED_STRING
@@ -8,28 +8,31 @@ include: "include" ESCAPED_STRING
 ?scoped_declaration: (var_arr_declaration | func_declaration) ";"
 ?var_arr_declaration: var_declaration | array_declaration
 
-var_declaration: type_name IDENT
+var_declaration: type_name_hack IDENT
 
 ?func_declaration: async_func_decl
 ?async_func_decl: ASYNC? inline_func_decl
 ?inline_func_decl: INLINE? func_declaration_
-?func_declaration_: type_name (type_name "::")? (IDENT | "operator" OPERATORS) "(" param_list ")"
+?func_declaration_: type_name_hack (type_name_hack "::")? (IDENT | "operator" OPERATORS) "(" param_list ")"
 ASYNC: "async"
 INLINE: "inline"
 
 ctor_declaration: "constructor" "(" param_list ")"
 
-array_declaration: type_name IDENT "[" INT_CONSTANT "]"
+array_declaration: type_name_hack IDENT "[" INT_CONSTANT "]"
 
 param_list: param_declaration ("," param_declaration)* |
 param_declaration: type_name BYREF? IDENT
 BYREF: "&"
 
+?generic_func_definition: ("generic" "<" IDENT ">")? function_definition
 function_definition: event_handler? func_declaration block_statement
 ctor_definition: ctor_declaration  [":" ctor_init_list] block_statement
-top_ctor_definition: type_name "::" ctor_definition
+
+?generic_ctor_definition: ("generic" "<" IDENT ">")? top_ctor_definition
+top_ctor_definition: type_name_hack "::" ctor_definition
 ctor_init_list: ctor_init ("," ctor_init)*
-ctor_init: IDENT "(" [expression ("," expression)*] ")"
+ctor_init: (IDENT | type_name) "(" [expression ("," expression)*] ")"
 
 event_handler: "[" "Event" conditional_expression [":" "{" (event_condition ("," event_condition)*)? "}"] "]"
 event_condition: IDENT ("." IDENT)* ":" conditional_expression
@@ -45,11 +48,13 @@ property_def: "property" function_definition
 ?non_var_decl: func_declaration | ctor_declaration | property_decl
 type_definition: "type" IDENT maybe_type_params maybe_extends "{" (var_arr_declaration ";")* ((non_var_decl ";") | property_def | function_definition | ctor_definition)* "}"
     | "type" IDENT ";" -> type_declaration
+    | "type" IDENT "is" type_name ";" -> type_alias
 
 maybe_type_params: ["<" IDENT ("," IDENT)* ">"]
 maybe_extends: [":" type_name]
 
-type_name: IDENT 
+type_name: IDENT ["<" IDENT ("," IDENT)* ">"]
+type_name_hack: IDENT
     | ident_less_than IDENT ("," IDENT)* ">"
 
 // Hack to get around conflict with less-than operator
@@ -58,7 +63,7 @@ type_name: IDENT
 namespace_definition: "namespace" IDENT "{" (scoped_declaration | function_definition)* "}"
 
 intrinsic: "intrinsic_extension" "{" (native_definition | type_configure)* "}"
-native_ctor_decl: type_name "::" ctor_declaration
+native_ctor_decl: type_name_hack "::" ctor_declaration
 native_definition: (func_declaration | native_ctor_decl) "Python" ":" PY_BLOCK
 type_configure: "reconfigure_type" type_name "Python" ":" PY_BLOCK
 PY_BLOCK: /{.*?}/s

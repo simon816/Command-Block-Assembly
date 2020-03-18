@@ -221,7 +221,8 @@ class StructuredType(CBLType):
                 # found in the parent type
                 val = StructTypeInstanceShadow(container.value, compiler, None,
                                                type.get_var_members(),
-                                               type.get_func_members())
+                                               type.get_func_members(),
+                                               type.get_func_properties())
                 return Temporary(type, val)
             # Walk the hierarchy to see if we can coerce from a parent type
             return self.parent_type.coerce_to(compiler, container, type)

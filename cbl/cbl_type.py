@@ -2,29 +2,12 @@ from .native_type import NativeType
 from .function_type import FunctionDispatchType, FunctionDispatcher, \
      IntrinsicCallable
 from .containers import InstanceSymbol, Parameter, Temporary, DelegatedWrite
+from .util import operator_name, safe_typename
 
 FDT = FunctionDispatchType()
 
-chr_name = {
-    '=': 'eq',
-    '*': 'mul',
-    '/': 'div',
-    '%': 'mod',
-    '+': 'add',
-    '-': 'sub',
-    '<': 'lt',
-    '>': 'gt',
-    '&': 'and',
-    '^': 'xor',
-    '|': 'or',
-    '!': 'lnot',
-    '~': 'not',
-    '[': 'osq',
-    ']': 'csq',
-}
-
 def _opname(op, unary):
-    return 'op/' + ('u-' if unary else '') + '-'.join(chr_name[c] for c in op)
+    return 'op/' + ('u-' if unary else '') + operator_name(op)
 
 BIN_OPS = set(('=', '*=', '/=', '%=', '+=', '-=', '<<=', '>>=', '&=', '^=',
                '|=', '||', '&&', '|', '^', '&', '==', '!=', '<=', '>=', '<',
@@ -303,7 +286,7 @@ class CBLTypeMeta(CBLType):
 
     def call_constructor(self, compiler, container, args):
         the_type = container.type.the_type
-        obj = the_type.allocate(compiler, the_type.typename + '_inst')
+        obj = the_type.allocate(compiler, safe_typename(the_type) + '_inst')
         tmp = Temporary(the_type, obj)
         the_type.run_constructor(compiler, tmp, args)
         return tmp
