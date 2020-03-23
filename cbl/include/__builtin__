@@ -205,8 +205,10 @@ intrinsic_extension {
     }
 
     void Entity::kill() Python: {
-        block, sender = this.as_entity()
+        ptr = compiler.entity_support.get_pointer(thisarg)
+        block, sender = ptr.as_entity()
         block.add(i.KillInsn(sender))
+        return void
     }
 
     Entity Entity::operator =(Entity other) Python: {

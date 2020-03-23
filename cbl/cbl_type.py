@@ -144,7 +144,7 @@ class CBLType(NativeType):
         return FunctionDispatcher(self, name, disp_name, static)
 
     def add_function_member(self, compiler, name, ret_type, params, inline,
-                            async):
+                            is_async):
         self._check_incomplete()
         dispatcher = self.instance_member(name)
         if dispatcher:
@@ -156,7 +156,7 @@ class CBLType(NativeType):
             dispatcher = self.__dispatcher(name, name)
             self.__func_members[name] = dispatcher
         return dispatcher.add_resolution(compiler, ret_type, params, inline,
-                                         async)
+                                         is_async)
 
     def add_function_property(self, compiler, name, ret_type, inline,
                               set_param):

@@ -12,11 +12,11 @@ class Invokable:
 
 class FunctionType(NativeType, Invokable):
 
-    def __init__(self, ret_type, params, inline, async):
+    def __init__(self, ret_type, params, inline, is_async):
         self.ret_type = ret_type
         self.params = tuple(params)
         self.is_inline = inline
-        self.is_async = async
+        self.is_async = is_async
         self.is_intrinsic = False
 
     def param_str(self):
@@ -177,13 +177,13 @@ class FunctionDispatchType(NativeType, Invokable):
 
 class InstanceFunctionType(FunctionType):
 
-    def __init__(self, inst_type, ret_type, params, inline, async, static):
+    def __init__(self, inst_type, ret_type, params, inline, is_async, static):
         if not static:
             new_params = [Parameter(inst_type, 'this', True)]
             new_params.extend(params)
         else:
             new_params = params
-        super().__init__(ret_type, new_params, inline, async)
+        super().__init__(ret_type, new_params, inline, is_async)
         self.inst_type = inst_type
 
     def allocate(self, compiler, namehint):
@@ -205,13 +205,13 @@ class FunctionDispatcher:
     def has_resolutions(self):
         return len(self.__resolutions) > 0
 
-    def add_resolution(self, compiler, ret_type, params, inline, async):
+    def add_resolution(self, compiler, ret_type, params, inline, is_async):
         name = self.name_for_types(p.type for p in params)
         if name in self.__resolutions:
             raise TypeError(('A resolution already exists for the function with'
                             + ' parameters %s') % (params,))
-        type = InstanceFunctionType(self._type, ret_type, params, inline, async,
-                                    self._static)
+        type = InstanceFunctionType(self._type, ret_type, params, inline,
+                                    is_async, self._static)
         func = type.allocate(compiler, name)
         self.__resolutions[name] = type, func
         return type, func

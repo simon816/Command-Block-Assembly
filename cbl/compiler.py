@@ -28,7 +28,7 @@ EventCondition = namedtuple('EventCondition', 'path value')
 
 VarDeclaration = namedtuple('VarDeclaration', 'type name')
 FuncDeclaration = namedtuple('FuncDeclaration', 'name ret_type params ' + \
-                             'is_operator inline async typespace')
+                             'is_operator inline is_async typespace')
 CtorDeclaration = namedtuple('CtorDeclaration', 'params inline typespace')
 PropertyDeclaration = namedtuple('PropertyDeclaration', 'prop')
 
@@ -333,7 +333,7 @@ class Compiler(Transformer_WithPre):
             type = decl.typespace
             static = False # TODO
             if decl.is_operator:
-                assert not decl.async
+                assert not decl.is_async
                 assert not static
                 f = type.lookup_operator(decl.name, decl.params)
             else:
@@ -344,7 +344,7 @@ class Compiler(Transformer_WithPre):
             symbol = Symbol(fn_type, decl.name, func)
         else:
             fn_type = FunctionType(decl.ret_type, decl.params,
-                                   decl.inline, decl.async)
+                                   decl.inline, decl.is_async)
             existing = self.scope.lookup(decl.name)
             if existing is not None:
                 # TODO check type matches
@@ -427,7 +427,7 @@ class Compiler(Transformer_WithPre):
         return decl._replace(inline=True)
 
     def async_func_decl(self, _, decl):
-        return decl._replace(async=True)
+        return decl._replace(is_async=True)
 
     def array_declaration(self, base_type, name, size):
         type = ArrayType(base_type, size.value)
@@ -690,18 +690,18 @@ class Compiler(Transformer_WithPre):
         assert decl.typespace is None, "Cannot create function declaration " \
                 + "of a type within a type definition"
         if decl.is_operator:
-            assert not decl.async, "Operator declaration cannot be async"
+            assert not decl.is_async, "Operator declaration cannot be async"
             r = type.add_operator_member(self, decl.name, decl.ret_type,
                                          decl.params, decl.inline)
         else:
             r = type.add_function_member(self, decl.name, decl.ret_type,
-                                         decl.params, decl.inline, decl.async)
+                                     decl.params, decl.inline, decl.is_async)
         t, func = r
         self.possible_extern.append(func)
 
     def declare_function_property_on_type(self, type, decl):
         assert not decl.is_operator
-        assert not decl.async
+        assert not decl.is_async
         # assert not static TODO when we get static
         set_param = None
         if decl.params:
@@ -913,12 +913,12 @@ class Compiler(Transformer_WithPre):
 
     def continue_statement(self):
         assert self.loop_attacher.cont is not None, "Nowhere to continue to"
-        self.block.add(Branch(self.loop_attacher.cont))
+        self.block.add(i.Branch(self.loop_attacher.cont))
         self.block = self.func.create_block('after_cont')
 
     def break_statement(self):
         assert self.loop_attacher.brk is not None, "Nowhere to break to"
-        self.block.add(Branch(self.loop_attacher.brk))
+        self.block.add(i.Branch(self.loop_attacher.brk))
         self.block = self.func.create_block('after_break')
 
     def return_statement(self, expr=None):
@@ -1046,13 +1046,13 @@ class Compiler(Transformer_WithPre):
             args = []
             for arg in fn_args:
                 args.extend(arg.type.as_arguments(arg.value))
-            args = tuple(args)
+            args = tuple(args) or None
         else:
             args = None
         r_type = func_ref.type.ret_type
         if r_type != self.type('void'):
             retobj = r_type.allocate(self, 'fnret_' + safe_typename(r_type))
-            ret_args = tuple(r_type.as_returns(retobj))
+            ret_args = tuple(r_type.as_returns(retobj)) or None
         else:
             ret_args = None
             retobj = None

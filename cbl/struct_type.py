@@ -143,10 +143,10 @@ class StructuredType(CBLType):
                                       self.get_func_properties())
 
     def add_function_member(self, compiler, name, ret_type, params, inline,
-                            async):
+                            is_async):
         self.__complete_vars()
         return super().add_function_member(compiler, name, ret_type, params,
-                                           inline, async)
+                                           inline, is_async)
 
     def add_operator_member(self, compiler, op, ret_type, params, inline):
         self.__complete_vars()
