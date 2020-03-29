@@ -26,6 +26,9 @@ class Branch(SingleCommandInsn):
 
     def activate(self, seq):
         assert self.label._func == seq._func
+        if self.label == seq._func._exitblock:
+            # Same restriction as Return
+            assert not seq.is_function, seq
 
     def get_cmd(self):
         return c.Function(self.label.global_name)

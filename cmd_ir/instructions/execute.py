@@ -14,7 +14,7 @@ from ..core_types import (EntitySelection,
                           RelPosVal,
                           )
 from ..core import FunctionLike, BasicBlock
-from ..variables import Variable
+from ..variables import Variable, VarType
 from ..nbt import NBTType
 import commands as c
 
@@ -170,6 +170,44 @@ class ExecUnlessVar(ExecCondVar):
     """Execute the rest of the chain if the given variable is not within the
     given bounds."""
     insn_name = 'exec_unless_var'
+    cond = 'unless'
+
+class ExecCondNBTVar(VoidApplicationInsn):
+
+    args = [ExecChain, Variable]
+    argnames = 'chain var'
+    argdocs = ["Execute chain", "NBT Variable"]
+
+    def validate(self):
+        #assert self.var.type == VarType.nbt
+        # Can't ensure type is nbt because this might be a nbtsubpath to a
+        # non-nbt value
+        pass
+
+    def activate(self, seq):
+        self._index = self.chain.add(ExecComponentCondNBTVar(self.cond,
+                                                             self.var))
+
+    def copy(self):
+        insn = super().copy()
+        insn._index = self._index
+        return insn
+
+    def changed(self, prop):
+        if prop == 'var':
+            self.chain.set(self._index, ExecComponentCondNBTVar(self.cond,
+                                                                self.var))
+
+    def declare(self):
+        self.var.usage_read()
+
+class ExecIfNBTVar(ExecCondNBTVar):
+    """"""
+    insn_name = 'exec_if_nbt_var'
+    cond = 'if'
+class ExecUnlessNBTVar(ExecCondNBTVar):
+    """"""
+    insn_name = 'exec_unless_nbt_var'
     cond = 'unless'
 
 class ExecCondEntity(VoidApplicationInsn):

@@ -381,6 +381,7 @@ class ProxyVariable(Variable):
     def set_const_val(self, value, out): return self.var.set_const_val(value, out)
     def push_to_stack(self, out): return self.var.push_to_stack(out)
     def realign_frame(self, shift): return self.var.realign_frame(shift)
+    def as_nbt_variable(self, out): return self.var.as_nbt_variable(out)
     def _write_to_reference(self, ref, out): return self.var._write_to_reference(ref, out)
     def _read_from_reference(self, ref, out): return self.var._read_from_reference(ref, out)
     def _direct_ref(self): return self.var._direct_ref()

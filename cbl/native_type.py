@@ -54,9 +54,12 @@ class NativeType:
         return (self.ir_type,)
 
     def as_arguments(self, instance):
-        return (self.as_variable(instance),)
+        return self.as_variables(instance)
 
     def as_returns(self, instance):
+        return self.as_variables(instance)
+
+    def as_variables(self, instance):
         return (self.as_variable(instance),)
 
     def as_variable(self, instance):

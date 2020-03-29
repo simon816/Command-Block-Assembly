@@ -137,6 +137,20 @@ class ExecComponentCondVar:
         return ExecComponentCondVar(self.condtype, self.var.clone(), self.min,
                                     self.max)
 
+class ExecComponentCondNBTVar:
+
+    def __init__(self, condtype, var):
+        self.condtype = condtype
+        self.var = var
+
+    def apply(self, exec, chain, out):
+        path, entity = self.var._direct_nbt()
+        ref = c.EntityReference(entity)
+        chain.cond(self.condtype).data(ref, path)
+
+    def clone(self):
+        return ExecComponentCondNBTVar(self.condtype, self.var.clone())
+
 class ExecComponentCondEntity:
 
     def __init__(self, condtype, target):

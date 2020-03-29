@@ -9,6 +9,7 @@ from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
 from .base_types import VoidType, BoolType, IntType, DecimalType, StringType, \
      BlockTypeType, ItemTypeType, EventType, TextType
+from .maybe_type import MaybeType
 from .template_type import TemplatedType
 from .types import Types
 from .containers import *
@@ -212,6 +213,7 @@ class Compiler(Transformer_WithPre):
         self.add_base_type('bool', BoolType())
         self.add_base_type('decimal', DecimalType())
         self.add_type('IRVariable', IRVarType())
+        self.add_type('Maybe', MaybeType())
 
         self.add_base_type('__EntityPtr', EntityPointerType())
         self.add_type('EntityLocal', EntityLocalType())
@@ -719,10 +721,26 @@ class Compiler(Transformer_WithPre):
 
     def type_name(self, name, *type_args):
         t = self.type(name.value)
-        return t.instantiate(self, tuple(self.type(t) for t in type_args))
+        return t.instantiate(self, type_args)
 
-    def type_name_hack(self, name, *type_args):
-        return self.type_name(name, *type_args)
+    def type_name_hack(self, name, *args):
+        arg_list = []
+        if args:
+            if len(args) == 4:
+                first_type_first_arg = args[1]
+                first_type_other_args = args[2]
+                first_type_args = [first_type_first_arg]
+                first_type_args.extend(first_type_other_args)
+                first_type = self.type_name(args[0], *first_type_args)
+            else:
+                first_type = self.type_name(args[0])
+            other_args = args[-1]
+            arg_list.append(first_type)
+            arg_list.extend(other_args)
+        return self.type_name(name, *arg_list)
+
+    def seq_type_names(self, *types):
+        return types
 
     def pre_namespace_definition(self, tree, post_transform):
         name, *decls = tree.children

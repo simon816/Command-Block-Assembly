@@ -226,7 +226,7 @@ class FunctionDispatcher:
 
     def dispatch(self, compiler, thiscont, args):
         fnsym, args = self.satisfy(compiler, thiscont, args)
-        print("Dispatch", self.fqn + fnsym.type.param_str())
+        # print("Dispatch", self.fqn + fnsym.type.param_str())
         return compiler.function_call_expr(fnsym, *args)
 
     def satisfy(self, compiler, thiscont, orig_args):

@@ -31,7 +31,7 @@ class CreateNBTValue(ConstructorInsn):
         if isinstance(val, VirtualString):
             val = str(val)
         args = (val,)
-        if val is None:
+        if val is None and self.type == NBTType.compound:
             args = tuple()
         return self.type.new(*args)
 

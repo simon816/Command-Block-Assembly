@@ -34,6 +34,11 @@ class StructTypeInstance(CBLTypeInstance):
             return self._all_vars(lambda t, v: t.as_returns(v))
         return (self.__this,)
 
+    def as_variables(self):
+        if self.__this is None:
+            return self._all_vars(lambda t, v: t.as_variables(v))
+        return (self.__this,)
+
     def as_variable(self):
         assert self.__this is not None, "Cannot convert %s to variable" % self
         return self.__this
@@ -95,6 +100,9 @@ class StructuredType(CBLType):
 
     def as_variable(self, instance):
         return instance.as_variable()
+
+    def as_variables(self, instance):
+        return instance.as_variables()
 
     def instance_member(self, name):
         m = super().instance_member(name)

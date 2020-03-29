@@ -312,6 +312,10 @@ class ExecuteChain:
             assert type in ['all', 'masked']
             return self.add('blocks', begin, end, dest, type)
 
+        def data(self, dataref, path):
+            assert isinstance(dataref, BlockOrEntityRef)
+            return self.add('data', dataref, path)
+
     def store(self, store_type):
         assert store_type in ['result', 'success']
         self.can_terminate = False

@@ -53,9 +53,10 @@ type_definition: "type" IDENT maybe_type_params maybe_extends "{" (var_arr_decla
 maybe_type_params: ["<" IDENT ("," IDENT)* ">"]
 maybe_extends: [":" type_name]
 
-type_name: IDENT ["<" IDENT ("," IDENT)* ">"]
+type_name: IDENT ["<" type_name ("," type_name)* ">"]
 type_name_hack: IDENT
-    | ident_less_than IDENT ("," IDENT)* ">"
+    | ident_less_than IDENT ["<" type_name seq_type_names ">"] seq_type_names ">"
+seq_type_names: ("," type_name)*
 
 // Hack to get around conflict with less-than operator
 ?ident_less_than: IDENT "<"
