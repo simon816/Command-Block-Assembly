@@ -77,13 +77,13 @@ class FunctionContainer:
         p_types = []
         for p in self.fn_type.params:
             passtype = 'byref' if p.by_ref else 'byval'
-            for ptype in p.type.to_parameters():
+            for ptype in p.type.ir_types():
                 p_types.append((ptype, passtype))
         return tuple(p_types)
 
     @property
     def ir_ret_types(self):
-        return tuple(self.fn_type.ret_type.to_returns())
+        return tuple(self.fn_type.ret_type.ir_types())
 
     @property
     def ir_func(self):

@@ -474,7 +474,8 @@ class Compiler(Transformer_WithPre):
         func = func_sym.value.get_or_create_definition()
         if event_handler is not None:
             self.top.preamble.add(i.EventHandler(func, event_handler))
-        if not func_decl.is_operator and not func_decl.inline:
+        if not func_decl.is_operator and not func_decl.inline \
+           and not func_decl.typespace and not func_decl.params:
             func.preamble.add(i.ExternInsn())
         if func_decl.inline:
             func.preamble.add(i.InlineInsn())
@@ -1063,14 +1064,14 @@ class Compiler(Transformer_WithPre):
         if fn_args:
             args = []
             for arg in fn_args:
-                args.extend(arg.type.as_arguments(arg.value))
+                args.extend(arg.type.as_variables(arg.value))
             args = tuple(args) or None
         else:
             args = None
         r_type = func_ref.type.ret_type
         if r_type != self.type('void'):
             retobj = r_type.allocate(self, 'fnret_' + safe_typename(r_type))
-            ret_args = tuple(r_type.as_returns(retobj)) or None
+            ret_args = tuple(r_type.as_variables(retobj)) or None
         else:
             ret_args = None
             retobj = None

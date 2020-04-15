@@ -18,25 +18,12 @@ class StructTypeInstance(CBLTypeInstance):
         value = type.allocate(compiler, name)
         return self.construct_member(name, type, value)
 
-    def _all_vars(self, transform):
-        vars = []
-        for m in self.__var_members:
-            vars.extend(transform(m.type, m.value))
-        return vars
-
-    def to_arguments(self):
-        if self.__this is None:
-            return self._all_vars(lambda t, v: t.as_arguments(v))
-        return (self.__this,)
-
-    def to_returns(self):
-        if self.__this is None:
-            return self._all_vars(lambda t, v: t.as_returns(v))
-        return (self.__this,)
-
     def as_variables(self):
         if self.__this is None:
-            return self._all_vars(lambda t, v: t.as_variables(v))
+            vars = []
+            for m in self.__var_members:
+                vars.extend(m.type.as_variables(m.value))
+            return vars
         return (self.__this,)
 
     def as_variable(self):
@@ -76,27 +63,13 @@ class StructuredType(CBLType):
             return i.VarType.nbt
         raise TypeError('%s does not have an IR type' % self)
 
-    def to_parameters(self):
+    def ir_types(self):
         if self._is_nbt:
             return (self.ir_type,)
-        params = []
+        types = []
         for m_type in self.__var_members.values():
-            params.extend(m_type.to_parameters())
-        return params
-
-    def to_returns(self):
-        if self._is_nbt:
-            return (self.ir_type,)
-        returns = []
-        for m_type in self.__var_members.values():
-            returns.extend(m_type.to_returns())
-        return returns
-
-    def as_arguments(self, instance):
-        return instance.to_arguments()
-
-    def as_returns(self, instance):
-        return instance.to_returns()
+            types.extend(m_type.ir_types())
+        return types
 
     def as_variable(self, instance):
         return instance.as_variable()

@@ -184,10 +184,7 @@ class EntityPosComponentType(DecimalType):
             block.add(i.SetScore(var, other.type.as_variable(other.value)))
         return other
 
-    def as_arguments(self, instance):
-        return ()
-
-    def as_returns(self, instance):
+    def as_variables(self, instance):
         return ()
 
     def new_temporary(self, compiler, namehint='tmp'):

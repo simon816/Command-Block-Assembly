@@ -47,23 +47,33 @@ class NativeType:
         tmp = self.dispatch_operator(compiler, op, left, right)
         return self.dispatch_operator(compiler, '=', left, tmp)
 
-    def to_parameters(self):
+    def ir_types(self):
         return (self.ir_type,)
-
-    def to_returns(self):
-        return (self.ir_type,)
-
-    def as_arguments(self, instance):
-        return self.as_variables(instance)
-
-    def as_returns(self, instance):
-        return self.as_variables(instance)
 
     def as_variables(self, instance):
         return (self.as_variable(instance),)
 
     def as_variable(self, instance):
         raise TypeError('%s cannot be converted to a variable' % self)
+
+    # Convert a sequence of variables (e.g. from as_variables()) back into
+    # Our high-level value
+    def from_variables(self, compiler, vars):
+        it = iter(vars)
+
+        # The default implementation is to call allocate but provide variables
+        # via the pool of yet-to-consume variables
+        def shift_var(subname, var_type):
+            var = next(it)
+            # verify IR type is consistent
+            assert var.type == var_type
+            return var
+
+        with compiler.set_create_var(shift_var):
+            value = self.allocate(compiler, 'restored')
+            # Check we consumed all the variables
+            assert all(False for _ in it)
+            return value
 
     def effective_var_size(self):
         if self.ir_type:

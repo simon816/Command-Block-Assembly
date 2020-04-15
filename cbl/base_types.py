@@ -8,7 +8,7 @@ import cmd_ir.instructions as i
 
 class VoidType(NativeType):
 
-    def to_returns(self):
+    def ir_types(self):
         return tuple()
 
 class BoolType(LogOperatorMixin, IntrinsicOperatorType):

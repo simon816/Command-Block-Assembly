@@ -492,7 +492,12 @@ class VariableAliasing(BlockVisitor):
                 # Remove this var from old inverse set
                 self.remove_alias(insn.var)
             if isinstance(insn.value, Variable) and insn.value != insn.var and \
-               self.entity_local_compat(insn.var, insn.value):
+               self.entity_local_compat(insn.var, insn.value) and \
+               not isinstance(insn.value, VirtualNbtVariable):
+                # For now, don't allow aliasing nbt subpath variables
+                # The root nbt variable may change but that is not
+                # detected so we don't invalidate the alias
+                # TODO invalidate child nbt variables when parent changes
                 self.aliases[insn.var] = insn.value
                 self.inverse[insn.value].add(insn.var)
         if insn.is_branch:
