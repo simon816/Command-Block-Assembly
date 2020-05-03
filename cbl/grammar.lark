@@ -25,9 +25,25 @@ param_list: param_declaration ("," param_declaration)* |
 param_declaration: type_name BYREF? IDENT
 BYREF: "&"
 
-?generic_func_definition: ("generic" "<" IDENT ">")? function_definition
-function_definition: event_handler? func_declaration block_statement
-ctor_definition: ctor_declaration  [":" ctor_init_list] block_statement
+exec_modifier: MACRO | CONSTEXPR
+MACRO: "macro"
+CONSTEXPR: "constexpr"
+maybe_exec_modifier: exec_modifier?
+
+// Functions at the top level. Can be generic and have an event handler
+?generic_func_definition: ("generic" "<" IDENT ">")? top_level_func_def
+?event_handler_function: event_handler? normal_func_def
+?top_level_func_def: event_handler_function | modified_func_def
+
+// Normal runtime function
+?normal_func_def: func_declaration block_statement
+// Function with exec modifier
+?modified_func_def: maybe_exec_modifier func_declaration_ block_statement
+
+?function_definition: normal_func_def | modified_func_def
+ctor_definition: ctor_declaration [":" ctor_init_list] block_statement
+
+?modified_ctor_definition: exec_modifier? ctor_definition
 
 ?generic_ctor_definition: ("generic" "<" IDENT ">")? top_ctor_definition
 top_ctor_definition: type_name_hack "::" ctor_definition
@@ -42,11 +58,11 @@ var_ctor_expr: "(" [assignment_expression ("," assignment_expression)*] ")"
 var_init_declaration: var_arr_declaration (var_init_expr|var_ctor_expr)? ";"
 
 property_decl: "property" func_declaration
-property_def: "property" function_definition
+property_def: "property" normal_func_def
 
 // All function definitions must occur after variable declarations have finished
-?non_var_decl: func_declaration | ctor_declaration | property_decl
-type_definition: "type" IDENT maybe_type_params maybe_extends "{" (var_arr_declaration ";")* ((non_var_decl ";") | property_def | function_definition | ctor_definition)* "}"
+?non_var_decl: func_declaration | property_decl | ctor_declaration
+type_definition: "type" IDENT maybe_type_params maybe_extends "{" (var_arr_declaration ";")* ((non_var_decl ";") | property_def | function_definition | modified_ctor_definition)* "}"
     | "type" IDENT ";" -> type_declaration
     | "type" IDENT "is" type_name ";" -> type_alias
 
@@ -81,9 +97,12 @@ block_statement: "{" statement* "}"
     | "for" "(" opt_expression ";" opt_expression ";" opt_expression ")" statement -> for_statement
     | "for" "(" IDENT "in" expression ")" statement -> for_in_statement
     | "at" "(" expression ")" statement -> at_statement
+    | "ir" "(" [expression ("," expression)*] ")" IR_BLOCK -> ir_statement
     | "continue" ";" -> continue_statement
     | "break" ";" -> break_statement
     | "return" expression? ";" -> return_statement
+
+IR_BLOCK: /{.*?}/s
 
 // Needed so for_statement always keeps child nodes
 ?opt_expression: expression?

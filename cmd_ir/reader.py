@@ -71,6 +71,11 @@ class BuildProgram(Interpreter):
         self.holder = self.top
         self.curr_seq = None
 
+    def compiletime(self, node):
+        self.func = self.func.create_compiletime()
+        self.visit_children(node)
+        self.func = self.func.run_and_return()
+
     def block(self, node):
         if not isinstance(node.children[0], Token):
             # Modifier is first child
@@ -201,3 +206,18 @@ class Reader:
     def preprocess(self, top):
         for name, value in self.env:
             top.store(name, value)
+
+    def read_blocks(self, func, blocks):
+        tree = self.parser.parse('%HOOK BLOCKS ' + blocks)
+        builder = BuildProgram()
+        builder.func = func
+        builder.holder = func
+        builder.visit(tree)
+
+    def read_instruction(self, func, insn):
+        tree = self.parser.parse('%HOOK INSN ' + insn)
+        builder = BuildProgram()
+        builder.func = func
+        builder.holder = func
+        # the "start" visitor returns a list with one element - the insn
+        return builder.visit(tree)[0]

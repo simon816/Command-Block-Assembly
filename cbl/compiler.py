@@ -4,9 +4,10 @@ import contextlib
 from .parser_ import Parser, Transformer_WithPre, v_args
 from .struct_type import StructuredType
 from .cbl_type import CBLTypeMeta
-from .native_type import as_var, IRVarType, NativeType
+from .native_type import as_var, NativeType, IRType
 from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
+from .macro_type import MacroType
 from .base_types import VoidType, BoolType, IntType, DecimalType, StringType, \
      BlockTypeType, ItemTypeType, EventType, TextType
 from .maybe_type import MaybeType
@@ -36,6 +37,9 @@ PropertyDeclaration = namedtuple('PropertyDeclaration', 'prop')
 FunctionDefinition = namedtuple('FunctionDefinition', 'decl body event_handler')
 CtorDefinition = namedtuple('CtorDefinition', 'decl init_list body')
 MemberInit = namedtuple('MemberInit', 'member args')
+
+ConstexprDefinition = namedtuple('ConstexprDefinition', 'def_')
+MacroDefinition = namedtuple('MacroDefinition', 'def_')
 
 ConstructorArgs = namedtuple('ConstructorArgs', 'args')
 
@@ -170,6 +174,7 @@ class Compiler(Transformer_WithPre):
         self.func = None
         self.funcsym = None
         self.block = None
+        self.ret_param = None
         self.include_file('__builtin__')
 
     def compile_unit(self, program, filename):
@@ -212,8 +217,8 @@ class Compiler(Transformer_WithPre):
         self.add_base_type('int', IntType())
         self.add_base_type('bool', BoolType())
         self.add_base_type('decimal', DecimalType())
-        self.add_type('IRVariable', IRVarType())
         self.add_type('Maybe', MaybeType())
+        self.add_type('_IRType', IRType())
 
         self.add_base_type('__EntityPtr', EntityPointerType())
         self.add_type('EntityLocal', EntityLocalType())
@@ -224,7 +229,7 @@ class Compiler(Transformer_WithPre):
         self.add_type('BlockType', BlockTypeType())
         self.add_type('ItemType', ItemTypeType())
         self.add_type('Event', EventType())
-        self.add_type('Text', TextType())
+        #self.add_type('Text', TextType())
 
     # === Support / Helpers === #
 
@@ -235,7 +240,7 @@ class Compiler(Transformer_WithPre):
             out.append('Compiling function %s%s' % (self.funcsym.name,
                                               self.funcsym.type.param_str()))
             if self.block is not None:
-                out.append('Current basic block: %s' % self.block.global_name)
+                out.append('Current basic block: %s' % str(self.block))
                 prev = self.block.serialize().split('\n')
                 if len(prev) > 8:
                     out.append('    ... (%d previous instructions)' % \
@@ -317,11 +322,6 @@ class Compiler(Transformer_WithPre):
     def global_def(self, namehint, insn):
         return self.top.preamble.add(insn, True, namehint)
 
-    def do_define(self, insn):
-        if self.func is None:
-            return self.top.preamble.define(insn)
-        return self.func.preamble.define(insn)
-
     def define(self, namehint, insn):
         if self.func is None:
             return self.top.preamble.add(insn, True, namehint)
@@ -329,6 +329,10 @@ class Compiler(Transformer_WithPre):
 
     def insn_def(self, insn):
         return self.block.define(insn)
+
+    def _declare_macro(self, name, ret_type, params, body, compiletime):
+        fn_type = MacroType(ret_type, params, body, compiletime)
+        self.scope.declare_symbol(name, fn_type)
 
     def _declare_function(self, decl, has_definition):
         if decl.typespace is not None:
@@ -405,6 +409,15 @@ class Compiler(Transformer_WithPre):
             self.process_func_definition(decl)
         elif isinstance(decl, CtorDefinition):
             self.process_ctor_definition(decl)
+        elif isinstance(decl, (MacroDefinition, ConstexprDefinition)):
+            compiletime = isinstance(decl, ConstexprDefinition)
+            # note: only func defs are possible at the top level
+            body = decl.def_.body
+            decl = decl.def_.decl
+            assert not decl.is_operator, "TODO"
+            assert not decl.typespace, "Top level only"
+            self._declare_macro(decl.name, decl.ret_type, decl.params, body,
+                                compiletime)
         elif decl is not None:
             assert False, decl
 
@@ -447,6 +460,19 @@ class Compiler(Transformer_WithPre):
             byref = False
         return Parameter(p_type, p_name, byref)
 
+    def maybe_exec_modifier(self, modifier=None):
+        return modifier
+
+    def exec_modifier(self, token):
+        return token.value
+
+    def _modified(self, modifier, def_):
+        if modifier == 'constexpr':
+            return ConstexprDefinition(def_)
+        if modifier == 'macro':
+            return MacroDefinition(def_)
+        assert False, modifier
+
     def _generic_late_decl(self, tree):
         base_type, decl_tree = tree.children
         t = self.type(base_type.value)
@@ -456,15 +482,25 @@ class Compiler(Transformer_WithPre):
     def pre_generic_func_definition(self, tree, post_transform):
         self._generic_late_decl(tree)
 
-    def pre_function_definition(self, tree, post_transform):
-        if len(tree.children) == 3:
-            event_handler, func_decl, body = tree.children
-            event_handler = self.transform(event_handler)
-        else:
-            func_decl, body = tree.children
-            event_handler = None
+    def pre_normal_func_def(self, tree, post_transform):
+        func_decl, body = tree.children
         func_decl = self.transform(func_decl)
-        return FunctionDefinition(func_decl, body, event_handler)
+        return FunctionDefinition(func_decl, body, None)
+
+    def pre_modified_func_def(self, tree, post_transform):
+        modifier, func_decl, body = tree.children
+        modifier = self.transform(modifier)
+        func_decl = self.transform(func_decl)
+        def_ = FunctionDefinition(func_decl, body, None)
+        if modifier is not None:
+            return self._modified(modifier, def_)
+        return def_
+
+    def pre_event_handler_function(self, tree, post_transform):
+        event_handler, func_def = tree.children
+        event_handler = self.transform(event_handler)
+        func_def = self.transform(func_def)
+        return func_def._replace(event_handler=event_handler)
 
     def process_func_definition(self, func_def):
         func_decl = func_def.decl
@@ -482,6 +518,16 @@ class Compiler(Transformer_WithPre):
         self._process_function_def(func_sym, body)
 
     def _process_function_def(self, func_sym, body, pre_body_hook=None):
+        with self._define_function(func_sym):
+            with self._process_body_main(func_sym.type.ret_type):
+                self._allocate_parameters(func_sym.type.params)
+                with self._alloc_sender():
+                    if pre_body_hook:
+                        pre_body_hook()
+                    self.transform(body)
+
+    @contextlib.contextmanager
+    def _define_function(self, func_sym):
         old_func = self.func
         old_funcsym = self.funcsym
         old_block = self.block
@@ -490,26 +536,30 @@ class Compiler(Transformer_WithPre):
         if func_sym.type.is_async:
             self.func.preamble.add(i.RunCallbackOnExit())
         self.block = self.func.create_block('entry')
-        with self.scope:
-            self._allocate_parameters(func_sym.type.params)
-            sender_ptr = self.entity_support.construct_sender()
-            sender = self._construct_variable('sender', self.type('Entity'),
-                                              (sender_ptr,))
-            rtype = func_sym.type.ret_type
-            if rtype != self.type('void'):
-                self.ret_param = self._allocate_return(rtype)
-            else:
-                self.ret_param = None
-            with self.entity_support.set_sender(sender_ptr.value):
-                if pre_body_hook:
-                    pre_body_hook()
-                self.transform(body)
+        yield
         if not self.block.is_terminated():
             self.block.add(i.Return())
         self.func.end()
         self.block = old_block
         self.func = old_func
         self.funcsym = old_funcsym
+
+    def _alloc_sender(self):
+        sender_ptr = self.entity_support.construct_sender()
+        sender = self._construct_variable('sender', self.type('Entity'),
+                                          (sender_ptr,))
+        return self.entity_support.set_sender(sender_ptr.value)
+
+    @contextlib.contextmanager
+    def _process_body_main(self, ret_type):
+        old_ret_param = self.ret_param
+        with self.scope:
+            if ret_type != self.type('void'):
+                self.ret_param = self._allocate_return(ret_type)
+            else:
+                self.ret_param = None
+            yield self.ret_param
+        self.ret_param = old_ret_param
 
     def _allocate_parameters(self, params):
         for param in params:
@@ -521,6 +571,16 @@ class Compiler(Transformer_WithPre):
                 p = ptype.allocate(self, param.name)
                 sym = Symbol(ptype, param.name, p)
                 self.scope.store(param.name, sym)
+
+    def _alloc_and_copy_params(self, params, args):
+        for param, var in zip(params, args):
+            if param.by_ref:
+                self.scope.store(param.name, var)
+            else:
+                p = param.type.allocate(self, param.name)
+                sym = Symbol(param.type, param.name, p)
+                self.scope.store(param.name, sym)
+                self.dispatch_operator('=', sym, var)
 
     def _allocate_return(self, type):
         def create_return(vname, var_type):
@@ -538,6 +598,11 @@ class Compiler(Transformer_WithPre):
         ctor_decl = self.transform(ctor_decl)
         return CtorDefinition(ctor_decl, init_list, body)
 
+    def pre_modified_ctor_definition(self, tree, post_transform):
+        # The only case this node exists is when there's a modifier
+        modifier, def_ = tree.children
+        return self._modified(self.transform(modifier), self.transform(def_))
+
     def process_ctor_definition(self, ctor_def):
         ctor_decl = ctor_def.decl
         type = ctor_decl.typespace
@@ -554,13 +619,16 @@ class Compiler(Transformer_WithPre):
             func = ctor_sym.value.get_or_create_definition()
             func.preamble.add(i.InlineInsn())
         def construct_members():
-            this = self.scope.lookup('this')
-            inits = {}
-            if init_list is not None:
-                inits = { init.member: init.args \
-                          for init in self.transform(init_list) }
-            this.type.do_construction(self, this.value, inits)
+            self.construct_this(init_list)
         self._process_function_def(ctor_sym, body, construct_members)
+
+    def construct_this(self, init_list):
+        this = self.scope.lookup('this')
+        inits = {}
+        if init_list is not None:
+            inits = { init.member: init.args \
+                      for init in self.transform(init_list) }
+        this.type.do_construction(self, this.value, inits)
 
     def pre_generic_ctor_definition(self, tree, post_transform):
         self._generic_late_decl(tree)
@@ -686,6 +754,36 @@ class Compiler(Transformer_WithPre):
                 self.declare_function_property_on_type(type, prop)
             else:
                 assert False, prop
+        elif isinstance(decl, ConstexprDefinition):
+            d = decl.def_
+            if isinstance(d, CtorDefinition):
+                type.add_macro_constructor(self, d.decl.params, d.init_list,
+                                           d.body, True)
+            elif isinstance(d, FunctionDefinition):
+                dl = d.decl
+                if dl.is_operator:
+                    type.add_macro_operator(self, dl.name, dl.ret_type,
+                                            dl.params, d.body, True)
+                else:
+                    type.add_macro_function(self, dl.name, dl.ret_type,
+                                            dl.params, d.body, True)
+            else:
+                assert False, decl.def_
+        elif isinstance(decl, MacroDefinition):
+            d = decl.def_
+            if isinstance(d, CtorDefinition):
+                type.add_macro_constructor(self, d.decl.params, d.init_list,
+                                           d.body, False)
+            elif isinstance(d, FunctionDefinition):
+                dl = d.decl
+                if dl.is_operator:
+                    type.add_macro_operator(self, dl.name, dl.ret_type,
+                                            dl.params, d.body, False)
+                else:
+                    type.add_macro_function(self, dl.name, dl.ret_type,
+                                            dl.params, d.body, False)
+            else:
+                assert False, decl.def_
         elif decl is not None:
             assert False, decl
 
@@ -929,6 +1027,37 @@ class Compiler(Transformer_WithPre):
         # TODO handle "return" inside body
         self.block.set_is_function()
         self.block = old_block
+
+    def ir_statement(self, *args):
+        *exprs, block = args
+        ir_code = block[1:-1]
+        from cmd_ir.reader import Reader
+        from cmd_ir.core import BasicBlock
+        r = Reader()
+        # We create an isolated scope so that it can't conflict with other
+        # variables etc in the real scope
+        real_scope = self.func.isolate()
+        vars = []
+        for n, container in enumerate(exprs):
+            if container.type == self.type('_IRType'):
+                v = container.value.var
+            else:
+                v = as_var(container)
+            self.func.store('arg%d' % n, v)
+            vars.append(v)
+        r.read_blocks(self.func, 'entry:\n' + ir_code)
+        first_block = last_block = None
+        isolated_scope = self.func.scope
+        self.func.scope = real_scope
+        for name, var in isolated_scope.items():
+            if isinstance(var, BasicBlock):
+                if not first_block:
+                    first_block = var
+                last_block = var
+            if var not in vars:
+                self.func.generate_name(name, var)
+        self.block.add(i.Branch(first_block))
+        self.block = last_block
 
     def continue_statement(self):
         assert self.loop_attacher.cont is not None, "Nowhere to continue to"

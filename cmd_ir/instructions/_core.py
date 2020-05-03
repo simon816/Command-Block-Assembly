@@ -105,6 +105,9 @@ class Insn(metaclass=InsnMeta):
     def apply(self, out, func):
         pass
 
+    def run(self):
+        assert False, "Not a compile time instruction, %s" % self
+
     def serialize_args(self, holder):
         def serialize(val):
             if isinstance(val, (str, int, float)):

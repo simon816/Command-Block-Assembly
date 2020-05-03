@@ -20,7 +20,8 @@ from ..core_types import (SelectorType,
                           EntityRef,
                           )
 from ..variables import (VarType, LocalVariable, ParameterVariable, Variable,
-                         ReturnVariable, EntityLocalAccess, GlobalVariable)
+                         ReturnVariable, EntityLocalAccess, GlobalVariable,
+                         CompilerVariable)
 from ..nbt import NBTBase, NBTCompound
 from .text import TextObject
 import commands as c
@@ -270,6 +271,23 @@ class DefineVariable(PreambleOnlyInsn, ConstructorInsn):
         if ref is not None:
             name = ref.objective.objective
             out.write_objective(name, None)
+
+class CompileOnlyVariable(PreambleOnlyInsn, ConstructorInsn):
+    """Creates a local variable of the given variable type."""
+
+    args = [VarType]
+    argnames = 'type'
+    argdocs = ["Variable type"]
+    rettype = Variable
+
+    func_preamble_only = True
+    insn_name = 'compileonly'
+
+    def construct(self):
+        return CompilerVariable(self.type)
+
+    def apply(self, out, func):
+        pass
 
 class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
     """Creates a global variable of the given variable type."""

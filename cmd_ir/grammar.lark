@@ -1,4 +1,7 @@
-start: preamble? body*
+// Special hooks for CBL to parse specific productions
+start: program | ("%HOOK" ( "INSN" normal_insn | "BLOCKS" block* ) )
+
+program: preamble? body*
 
 preamble: "preamble" "{" instruction* "}"
 
@@ -10,7 +13,9 @@ extern_returns: "(" IDENT ("," IDENT)* ")"
 
 function: "function" FUNC_NAME "{" function_body "}"
 
-function_body: preamble? block*
+function_body: preamble? compiletime* block*
+
+compiletime: "compiletime" "{" block* "}"
 
 block: block_modifier? LABEL NEWLINE instruction*
 

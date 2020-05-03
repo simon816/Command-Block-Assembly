@@ -216,6 +216,11 @@ class Scope(OrderedDict):
 
 class VariableHolder:
 
+    def isolate(self):
+        scope = self.scope
+        self.scope = Scope()
+        return scope
+
     def uniq_name(self, hint):
         if hint not in self.scope:
             return hint
@@ -553,6 +558,7 @@ class IRFunction(VisibleFunction, VariableHolder):
         self.params = []
         self.returns = []
         self.__future_expect_sig = []
+        self._compiletimes = []
 
     def _create_super_block(self, name):
         return SuperBlock(name, self)
@@ -566,6 +572,14 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     def add_return(self, vtype):
         self.returns.append(vtype)
+
+    def create_compiletime(self):
+        fn = CompileTimeFunction(self)
+        self._compiletimes.append(fn)
+        return fn
+
+    def get_compiletimes(self):
+        return list(self._compiletimes)
 
     def entry_point_usage(self):
         self.allblocks[0].usage()
@@ -815,8 +829,9 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._entryblock.add(RevokeEventAdvancement(self))
 
     def serialize(self):
-        return 'function %s {\n%s\n%s\n}\n' % (self._name,
+        return 'function %s {\n%s%s\n%s\n}\n' % (self._name,
                                                self.preamble.serialize(),
+           ''.join(fn.serialize() for fn in self._compiletimes),
            '\n\n'.join(block.serialize() for block in (self.allblocks if \
                        self._varsfinalized else self.blocks)))
 
@@ -883,13 +898,13 @@ class BasicBlock(FunctionLike, InstructionSeq):
             writer.write(SetConst(Var('success_tracker'), 1))
         return writer.get_output()
 
-    def serialize(self):
+    def serialize(self, indent=4):
         modifier = ''
         if self.is_function:
             modifier = '[function] '
         lines = [modifier + self._name + ':']
         lines.extend(insn.serialize(self._func) for insn in self.insns)
-        return '\n'.join('    ' + line for line in lines)
+        return '\n'.join((' ' * indent) + line for line in lines)
 
 class SuperBlock(BasicBlock):
 
@@ -925,6 +940,66 @@ class SuperBlock(BasicBlock):
     def reset(self):
         if self._clear:
             super().reset()
+
+class CompileTimeFunction(VariableHolder):
+
+    def __init__(self, real_func):
+        self._real_func = real_func
+        self.scope = Scope(real_func.scope)
+
+        self._exitblock = self.uniq('0ret', self._create_block)
+        self.post_exit_insns = []
+
+    @property
+    def preamble(self):
+        return self._real_func.preamble
+
+    def create_compiletime(self):
+        return self._real_func.create_compiletime()
+
+    def get_or_create_block(self, name):
+        return self.scope.get_or_create(name, self._create_block)
+
+    def _create_block(self, name):
+        return CompileTimeBlock(name, self)
+
+    def create_block(self, namehint):
+        block = self.uniq(namehint, self._create_block)
+        block.defined = True
+        return block
+
+    def create_var(self, namehint, vartype):
+        from .instructions import CompileOnlyVariable
+        var = CompileOnlyVariable(vartype)
+        return self.preamble.add(var, True, namehint)
+
+    def run_and_return(self):
+        for block in self.scope.values():
+            if isinstance(block, CompileTimeBlock) and block != self._exitblock:
+                block.run()
+                break
+        return self._real_func
+
+    def serialize(self):
+        if not list(self.scope.keys()):
+            return ''
+        return '\n    compiletime {\n%s\n    }\n' % '\n\n'.join(
+            block.serialize(8) for block in self.scope.values() \
+                if isinstance(block, CompileTimeBlock))
+
+class CompileTimeBlock(BasicBlock):
+
+    def run(self):
+        for insn in self.insns:
+            insn.run()
+
+    @property
+    def global_name(self):
+        assert False
+
+    def __str__(self):
+        return 'CompileTimeBlock(%s::%s)' % (self._func._real_func._name,
+                                             self._name)
 
 class ObjectFormat:
 

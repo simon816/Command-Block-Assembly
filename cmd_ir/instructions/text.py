@@ -6,7 +6,7 @@ from ..core_types import (NativeType,
                           CmdFunction,
                           EntitySelection,
                           )
-from ..variables import Variable
+from ..variables import Variable, CompilerVariable
 from ..core import FunctionLike
 import commands as c
 
@@ -17,6 +17,9 @@ class TextObject(NativeType):
         self.children = []
 
     def append(self, value):
+        if isinstance(value, CompilerVariable):
+            value = value.get_value()
+        assert value is not None
         self.children.append(value)
         return len(self.children) - 1
 
@@ -61,7 +64,7 @@ class TextObject(NativeType):
                 return c.TextScoreComponent(direct_ref)
             with opener.context(child.open_for_read(out)) as ref:
                 return c.TextScoreComponent(ref)
-        assert False
+        assert False, child
 
 class CreateText(ConstructorInsn):
     """Creates a text object."""
@@ -85,7 +88,7 @@ class TextAppend(VoidApplicationInsn):
         if isinstance(self.value, Variable):
             self.value.usage_read()
 
-    def activate(self, seq):
+    def run(self):
         self._index = self.text.append(self.value)
 
     def copy(self):

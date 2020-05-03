@@ -94,7 +94,63 @@ class NativeType:
             return Temporary(type, as_var(container))
         return None
 
-class IRVarType(NativeType):
+class IRTypeInstance:
 
-    def as_variable(self, instance):
-        return instance
+    def __init__(self, name):
+        self._name = name
+        self.var = None
+
+    def ctor(self, compiler, insn_str):
+        from cmd_ir.reader import Reader
+        r = Reader()
+        insn = r.read_instruction(compiler.func, insn_str)
+        self.var = compiler.define(self._name, insn)
+
+class IRType(NativeType):
+
+    @property
+    def metatype(self):
+        return IRTypeMeta(self)
+
+    def allocate(self, compiler, namehint):
+        return IRTypeInstance(namehint)
+
+    def effective_var_size(self):
+        # We allow using IRType in a struct as long as the usage is only
+        # within macros
+        return 0
+
+    def run_constructor(self, compiler, container, args):
+        assert len(args) == 1
+        s = args[0]
+        if s.type == compiler.type('string'):
+            from .containers import LiteralString
+            assert isinstance(s, LiteralString)
+            v = s.value
+            container.value.ctor(compiler, v)
+        else:
+            assert s.type is self
+            assert s.value.var is not None
+            container.value.var = s.value.var
+
+    def dispatch_operator(self, compiler, op, left, right=None):
+        if op == '=':
+            assert right.type is self, right
+            assert right.value.var is not None
+            left.value.var = right.value.var
+            return left
+        return super().dispatch_operator(compiler, op, left, right)
+
+class IRTypeMeta(NativeType):
+
+    def __init__(self, the_type):
+        self.the_type = the_type
+
+    def call_constructor(self, compiler, container, args):
+        from .util import safe_typename
+        from .containers import Temporary
+        the_type = container.type.the_type
+        obj = the_type.allocate(compiler, safe_typename(the_type) + '_inst')
+        tmp = Temporary(the_type, obj)
+        the_type.run_constructor(compiler, tmp, args)
+        return tmp

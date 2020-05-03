@@ -205,13 +205,32 @@ class FunctionDispatcher:
     def has_resolutions(self):
         return len(self.__resolutions) > 0
 
-    def add_resolution(self, compiler, ret_type, params, inline, is_async):
+    def check_name(self, params):
         name = self.name_for_types(p.type for p in params)
         if name in self.__resolutions:
             raise TypeError(('A resolution already exists for the function with'
                             + ' parameters %s') % (params,))
+        return name
+
+    def add_resolution(self, compiler, ret_type, params, inline, is_async):
+        name = self.check_name(params)
         type = InstanceFunctionType(self._type, ret_type, params, inline,
                                     is_async, self._static)
+        return self.__add(compiler, name, type)
+
+    def add_macro_resolution(self, compiler, ret_type, params, body,
+                             compiletime):
+        name = self.check_name(params)
+        if not self._static:
+            new_params = [Parameter(self._type, 'this', True)]
+            new_params.extend(params)
+        else:
+            new_params = params
+        from .macro_type import MacroType
+        type = MacroType(ret_type, new_params, body, compiletime)
+        return self.__add(compiler, name, type)
+
+    def __add(self, compiler, name, type):
         func = type.allocate(compiler, name)
         self.__resolutions[name] = type, func
         return type, func

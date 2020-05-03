@@ -1,7 +1,7 @@
 """Variable Arithmetic Instructions"""
 
 from ._core import Insn, READ, WRITE, get_subclasses
-from ..variables import Variable, VarType
+from ..variables import Variable, VarType, CompilerVariable
 
 import commands as c
 
@@ -17,7 +17,8 @@ class SetScore(Insn):
         if isinstance(self.value, Variable):
             # Allow nbt=nbt
             assert self.var.type.isnumeric or \
-                   self.var.type == self.value.type == VarType.nbt
+                   self.var.type == self.value.type == VarType.nbt, "%s, %s" % (
+                       self.var.type, self.value.type)
         else:
             assert self.var.type.isnumeric
 
@@ -31,6 +32,15 @@ class SetScore(Insn):
             self.value.clone_to(self.var, out)
         else:
             self.var.set_const_val(self.value, out)
+
+    def run(self):
+        assert isinstance(self.var, CompilerVariable)
+        if isinstance(self.value, Variable):
+            assert isinstance(self.value, CompilerVariable), self
+            value = self.value.get_value()
+        else:
+            value = self.value
+        self.var.set_value(value)
 
     def serialize(self, holder):
         return '%s = %s' % tuple(self.serialize_args(holder))
@@ -81,6 +91,15 @@ class SimpleOperationInsn(Insn):
             out.write(self.with_neg_const(ref, -val))
         else:
             out.write(self.with_const(ref, val))
+
+    def run(self):
+        assert isinstance(self.dest, CompilerVariable)
+        if isinstance(self.src, Variable):
+            assert isinstance(self.src, CompilerVariable)
+            src = self.src.get_value()
+        else:
+            src = self.src
+        self.dest.set_value(self.constfunc(self.dest.get_value(), src))
 
     def serialize(self, holder):
         dest, src = self.serialize_args(holder)

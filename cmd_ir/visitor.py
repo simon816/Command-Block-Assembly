@@ -27,9 +27,14 @@ class FuncVisitor:
 
     def visit(self, func):
         self.visit_preamble(func.preamble)
+        for fn in func.get_compiletimes():
+            self.visit_compiletime(fn)
         return func.transform_scope(self.visit_var)
 
     def visit_preamble(self, preamble):
+        pass
+
+    def visit_compiletime(self, compiletime):
         pass
 
     def visit_var(self, name, var):

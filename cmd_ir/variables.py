@@ -510,3 +510,27 @@ class EntityLocalNbtVariable(EntityLocalVariable, NbtStorableVariable):
     def root_path(self):
         return self._path
 
+class CompilerVariable(Variable):
+
+    def __init__(self, type):
+        super().__init__(type)
+        self.value = None
+
+    def _store_from_cmd(self, cmd, out):
+        assert False
+
+    def read(self):
+        assert False
+
+    def set_const_val(self, val):
+        assert False
+
+    def get_value(self):
+        return self.value
+
+    def set_value(self, value):
+        if self.type == VarType.i32:
+            value = int(value)
+        elif self.type == VarType.q10:
+            value = float(value)
+        self.value = value

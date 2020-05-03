@@ -6,7 +6,7 @@ from ..core import BasicBlock, VisibleFunction, FunctionLike, CmdWriter
 from ..core_types import (Opt,
                           )
 from ..variables import (Variable, VarType, LocalStackVariable,
-                         VirtualStackPointer)
+                         VirtualStackPointer, CompilerVariable)
 from ..nbt import (NBTBase, NBTList, NBTType, NBTCompound, FutureNBTString,
                    NBTByte)
 import commands as c
@@ -32,6 +32,9 @@ class Branch(SingleCommandInsn):
 
     def get_cmd(self):
         return c.Function(self.label.global_name)
+
+    def run(self):
+        self.label.run()
 
     def serialize(self, holder):
         if self.label == self.label._func._exitblock:
@@ -325,6 +328,19 @@ class RangeBr(Insn):
         with self.var.open_for_read(out) as var:
             _branch_apply(out, self.if_true, self.if_false, lambda cond:
                           cond.score_range(var, range))
+
+    def run(self):
+        assert isinstance(self.var, CompilerVariable)
+        val = self.var.get_value()
+        matches = True
+        if self.min is not None:
+            matches &= val >= self.min
+        if self.max is not None:
+            matches &= val <= self.max
+        if matches and self.if_true:
+            self.if_true.run()
+        elif not matches and self.if_false:
+            self.if_false.run()
 
 class CmpBr(Insn):
     """Compare two variables and jump depending on the comparison."""

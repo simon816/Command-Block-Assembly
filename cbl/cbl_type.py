@@ -143,9 +143,7 @@ class CBLType(NativeType):
         static = self.__meta_type is None
         return FunctionDispatcher(self, name, disp_name, static)
 
-    def add_function_member(self, compiler, name, ret_type, params, inline,
-                            is_async):
-        self._check_incomplete()
+    def _ensure_dispatcher(self, name):
         dispatcher = self.instance_member(name)
         if dispatcher:
             if not isinstance(dispatcher, FunctionDispatcher):
@@ -154,7 +152,13 @@ class CBLType(NativeType):
                                    + 'not a function in %s' % (name, self.typename))
         else:
             dispatcher = self.__dispatcher(name, name)
-            self.__func_members[name] = dispatcher
+        self.__func_members[name] = dispatcher
+        return dispatcher
+
+    def add_function_member(self, compiler, name, ret_type, params, inline,
+                            is_async):
+        self._check_incomplete()
+        dispatcher = self._ensure_dispatcher(name)
         return dispatcher.add_resolution(compiler, ret_type, params, inline,
                                          is_async)
 
@@ -171,6 +175,13 @@ class CBLType(NativeType):
             return prop.add_setter(compiler, ret_type, inline, set_param)
         else:
             return prop.add_getter(compiler, ret_type, inline)
+
+    def add_macro_function(self, compiler, name, ret_type, params, body,
+                           compiletime):
+        self._check_incomplete()
+        dispatcher = self._ensure_dispatcher(name)
+        return dispatcher.add_macro_resolution(compiler, ret_type, params, body,
+                                               compiletime)
 
     def lookup_function_member(self, name, params):
         if name in self.__func_properties:
@@ -231,8 +242,7 @@ class CBLType(NativeType):
     def _copy_impl(self, compiler, this, other):
         assert False
 
-    def add_operator_member(self, compiler, op, ret_type, params, inline):
-        self._check_incomplete()
+    def __op_dispatcher(self, params, op):
         unary = len(params) == 0
         if unary:
             assert op in UN_OPS
@@ -242,8 +252,20 @@ class CBLType(NativeType):
         name = _opname(op, unary)
         if name not in self.__operators:
             self.__operators[name] = self.__dispatcher(name, 'operator' + op)
-        return self.__operators[name].add_resolution(compiler, ret_type, params,
-                                                     inline, False)
+        return self.__operators[name]
+
+    def add_operator_member(self, compiler, op, ret_type, params, inline):
+        self._check_incomplete()
+        dispatcher = self.__op_dispatcher(params, op)
+        return dispatcher.add_resolution(compiler, ret_type, params, inline,
+                                         False)
+
+    def add_macro_operator(self, compiler, op, ret_type, params, body,
+                           compiletime):
+        self._check_incomplete()
+        dispatcher = self.__op_dispatcher(params, op)
+        return dispatcher.add_macro_resolution(compiler, ret_type, params,
+                                               body, compiletime)
 
     def lookup_operator(self, op, params):
         name = _opname(op, len(params) == 0)
@@ -255,6 +277,13 @@ class CBLType(NativeType):
         self._check_incomplete()
         return self.__ctor_dispatcher.add_resolution(compiler,
                      compiler.type('void'), params, inline, False)
+
+    def add_macro_constructor(self, compiler, params, init_list, body,
+                              compiletime):
+        self._check_incomplete()
+        return self.__ctor_dispatcher.add_macro_resolution(compiler,
+                     compiler.type('void'), params, (body, init_list),
+                                                           compiletime)
 
     def lookup_constructor(self, params):
         return self.__ctor_dispatcher.lookup_resolution(params)
