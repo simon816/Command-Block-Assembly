@@ -1,4 +1,6 @@
 from collections import namedtuple
+import contextlib
+
 from .function_type import IntrinsicFunction
 from .containers import InstanceSymbol, Temporary
 import cmd_ir.instructions as i
@@ -19,6 +21,7 @@ class NativeExec(IntrinsicFunction):
                      i=i,
                      compiler=compiler,
                      _instance=instance,
+                     compiletime=_compiletime_context(compiler),
                      void=Temporary(compiler.type('void'), None),
                      __name__=__name__)
         if have_this:
@@ -27,6 +30,23 @@ class NativeExec(IntrinsicFunction):
         local_res = {}
         exec(self.code, scope, local_res)
         return local_res['__result__']
+
+@contextlib.contextmanager
+def _compiletime_context(compiler):
+    # Copied from MacroType
+    old_func = compiler.func
+    old_block = compiler.block
+    fn = compiler.func
+    from cmd_ir.core import CompileTimeFunction
+    in_compiletime = isinstance(fn, CompileTimeFunction)
+    if not in_compiletime:
+        compiler.func = fn = fn.create_compiletime()
+        compiler.block = fn.create_block('entry')
+    yield
+    if not in_compiletime:
+        fn.run_and_return()
+        compiler.func = old_func
+        compiler.block = old_block
 
 class IntrinsicSupport:
 
@@ -53,7 +73,7 @@ class IntrinsicSupport:
         else:
             fn = t.lookup_function_member(func_decl.name, func_decl.params)
             # Possibly refactor this
-            # Lookup the static members to support intrinsic namespace funcs
+            # Lookup the static members to support intrinsic singleton funcs
             if fn is None:
                 fn = t.metatype.lookup_function_member(func_decl.name,
                                                        func_decl.params)

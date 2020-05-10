@@ -26,6 +26,9 @@ class Dispatcher:
     def add_to_datapack(self, dpd, args):
         pass
 
+    def prepare_session(self, session, args):
+        pass
+
     def text_file(self, encoding=None):
         return io.TextIOWrapper(self.infile, encoding=encoding)
 
@@ -169,6 +172,22 @@ class DPDDispatcher(Dispatcher):
         if gen_cleanup is not None:
             dpd.gen_cleanup = gen_cleanup
 
+class SODispatcher(Dispatcher):
+
+    def make_top(self, args):
+        from packer.shared_object import read_shared_object
+        self.so = read_shared_object(self.infile)
+        return self.so.top
+
+    def prepare_session(self, session, args):
+        self.so.prepare_session(session)
+
+    def write_object_file(self, top, outfile=None):
+        pass
+
+    def write_ir_file(self, top, outfile=None):
+        pass
+
 def link(tops, args):
     from cmd_ir.core import TopLevel
     final_top = TopLevel.linker(*tops)
@@ -195,6 +214,8 @@ def write_datapack(top, dispatchers, pragma_results, args):
     for dispatcher in dispatchers:
         dispatcher.add_to_datapack(dpd, args)
     dpd.validate()
+    from cmd_ir.allocator import default_allocation
+    default_allocation(top, args.O, dpd.namespace)
     if args.dummy_datapack:
         writer = DummyWriter()
     else:
@@ -215,7 +236,12 @@ def write_datapack(top, dispatchers, pragma_results, args):
     else:
         session = Session(dpd.place_loc, writer, dpd.namespace, dpd.spawn_loc,
                           dpd.gen_cleanup)
+    for dispatcher in dispatchers:
+        dispatcher.prepare_session(session, args)
     cleanup_func = session.load_from_top(top)
+    if args.shared:
+        from packer.shared_object import write_shared_object
+        write_shared_object(writer, top, session)
     writer.close()
     if args.stats:
         print('Generated', writer.command_count, 'commands in',
@@ -230,6 +256,7 @@ action_dispatch = {
     '.c': CDispatcher,
     '.asm': ASMDispatcher,
     '.dpd': DPDDispatcher,
+    '.zip': SODispatcher,
 }
 
 def main(args):
@@ -262,8 +289,6 @@ def main(args):
         return
     top = link(tops, args)
     pragma_results = apply_pragmas(top, args)
-    from cmd_ir.allocator import default_allocation
-    default_allocation(top, args.O)
     write_datapack(top, dispatchers, pragma_results, args)
 
 def build_argparser():
@@ -302,6 +327,9 @@ def build_argparser():
                         action='store_true',
                         help="Print Command IR textual representation to stdout after linking objects, then exit")
     packer = parser.add_argument_group('Packer arguments', "Arguments that control how the packer behaves.")
+    packer.add_argument('-shared',
+                        action='store_true',
+                        help="Include a symbol table and other metadata to enable dynamic linking of datapacks")
     packer.add_argument('--dummy-datapack',
                         action='store_true',
                         help="Don't write an output datapack. This can be used for debugging with --dump-commands")

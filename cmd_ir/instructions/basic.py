@@ -58,15 +58,15 @@ class RunCommand(SingleCommandInsn):
     insn_name = 'run_cmd'
     is_branch = True
 
-    def get_cmd(self):
-        return self.cmd.as_cmd()
+    def get_cmd(self, func):
+        return self.cmd.as_cmd(func)
 
 class GetVariableFunc(CmdFunction):
 
     def __init__(self, var):
         self.var = var
 
-    def as_cmd(self):
+    def as_cmd(self, func):
         return self.var.read()
 
 class Getter(ConstructorInsn):
@@ -101,8 +101,8 @@ class BlockAsCommand(CmdFunction):
     def do_declare(self):
         self._get_insn().declare()
 
-    def as_cmd(self):
-        return self._get_insn().as_single_cmd()
+    def as_cmd(self, func):
+        return self._get_insn().as_single_cmd(func)
 
 class AsSingleCmdInsn(ConstructorInsn):
     """Forces a basic block to become a single command, the command is returned
@@ -131,7 +131,7 @@ class SetBlockInsn(SingleCommandInsn):
     argdocs = ["The block position", "The block type"]
     insn_name = 'setblock'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Setblock(self.pos.as_blockpos(), self.block)
 
 class ReplaceEntityItem(SingleCommandInsn):
@@ -144,7 +144,7 @@ class ReplaceEntityItem(SingleCommandInsn):
                "Replacement item", "Replace amount"]
     insn_name = 'replace_entity_item'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.ReplaceItem(self.target.as_resolve().ref, str(self.slot),
                            self.item, self.amount)
 
@@ -158,7 +158,7 @@ class ReplaceBlockItem(SingleCommandInsn):
                "Replace amount"]
     insn_name = 'replace_block_item'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.ReplaceItem(self.pos.as_blockpos().ref, str(self.slot),
                            self.item, self.amount)
 
@@ -170,7 +170,7 @@ class GiveInsn(SingleCommandInsn):
     argdocs = ["Entities to give the item to", "The item to give", "Item count"]
     insn_name = 'give'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.GiveItem(self.targets.as_resolve(), self.item, self.count)
 
 class ClearInsn(SingleCommandInsn):
@@ -182,7 +182,7 @@ class ClearInsn(SingleCommandInsn):
                "Max count of items. -1 to clear all matching items."]
     insn_name = 'clear'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.ClearItem(self.targets.as_resolve(), self.item, self.max_count)
 
 class TeleportInsn(SingleCommandInsn):
@@ -193,7 +193,7 @@ class TeleportInsn(SingleCommandInsn):
     argdocs = ["Entities to move", "Position to move to"]
     insn_name = 'teleport'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Teleport(self.target.as_resolve(), self.pos.as_worldpos())
 
 class MoveToEntityInsn(SingleCommandInsn):
@@ -205,7 +205,7 @@ class MoveToEntityInsn(SingleCommandInsn):
     argdocs = ["Entities to move", "Destination entity"]
     insn_name = 'move_to_entity'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Teleport(self.sources.as_resolve(), self.target.as_resolve())
 
 class TeleportWithRotInsn(SingleCommandInsn):
@@ -217,7 +217,7 @@ class TeleportWithRotInsn(SingleCommandInsn):
                "x rotation"]
     insn_name = 'tp_with_rot'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         y = self._to_resolve(self.yrot)
         x = self._to_resolve(self.xrot)
         return c.Teleport(self.target.as_resolve(), self.pos.as_worldpos(), y,
@@ -238,7 +238,7 @@ class CloneInsn(SingleCommandInsn):
                "Destination position"]
     insn_name = 'clone'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Clone(self.src0.as_blockpos(), self.src1.as_blockpos(),
                         self.dest.as_blockpos())
 
@@ -256,7 +256,7 @@ class GiveEntityEffectInsn(SingleCommandInsn):
         if self.hide_particles is not None:
             assert self.hide_particles in ['true', 'false']
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.EffectGive(self.target.as_resolve(), str(self.effect),
                       self.seconds, self.amp, self.hide_particles == 'true')
 
@@ -269,7 +269,7 @@ class SpawnEntityInsn(SingleCommandInsn):
                + " sender", "Optional NBT data for the entity"]
     insn_name = 'spawn_entity'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Summon(str(self.entity), self.pos.as_worldpos() \
                       if self.pos else None, self.data)
 
@@ -288,7 +288,7 @@ class SpawnParticleInsn(SingleCommandInsn):
     def validate(self):
         assert self.mode in ['normal', 'force']
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Particle(str(self.name), self.pos.as_worldpos(),
                         self.delta.as_worldpos(), self.speed,
                         self.count, self.mode, self.targets)
@@ -324,7 +324,7 @@ class SetTitleTimes(SingleCommandInsn):
                "stay time", "Title fade out time"]
     insn_name = 'set_title_times'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Title(self.player.as_resolve(), 'times', str(self.fade_in),
                      str(self.stay), str(self.fade_out))
 
@@ -337,7 +337,7 @@ class JoinTeamInsn(SingleCommandInsn):
                "the current command sender is added."]
     insn_name = 'join_team'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.JoinTeam(self.team.ref, self.members.as_resolve() \
                         if self.members else None)
 
@@ -349,7 +349,7 @@ class TeamColorInsn(SingleCommandInsn):
     argdocs = ["Team to modify", "Color of the team"]
     insn_name = 'team_color'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.TeamModify(self.team.ref, 'color', self.color.name)
 
 class TeamCollisionInsn(SingleCommandInsn):
@@ -360,7 +360,7 @@ class TeamCollisionInsn(SingleCommandInsn):
     argdocs = ["Team to modify", "Collision behaviour"]
     insn_name = 'team_collision'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.TeamModify(self.team.ref, 'collisionRule', self.behaviour)
 
 class BarMaxInsn(SingleCommandInsn):
@@ -371,7 +371,7 @@ class BarMaxInsn(SingleCommandInsn):
     argdocs = ["Bar to modify", "Max value"]
     insn_name = 'bar_set_max'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.BossbarSet(self.bar.ref, 'max', c.SimpleResolve(str(self.max)))
 
 class BarSetPlayers(SingleCommandInsn):
@@ -383,7 +383,7 @@ class BarSetPlayers(SingleCommandInsn):
                + "the bar"]
     insn_name = 'bar_set_players'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.BossbarSet(self.bar.ref, 'players', None if not self.players \
                              else self.players.as_resolve())
 
@@ -395,7 +395,7 @@ class BarSetValue(SingleCommandInsn):
     argdocs = ["Bossbar to modify", "Bar value"]
     insn_name = 'bar_set_value'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.BossbarSet(self.bar.ref, 'value',
                              c.SimpleResolve(str(self.val)))
 
@@ -407,5 +407,5 @@ class KillInsn(SingleCommandInsn):
     argdocs = ["Entities to despawn"]
     insn_name = 'kill'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Kill(self.target.as_resolve())

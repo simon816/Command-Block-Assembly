@@ -1,12 +1,21 @@
 start: top_level
 
-top_level: (include | scoped_declaration | generic_func_definition | generic_ctor_definition | type_definition | namespace_definition
-            | intrinsic)*
+top_level: (include
+    | scoped_declaration | global_var_arr_decl
+    | generic_func_definition | generic_ctor_definition
+    | type_definition | singleton_definition
+    | namespace_change
+    | intrinsic)*
 
 include: "include" ESCAPED_STRING
 
+namespace_change: "namespace" IDENT ";" | "no" "namespace" ";"
+
 ?scoped_declaration: (var_arr_declaration | func_declaration) ";"
 ?var_arr_declaration: var_declaration | array_declaration
+global_var_arr_decl: (EXTERN | STATIC) var_arr_declaration ";"
+EXTERN: "extern"
+STATIC: "static"
 
 var_declaration: type_name_hack IDENT
 
@@ -28,17 +37,17 @@ BYREF: "&"
 exec_modifier: MACRO | CONSTEXPR
 MACRO: "macro"
 CONSTEXPR: "constexpr"
-maybe_exec_modifier: exec_modifier?
 
 // Functions at the top level. Can be generic and have an event handler
 ?generic_func_definition: ("generic" "<" IDENT ">")? top_level_func_def
-?event_handler_function: event_handler? normal_func_def
-?top_level_func_def: event_handler_function | modified_func_def
+?annotated_function: func_annotations? normal_func_def
+?func_annotations: event_handler namespace_name | event_handler | namespace_name
+?top_level_func_def: annotated_function | modified_func_def
 
 // Normal runtime function
 ?normal_func_def: func_declaration block_statement
 // Function with exec modifier
-?modified_func_def: maybe_exec_modifier func_declaration_ block_statement
+?modified_func_def: exec_modifier func_declaration_ block_statement
 
 ?function_definition: normal_func_def | modified_func_def
 ctor_definition: ctor_declaration [":" ctor_init_list] block_statement
@@ -52,6 +61,8 @@ ctor_init: (IDENT | type_name) "(" [expression ("," expression)*] ")"
 
 event_handler: "[" "Event" conditional_expression [":" "{" (event_condition ("," event_condition)*)? "}"] "]"
 event_condition: IDENT ("." IDENT)* ":" conditional_expression
+
+namespace_name: "[" "Namespace" IDENT "]"
 
 var_init_expr: "=" assignment_expression
 var_ctor_expr: "(" [assignment_expression ("," assignment_expression)*] ")"
@@ -77,7 +88,7 @@ seq_type_names: ("," type_name)*
 // Hack to get around conflict with less-than operator
 ?ident_less_than: IDENT "<"
 
-namespace_definition: "namespace" IDENT "{" (scoped_declaration | function_definition)* "}"
+singleton_definition: "singleton" IDENT "{" (scoped_declaration | function_definition)* "}"
 
 intrinsic: "intrinsic_extension" "{" (native_definition | type_configure)* "}"
 native_ctor_decl: type_name_hack "::" ctor_declaration

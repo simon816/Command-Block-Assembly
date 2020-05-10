@@ -12,8 +12,12 @@ async void main() {
     counter = 1;
     do {
         Text t;
-        t << "fib(" << counter++ << ") = " << x;
+        t << "fib(";
+        t.append_ref(counter);
+        t << ") = ";
+        t.append_ref(x);
         t.send_to_all();
+        counter++;
         await Game.tick();
         old_x = x;
         x = y;

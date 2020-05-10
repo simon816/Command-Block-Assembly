@@ -237,7 +237,7 @@ inline vec3<T> vec3<T>::operator*(T scalar) {
 }
 
 
-namespace Util {
+singleton Util {
     Entity pos_util;
 }
 

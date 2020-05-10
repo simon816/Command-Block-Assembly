@@ -42,7 +42,7 @@ class ExecStoreEntitySpec(ExecStoreSpec):
 
     def apply(self, out, chain, storechain):
         assert self.target.is_only_one
-        storechain.entity(self.target.as_resolve(), c.NbtPath(self.path), \
+        storechain.nbt(self.target.as_resolve().ref, c.NbtPath(self.path), \
                            self.nbttype.name, self.scale)
 
     def clone(self):
@@ -144,9 +144,8 @@ class ExecComponentCondNBTVar:
         self.var = var
 
     def apply(self, exec, chain, out):
-        path, entity = self.var._direct_nbt()
-        ref = c.EntityReference(entity)
-        chain.cond(self.condtype).data(ref, path)
+        path, storage = self.var._direct_nbt()
+        chain.cond(self.condtype).data(storage, path)
 
     def clone(self):
         return ExecComponentCondNBTVar(self.condtype, self.var.clone())

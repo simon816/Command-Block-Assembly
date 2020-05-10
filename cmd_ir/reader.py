@@ -38,7 +38,7 @@ class BuildProgram(Interpreter):
         if isinstance(returns, Token):
             returns = self.token_to_val(returns)
         from .variables import VarType
-        params = [(VarType._init_from_parser(params[i*2]), params[(i*2)+1]) \
+        params = [(VarType._init_from_parser(params[i*2]), params[(i*2)+1].value) \
             for i in range(len(params or []) // 2)]
         returns = [VarType._init_from_parser(r) for r in returns or []]
         existing = self.top.lookup_func(name)
@@ -59,6 +59,22 @@ class BuildProgram(Interpreter):
                 self.top.scope[name] = extern
         else:
             self.top.store(name, extern)
+
+    def extern_var(self, node):
+        name, vtype, newline = self.visit_children(node)
+        name = name.value[1:]
+        from .variables import VarType, ExternVariable, GlobalVariable
+        vtype = VarType._init_from_parser(vtype.value)
+        var = ExternVariable(vtype)
+        existing = self.top.lookup(name)
+        if existing:
+            assert existing.type == vtype
+            if isinstance(existing, GlobalVariable):
+                assert existing.is_extern
+            else:
+                assert isinstance(existing, ExternVariable)
+        else:
+            self.top.store(name, var)
 
     def function(self, node):
         name = node.children[0].value

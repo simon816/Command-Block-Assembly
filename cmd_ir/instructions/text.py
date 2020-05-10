@@ -56,8 +56,8 @@ class TextObject(NativeType):
             # optimize for direct nbt or ref
             direct_nbt = child._direct_nbt()
             if direct_nbt:
-                path, entity = direct_nbt
-                return c.TextNBTComponent(entity, path)
+                path, storage = direct_nbt
+                return c.TextNBTComponent(storage, path)
             direct_ref = child._direct_ref()
             # TODO possibly scale if not int?
             if direct_ref:
@@ -167,7 +167,7 @@ class TextClickFunc(VoidApplicationInsn):
         if isinstance(self.func, FunctionLike):
             cmd = c.Function(self.func.global_name)
         else:
-            cmd = self.func.as_cmd()
+            cmd = self.func.as_cmd(seq.holder)
         action = self.action + '_command'
         self.text.set_style('clickEvent', c.TextClickAction(action, cmd))
 

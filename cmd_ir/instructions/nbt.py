@@ -88,7 +88,7 @@ class NBTDataMerge(SingleCommandInsn):
                + " to merge into the target"]
     insn_name = 'nbt_data_merge'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         if isinstance(self.target, BlockRef):
             ref = self.target.as_cmdref()
         else:
@@ -102,7 +102,7 @@ class NBTGetterFunc(CmdFunction):
         self.path = path
         self.scale = scale
 
-    def as_cmd(self):
+    def as_cmd(self, func):
         return c.DataGet(self.target, c.NbtPath(self.path), self.scale)
 
 class NBTDataGetter(ConstructorInsn):
@@ -166,13 +166,13 @@ class _ModifyNBTVariable(Insn):
     def apply(self, out, func):
         direct = self.var._direct_nbt()
         assert direct is not None, self.var
-        dest_path, dest_entity = direct
+        dest_path, dest_storage = direct
         if isinstance(self.nbt, Variable):
-            src_path, src_entity = self.nbt.as_nbt_variable(out)._direct_nbt()
-            out.write(c.DataModifyFrom(dest_entity.ref, dest_path, self.action,
-                                       src_entity.ref, src_path))
+            src_path, src_storage = self.nbt.as_nbt_variable(out)._direct_nbt()
+            out.write(c.DataModifyFrom(dest_storage, dest_path, self.action,
+                                       src_storage, src_path))
         else:
-            out.write(c.DataModifyValue(dest_entity.ref, dest_path,
+            out.write(c.DataModifyValue(dest_storage, dest_path,
                                         self.action, self.nbt))
 
 
@@ -206,11 +206,11 @@ class NBTDataRemove(SingleCommandInsn):
     def declare(self):
         self.nbtvar.usage_write()
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         direct = self.nbtvar._direct_nbt()
         assert direct is not None
-        path, entity = direct
-        return c.DataRemove(entity.ref, path)
+        path, storage = direct
+        return c.DataRemove(storage, path)
 
 # TODO problem if this is not in the preamble - optimizers may make
 # copies and change the root, but the constructed variable is not updated
@@ -232,8 +232,8 @@ class NBTSubPath(ConstructorInsn):
                                   self.root.realign_frame)
 
     def _getdirect(self):
-        path, entity = self.root._direct_nbt()
-        return path.subpath(str(self.path)), entity
+        path, storage = self.root._direct_nbt()
+        return path.subpath(str(self.path)), storage
 
     def declare(self):
         self.root.usage_read()
@@ -267,7 +267,7 @@ class NBTModifyValueInsn(SingleCommandInsn):
         assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
         assert self.action != 'insert', "TODO"
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         if isinstance(self.target, BlockRef):
             target = self.target.as_cmdref()
         elif isinstance(self.target, EntitySelection):
@@ -294,7 +294,7 @@ class NBTModifyFromInsn(SingleCommandInsn):
         assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
         assert self.action != 'insert', "TODO"
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         if isinstance(self.target, BlockRef):
             target = self.target.as_cmdref()
         elif isinstance(self.target, EntitySelection):

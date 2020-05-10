@@ -1,7 +1,12 @@
-from commands import CommandBlock, Cmd
+from collections import namedtuple
+
+from commands import CommandBlock, Cmd, NSName, EntityReference, GlobalEntity, \
+     ExecuteChain, DataModifyValue, SimpleResolve
 from .placer import CommandPlacer
 from cmd_ir.core import FuncWriter
 from .datapack import Advancement
+
+Objective = namedtuple('Objective', 'name criteria extern used')
 
 class Scope:
 
@@ -16,9 +21,8 @@ class Scope:
         self.util_pos = '%d %d %d' % block_pos
         self.zero_tick_pos = '%d %d %d' % (block_pos[0], block_pos[1],
                                            block_pos[2] + 1)
-        self._global_tag = self.namespace + '_global'
         self._pos_tag = self.namespace + '_pos_util'
-        self._global_used = False
+        self._global_namespaces = set()
         self._pos_entity_used = False
         self._util_block_used = False
         self._zero_tick_used = False
@@ -26,18 +30,24 @@ class Scope:
     def objective(self, name):
         if name not in self.objectives:
             raise NameError('Objective name %r not found' % name)
-        real_name, criteria, is_used = self.objectives[name]
-        if not is_used:
-            self.objectives[name] = (real_name, criteria, True)
-        return real_name
+        obj = self.objectives[name]
+        if not obj.used:
+            self.objectives[name] = obj._replace(used=True)
+        return obj.name
 
-    def trim(self, obj_name):
+    def objname(self, name):
         # Objective name length must be <= 16
-        return obj_name[-16:]
+        return name[-16:]
 
-    def global_entity(self):
-        self._global_used = True
-        return '@e[tag=%s,limit=1]' % self._global_tag
+    def global_entity(self, namespace):
+        if namespace is None:
+            namespace = self.namespace
+        tag = namespace + '_global'
+        self._global_namespaces.add(namespace)
+        return '@e[tag=%s,limit=1]' % tag
+
+    def global_nbt(self, namespace):
+        return EntityReference(GlobalEntity(namespace))
 
     def pos_util_entity(self):
         self._pos_entity_used = True
@@ -45,6 +55,9 @@ class Scope:
 
     def custom_nbt_path(self, path):
         return 'ArmorItems[0].tag.' + path
+
+    def storage(self, namespace):
+        return namespace or self.namespace
 
     def get_util_block(self):
         self._util_block_used = True
@@ -57,8 +70,8 @@ class Scope:
 
     def function_name(self, name):
         if name not in self.func_names:
-            raise NameError('Function name %r not found' % name)
-        return '%s:%s' % (self.namespace, name)
+            raise NameError('Function name %r not found' % name.uqn)
+        return name.maybe_qualify(self.namespace).fqn
 
     def team_name(self, name):
         if name not in self.teams:
@@ -73,18 +86,24 @@ class Scope:
         return full_name
 
     def advancement_name(self, name):
-        return '%s:%s' % (self.namespace, name)
+        return name.maybe_qualify(self.namespace).fqn
 
+    def add_extern_vars(self, names):
+        for name in names:
+            oname = self.objname(name)
+            self.objectives[name] = Objective(oname, None, True, False)
 
     def add_objective(self, name, criteria=None):
         if name in self.objectives:
-            assert self.objectives[name][1] == criteria
+            assert self.objectives[name].criteria == criteria
             return
-        self.objectives[name] = (self.trim(name), criteria, False)
+        oname = self.objname(name)
+        self.objectives[name] = Objective(oname, criteria, False, False)
 
     def add_function_names(self, names):
-        for name in names:
-            self.validate_name(name)
+        for nsname in names:
+            assert isinstance(nsname, NSName), nsname
+            self.validate_name(nsname.name)
         self.func_names.update(names)
 
     def add_bossbar(self, name, display):
@@ -124,6 +143,7 @@ class Session:
         self.entity_pos = ' '.join(map(str, entity_pos))
         self.create_cleanup = create_cleanup
         self._global_nbt = []
+        self._gen_funcs = set()
 
     def add_command_blocks(self):
         repeatblock = CommandBlock(Cmd(''), conditional=False, mode='REPEAT')
@@ -139,6 +159,9 @@ class Session:
     def load_function_table(self, known_functions):
         self.scope.add_function_names(known_functions)
 
+    def load_extern_vars(self, names):
+        self.scope.add_extern_vars(names)
+
     def define_objective(self, name, criteria):
         self.scope.add_objective(name, criteria)
 
@@ -148,8 +171,8 @@ class Session:
     def define_team(self, name, display):
         self.scope.add_team(name, display)
 
-    def add_global_nbt(self, subpath):
-        self._global_nbt.append(subpath)
+    def add_global_nbt(self, storage, path, init_val):
+        self._global_nbt.append((storage, path, init_val))
 
     def add_function(self, name, commands):
         self.writer.write_function(name, [cmd.resolve(self.scope)
@@ -174,8 +197,9 @@ class Session:
                 values.append(self.scope.function_name(handler))
             else: # This is an advancement-based event
                 # Note: advancement name = handler func name
+                name = self.scope.advancement_name(handler)
                 adv = Advancement(handler)
-                adv.event_criteria(handler, event_name, conditions)
+                adv.event_criteria(name, event_name, conditions)
                 adv.reward_function(self.scope.function_name(handler))
                 self.writer.write_advancement(adv)
 
@@ -189,33 +213,46 @@ class Session:
         return clean_func
 
     def _unique_func(self, hint):
-        name = hint
+        name = NSName(hint)
         i = 0
         while name in self.scope.func_names:
-            name = '%s%d' % (hint, i)
+            name = NSName('%s%d' % (hint, i))
             i += 1
         self.scope.add_function_names((name,))
         return name
 
-    def create_load_function(self):
-        setup_name = self._unique_func('setup')
-
-        global_nbt = ','.join(self._global_nbt)
-        itemtag = '{stack:[],globals:[%s],working:{int:0}}}' % global_nbt
+    def _create_global_entity(self, namespace, setup, clean):
+        itemtag = '{stack:[],globals:{},working:{int:0}}}'
         item = '{id:"minecraft:stone",Count:1b,tag:%s' % itemtag
         globalnbt = ('{Tags:["%s"],ArmorItems:[%s],NoAI:1b,Invisible:1b,' + \
                'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
-               'NoBasePlate:1b}') % (self.scope._global_tag, item)
+               'NoBasePlate:1b}') % (namespace + '_global', item)
+        ge = self.scope.global_entity(namespace)
+        check = 'execute unless entity %s' % ge
+        setup.append('%s kill %s' % (check, ge))
+        setup.append('%s summon armor_stand %s %s' %
+                     (check, self.entity_pos, globalnbt))
+        clean.append('kill %s' % ge)
+
+    def create_load_function(self):
+        setup_name = self._unique_func('setup')
+        self._gen_funcs.add(setup_name)
+
         utilnbt = ('{Tags:["%s"],NoAI:1b,Invisible:1b,Small:0b,NoGravity:1b,' +\
                   'Marker:1b,Invulnerable:1b,NoBasePlate:1b}') % (
                       self.scope._pos_tag)
         setup = []
         clean = []
-        if self.scope._global_used:
-            setup.append('kill %s' % self.scope.global_entity())
-            setup.append('summon armor_stand %s %s' %
-                         (self.entity_pos, globalnbt))
-            clean.append('kill %s' % self.scope.global_entity())
+        for namespace in self.scope._global_namespaces:
+            self._create_global_entity(namespace, setup, clean)
+
+        for storage, path, strval in self._global_nbt:
+            val = SimpleResolve(strval) # bit of a hack to write the nbt
+            init = ExecuteChain() \
+                .cond('unless') \
+                .data(storage, path) \
+                .run(DataModifyValue(storage, path, 'set', val))
+            setup.append(init.resolve(self.scope))
 
         if self.scope._pos_entity_used:
             setup.append('kill %s' % self.scope.pos_util_entity())
@@ -223,13 +260,15 @@ class Session:
                          % (self.entity_pos, utilnbt))
             clean.append('kill %s' % self.scope.pos_util_entity())
 
-        for obj, criteria, used in self.scope.get_objectives():
-            if not used:
+        for obj in self.scope.get_objectives():
+            if not obj.used or obj.extern:
                 continue
+            criteria = obj.criteria
             if criteria is None:
                 criteria = 'dummy'
-            setup.append('scoreboard objectives add %s %s' % (obj, criteria))
-            clean.append('scoreboard objectives remove %s' % obj)
+            name = obj.name
+            setup.append('scoreboard objectives add %s %s' % (name, criteria))
+            clean.append('scoreboard objectives remove %s' % name)
 
         for name, display in self.scope.get_bossbars():
             setup.append('bossbar add %s %s' % (name,
@@ -248,14 +287,16 @@ class Session:
 
         self.extended_setup(setup, clean)
 
+        setup_func = None
         if setup:
             self.writer.write_function(setup_name, setup)
+            setup_func = self.scope.function_name(setup_name)
         clean_func = None
         if self.create_cleanup and clean:
             cleanup_name = self._unique_func('cleanup')
             self.writer.write_function(cleanup_name, clean)
+            self._gen_funcs.add(cleanup_name)
             clean_func = self.scope.function_name(cleanup_name)
-        setup_func = self.scope.function_name(setup_name) if setup else None
         return setup_func, clean_func
 
     # TODO remove
@@ -272,6 +313,10 @@ class _SessionWriter(FuncWriter):
     def __init__(self, session):
         self.session = session
         self.event_handlers = []
+
+    @property
+    def namespace(self):
+        return self.session.scope.namespace
 
     def write_func_table(self, table):
         self.session.load_function_table(table)
@@ -295,8 +340,11 @@ class _SessionWriter(FuncWriter):
     def write_objective(self, name, criteria):
         self.session.define_objective(name, criteria)
 
-    def write_global_nbt(self, init_spec):
-        self.session.add_global_nbt(init_spec)
+    def write_extern_vars(self, names):
+        self.session.load_extern_vars(names)
+
+    def write_global_nbt(self, storage, path, init_val):
+        self.session.add_global_nbt(storage, path, init_val)
 
     def write_setup_function(self, func):
         self.event_handlers.append(('minecraft:load', None, func.global_name))

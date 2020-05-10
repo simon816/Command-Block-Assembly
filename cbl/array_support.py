@@ -18,6 +18,9 @@ class ArrayType(NativeType):
         self.nbt_type = i.NBTType.int # TODO
         self.size = size
 
+    def __repr__(self):
+        return 'ArrayType(%s[%d])' % (self.elem_type.typename, self.size)
+
     @property
     def ir_type(self):
         return i.VarType.nbt

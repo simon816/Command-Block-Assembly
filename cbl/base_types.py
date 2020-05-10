@@ -124,17 +124,3 @@ class EventType(NativeType):
 
     def allocate(self, compiler, namehint):
         return EventNameInstance(compiler)
-
-class TextTypeInstance(CBLTypeInstance):
-
-    def __init__(self, func_members, func_props, text):
-        super().__init__(func_members, func_props)
-        self.text = text
-
-class TextType(CBLType):
-
-    def allocate(self, compiler, namehint):
-        text = compiler.define(namehint, i.CreateText())
-        return TextTypeInstance(self.get_func_members(),
-                                self.get_func_properties(),
-                                text)

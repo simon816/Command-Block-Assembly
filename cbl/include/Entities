@@ -1,4 +1,4 @@
-namespace Entities {
+singleton Entities {
     EntityType area_effect_cloud;
     EntityType armor_stand;
     EntityType arrow;

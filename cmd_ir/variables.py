@@ -66,6 +66,10 @@ class VarType(InsnArg):
     def _init_from_parser(cls, value):
         return cls.__LOOKUP[value]
 
+    # pickle the singleton
+    def __reduce__(self):
+        return 'VarType.%s' % self.name
+
     i32 = None
     nbt = None
     # https://en.wikipedia.org/wiki/Q_%28number_format%29
@@ -92,8 +96,8 @@ class OpenVar:
     def __enter__(self):
         self.ref = self.var._direct_ref()
         if self.ref is None:
-            self.using_temp = self.out.allocate_temp()
-            self.ref = c.Var(self.using_temp)
+            self.using_temp = True
+            self.ref = self.out.allocate_temp()
             if self.read:
                 self.var._write_to_reference(self.ref, self.out)
         return self.ref
@@ -103,7 +107,7 @@ class OpenVar:
         if self.write and self.using_temp:
             self.var._read_from_reference(self.ref, self.out)
         if self.using_temp:
-            self.out.free_temp(self.using_temp)
+            self.out.free_temp(self.ref)
 
 class Variable(NativeType, metaclass=abc.ABCMeta):
 
@@ -112,6 +116,11 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
         self.type = vartype
         self.__use_w = 0
         self.__use_r = 0
+
+    @property
+    @abc.abstractmethod
+    def namespace(self):
+        pass
 
     def __repr__(self):
         return '%s(%s)' % (self.__class__.__name__, self.type)
@@ -176,11 +185,10 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
     def scale_down(self, ref, out):
         if self.type.scale != 1:
             # TODO extract to constant reference
-            tmp = out.allocate_temp()
-            scaleparam = c.Var(tmp)
+            scaleparam = out.allocate_temp()
             out.write(c.SetConst(scaleparam, self.type.scale))
             out.write(c.OpDiv(ref, scaleparam))
-            out.free_temp(tmp)
+            out.free_temp(scaleparam)
 
     def scale_other_to_this(self, other, otherref, out):
         factor = self.type.scale / other.type.scale
@@ -190,24 +198,22 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
             op = c.OpDiv
         factor = int(factor)
         if factor == 1:
-            return otherref
-        newvar = out.allocate_temp()
-        scaled = c.Var(newvar)
+            return otherref, False
+        scaled = out.allocate_temp()
         out.write(c.OpAssign(scaled, otherref))
         # TODO extract to constant reference
-        tmp = out.allocate_temp()
-        scaleparam = c.Var(tmp)
+        scaleparam = out.allocate_temp()
         out.write(c.SetConst(scaleparam, factor))
         out.write(op(scaled, scaleparam))
-        out.free_temp(tmp)
-        return newvar
+        out.free_temp(scaleparam)
+        return scaled, True
 
     def push_to_stack(self, out):
         self.as_nbt_variable(out).push_to_stack(out)
 
     def as_nbt_variable(self, out):
         # Create a virtual variable to store the value as NBT
-        var = WorkingNbtVariable(self.type)
+        var = WorkingNbtVariable(self.type, self.namespace)
         self.clone_to(var, out)
         return var
 
@@ -243,6 +249,14 @@ class Variable(NativeType, metaclass=abc.ABCMeta):
 
 class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
 
+    def __init__(self, type, namespace):
+        super().__init__(type)
+        self.__namespace = namespace
+
+    @property
+    def namespace(self):
+        return self.__namespace
+
     @property
     @abc.abstractmethod
     def path(self):
@@ -254,11 +268,11 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
         pass
 
     @property
-    def entity(self):
-        return c.GlobalEntity
+    def storage(self):
+        return c.GlobalNBT(self.namespace)
 
     def set_const_val(self, value, out):
-        out.write(c.DataModifyValue(self.entity.ref, self.path, 'set',
+        out.write(c.DataModifyValue(self.storage, self.path, 'set',
                                   self.nbt_val(value)))
 
     def nbt_val(self, value):
@@ -267,23 +281,23 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
     def _store_from_cmd(self, cmd, out):
         out.write(c.ExecuteChain()
                   .store('result')
-                  .entity(self.entity, self.path, self.type.nbt_type.
+                  .nbt(self.storage, self.path, self.type.nbt_type.
                           exec_store_name, 1 / self.type.scale)
                   .run(cmd))
 
     def read(self):
-        return c.DataGet(self.entity.ref, self.path, self.type.scale)
+        return c.DataGet(self.storage, self.path, self.type.scale)
 
     def _direct_nbt(self):
-        return self.path, self.entity
+        return self.path, self.storage
 
     def clone_to(self, other, out):
         other_direct = other._direct_nbt()
         if other_direct is not None:
-            other_path, other_entity = other_direct
+            other_path, other_storage = other_direct
             # Optimize here - can copy NBT directly
-            out.write(c.DataModifyFrom(other_entity.ref, other_path, 'set',
-                                       self.entity.ref, self.path))
+            out.write(c.DataModifyFrom(other_storage, other_path, 'set',
+                                       self.storage, self.path))
         else:
             super().clone_to(other, out)
 
@@ -292,14 +306,14 @@ class NbtStorableVariable(Variable, metaclass=abc.ABCMeta):
 
     def push_to_stack(self, out):
         # out-of-bounds stack path
-        out.write(c.DataModifyFrom(c.GlobalEntity.ref, c.StackPath(None),
-                                   'append', self.entity.ref,
+        out.write(c.DataModifyFrom(c.GlobalNBT(self.namespace),
+                                   c.StackPath(None), 'append', self.storage,
                                    self.root_path))
 
 class NbtOffsetVariable(NbtStorableVariable):
 
-    def __init__(self, type, offset):
-        super().__init__(type)
+    def __init__(self, type, namespace, offset):
+        super().__init__(type, namespace)
         self.offset = offset
 
     @property
@@ -315,6 +329,14 @@ class ScoreStorableVariable(Variable):
     def __init__(self, type, ref):
         super().__init__(type)
         self.ref = ref
+
+    @property
+    def namespace(self):
+        # This is hacky - grab the namespace from the underlying target
+        t = self.ref.target
+        if isinstance(t, c.GlobalEntity):
+            return t.namespace
+        return None
 
     def set_const_val(self, value, out):
         out.write(c.SetConst(self.ref, self.to_int(value)))
@@ -342,16 +364,23 @@ class ProxyEmptyException(Exception):
 
 class ProxyVariable(Variable):
 
-    def __init__(self, type, always_read=False, always_write=False):
+    def __init__(self, type, always_read=False, always_write=False, ns=None):
         super().__init__(type)
         self.__var = None
         self._al_read = always_read
         self._al_write = always_write
+        self._namespace = ns
 
     def set_proxy(self, var):
         assert self.__var is None
         assert var.type == self.type
+        assert self._namespace is None or var.namespace == self._namespace
         self.__var = var
+
+    # For the allocator
+    @property
+    def proxy_ns(self):
+        return self._namespace
 
     @property
     def var(self):
@@ -374,6 +403,12 @@ class ProxyVariable(Variable):
     def is_read_from(self):
         return self._al_read or super().is_read_from
 
+    @property
+    def namespace(self):
+        if self._namespace is not None:
+            return  self._namespace
+        return self.var.namespace
+
     def open_for_write(self, out, read=False): return self.var.open_for_write(out, read)
     def open_for_read(self, out): return self.var.open_for_read(out)
     def read(self): return self.var.read()
@@ -392,7 +427,16 @@ class LocalVariable(ProxyVariable):
     pass
 
 class GlobalVariable(ProxyVariable):
-    pass
+
+    def __init__(self, type, is_extern, namespace):
+        # If it's extern, it's always read and written to
+        super().__init__(type, is_extern, is_extern, namespace)
+        self.is_extern = is_extern
+
+class ExternVariable(ProxyVariable):
+
+    def __init__(self, type):
+        super().__init__(type, True, True)
 
 class ParameterVariable(ProxyVariable):
 
@@ -410,8 +454,8 @@ class ReturnVariable(ProxyVariable):
 
 class LocalStackVariable(NbtOffsetVariable):
 
-    def __init__(self, type, offset):
-        super().__init__(type, offset)
+    def __init__(self, type, namespace, offset):
+        super().__init__(type, namespace, offset)
         self.frame_depth = 0
 
     @property
@@ -439,13 +483,17 @@ class VirtualStackPointer(LocalStackVariable):
 class VirtualNbtVariable(NbtStorableVariable):
 
     def __init__(self, type, directgetter, realigner):
-        super().__init__(type)
+        super().__init__(type, None)
         self._directgetter = directgetter
         self._realigner = realigner
 
     @property
+    def namespace(self):
+        assert False, "TODO"
+
+    @property
     def path(self):
-        path, entity = self._directgetter()
+        path, storage = self._directgetter()
         return path
 
     @property
@@ -453,9 +501,9 @@ class VirtualNbtVariable(NbtStorableVariable):
         return self.path
 
     @property
-    def entity(self):
-        path, entity = self._directgetter()
-        return entity
+    def storage(self):
+        path, storage = self._directgetter()
+        return storage
 
     @property
     def is_read_from(self):
@@ -494,13 +542,17 @@ class EntityLocalAccess(EntityLocalVariable, ScoreStorableVariable):
 class EntityLocalNbtVariable(EntityLocalVariable, NbtStorableVariable):
 
     def __init__(self, type, target, path):
-        super().__init__(type)
-        self._target = target.as_resolve()
+        super().__init__(type, None)
+        self._storage = target.as_resolve().ref
         self._path = path
 
     @property
-    def entity(self):
-        return self._target
+    def namespace(self):
+        assert False
+
+    @property
+    def storage(self):
+        return self._storage
     
     @property
     def path(self):
@@ -515,6 +567,10 @@ class CompilerVariable(Variable):
     def __init__(self, type):
         super().__init__(type)
         self.value = None
+
+    @property
+    def namespace(self):
+        assert False
 
     def _store_from_cmd(self, cmd, out):
         assert False

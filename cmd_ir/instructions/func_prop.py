@@ -2,6 +2,7 @@
 
 from ._core import PreambleOnlyInsn, VoidApplicationInsn
 from .control_flow import RunDeferredCallback
+from ..core_types import VirtualString
 
 class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
     """Marks the function as externally visible. The function will not
@@ -15,6 +16,20 @@ class ExternInsn(PreambleOnlyInsn, VoidApplicationInsn):
 
     def activate(self, seq):
         seq.holder.set_extern(True)
+
+class NamespaceInsn(PreambleOnlyInsn, VoidApplicationInsn):
+    """Sets the function's namespace. By default, a function's namespace
+    is inherited from the datapack definition. This instruction overrides
+    that."""
+
+    args = [VirtualString]
+    argnames = 'namespace'
+    func_preamble_only = True
+    inline_copyable = False
+    insn_name = 'namespace'
+
+    def activate(self, seq):
+        seq.holder._set_namespace(self.namespace.val)
 
 class PureInsn(PreambleOnlyInsn, VoidApplicationInsn):
     """Marks the function as a pure function (i.e. no side-effects). No checks

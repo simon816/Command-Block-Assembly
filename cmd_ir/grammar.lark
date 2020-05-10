@@ -5,11 +5,13 @@ program: preamble? body*
 
 preamble: "preamble" "{" instruction* "}"
 
-?body: function | extern_func
+?body: function | extern_func | extern_var
 
 extern_func: "extern" "function" FUNC_NAME (extern_params|NULL) (extern_returns|NULL) NEWLINE
 extern_params: "(" IDENT ":" IDENT ("," IDENT ":" IDENT)* ")"
 extern_returns: "(" IDENT ("," IDENT)* ")"
+
+extern_var: "extern" "variable" VAR_NAME IDENT NEWLINE
 
 function: "function" FUNC_NAME "{" function_body "}"
 
@@ -40,7 +42,9 @@ BLOCK_REF: ":" CNAME
 FUNC_REF: "@" FUNC_NAME
 NULL: "NULL"
 
-PATH_COMPONENT: ("-"|"_"|"."|LCASE_LETTER|DIGIT)+
+PATH_COMPONENT: (NAMESPACE|".")+
+
+NAMESPACE: ("-"|"_"|LCASE_LETTER|DIGIT)+
 
 ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "><" | "<" | ">"
 

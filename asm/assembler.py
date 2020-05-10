@@ -533,6 +533,8 @@ void OP(int src, int *dest) {
     def handle_print(self, arg1, *args):
         args = [arg1] + list(args)
         text = self.block.define(CreateText())
+        ct = self.func.create_compiletime()
+        block = ct.create_block('entry')
         for arg_type, arg in args:
             if arg_type == 'string':
                 arg = VirtualString(arg)
@@ -540,7 +542,8 @@ void OP(int src, int *dest) {
                 arg = self.resolve_ref(arg_type, arg)
                 if arg is None:
                     raise RuntimeError('Bad argument type %r' % arg_type)
-            self.block.add(TextAppend(text, arg))
+            block.add(TextAppend(text, arg))
+        ct.run_and_return()
         selector = self.block.define(CreateSelector(SelectorType.ALL_PLAYERS))
         self.block.add(TextSend(text, selector))
 

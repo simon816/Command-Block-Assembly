@@ -1,14 +1,20 @@
 from collections import OrderedDict, defaultdict
 import abc
 
-from commands import SetConst, Var
+from commands import SetConst, Var, NSName
 
 from .core_types import FunctionLike, PosUtilEntity, GlobalEntity
 
 from .variables import (Variable, VarType, ParameterVariable, ReturnVariable,
-                        LocalStackVariable, LocalVariable, NbtOffsetVariable)
+                        LocalStackVariable, LocalVariable, NbtOffsetVariable,
+                        GlobalVariable, ExternVariable)
 
 class FuncWriter(metaclass=abc.ABCMeta):
+
+    @property
+    @abc.abstractmethod
+    def namespace(self):
+        pass
 
     @abc.abstractmethod
     def write_func_table(self, table):
@@ -39,7 +45,11 @@ class FuncWriter(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def write_global_nbt(self, init_spec):
+    def write_extern_vars(self, names):
+        pass
+
+    @abc.abstractmethod
+    def write_global_nbt(self, storage, path, init_val):
         pass
 
 class CmdWriter:
@@ -50,6 +60,10 @@ class CmdWriter:
         self.post = []
         self.func_writer = func_writer
         self.temp_gen = temp_gen
+
+    @property
+    def namespace(self):
+        return self.func_writer.namespace
 
     def prepend(self, cmd):
         self.pre.append(cmd)
@@ -79,8 +93,9 @@ class TemporaryVarGen:
 
     def next(self):
         if not self.temps:
-            tmp = 'temp_%d' % self.counter
-            self.writer.write_objective(tmp, None)
+            name = 'temp_%d' % self.counter
+            self.writer.write_objective(name, None)
+            tmp = Var(name, self.writer.namespace)
             self.counter += 1
         else:
             tmp = self.temps.pop()
@@ -307,6 +322,7 @@ class TopLevel(VariableHolder):
         if isinstance(func, ExternFunction):
             real_func = self.scope[name] = self._create_func(name)
             real_func.expect_signature(func)
+            real_func.set_namespace(func._gname.namespace)
             mapping = {func: real_func}
             for var in self.scope.values():
                 if isinstance(var, IRFunction):
@@ -315,9 +331,11 @@ class TopLevel(VariableHolder):
             func = real_func
         return func
 
-    def create_global(self, namehint, vartype):
-        from .instructions import DefineGlobal
-        return self.preamble.add(DefineGlobal(vartype), True, namehint)
+    def create_global(self, namehint, vartype, is_extern=False, ns=None):
+        from .instructions import DefineGlobal, VirtualString
+        lnk = 'external' if is_extern else 'internal'
+        ns = None if ns is None else VirtualString(ns)
+        return self.preamble.add(DefineGlobal(vartype, lnk, ns), True, namehint)
 
     def lookup_func(self, name):
         func = self.lookup(name)
@@ -328,7 +346,7 @@ class TopLevel(VariableHolder):
     def include_from(self, other):
         for name, var in other.scope.items():
             if isinstance(var, VisibleFunction) and not name.startswith('__'):
-                self.scope[name] = ExternFunction(var.global_name, self)
+                self.scope[name] = ExternFunction(var.global_name.name, self)
 
     def end(self):
         assert not self.finished
@@ -343,12 +361,19 @@ class TopLevel(VariableHolder):
 
         table = []
         functions = []
+        extern_vars = set()
 
         for name, var in self.scope.items():
             if isinstance(var, VisibleFunction):
                 table.extend(var.get_func_table())
                 functions.append(var)
+            elif isinstance(var, ExternVariable):
+                assert var.proxy_set, "Unbound variable $%s %s" % (name, var)
+                ref = var._direct_ref()
+                if ref is not None:
+                    extern_vars.add(ref.objective.objective)
         writer.write_func_table(table)
+        writer.write_extern_vars(extern_vars)
 
         temp_generator = TemporaryVarGen(writer)
         writer.write_objective('success_tracker', None)
@@ -357,17 +382,52 @@ class TopLevel(VariableHolder):
             try:
                 func.writeout(writer, temp_generator)
             except:
-                print("Error in function: " + func.global_name)
+                print("Error in function: " + func.global_name.uqn)
                 raise
 
         temp_generator.finish()
 
+    def get_extern_symbol_table(self, session):
+        functions = {}
+        variables = {}
+        for name, var in self.scope.items():
+            if isinstance(var, VisibleFunction) and var.extern_visibility:
+                functions[name] = {
+                    '_name': session.scope.function_name(var.global_name),
+                    'params': [{'t': p[0].name, 'p': p[1]} for p in var.params],
+                    'returns': [r.name for r in var.returns],
+                    'flags': {
+                        'pure': var.is_pure,
+                    },
+                }
+            elif isinstance(var, GlobalVariable) and var.is_extern:
+                ref = var._direct_ref()
+                vardesc = None
+                if ref is not None:
+                    vardesc = { 'score': ref.objective.objective }
+                nbt = var._direct_nbt()
+                if nbt is not None:
+                    # We use the offset rather than the true path so it's
+                    # easy to derrive the hierarchy of the NBT
+                    vardesc = { 'nbt': var.var.offset }
+                vardesc['type'] = var.type.name
+                vardesc['namespace'] = var.namespace
+                variables[name] = vardesc
+        return {
+            'functions': functions,
+            'variables': variables,
+        }
+
     def serialize(self):
         strs = []
         strs.append(self.preamble.serialize())
-        for elem in self.scope.values():
+        for name, elem in self.scope.items():
             if isinstance(elem, VisibleFunction):
                 strs.append(elem.serialize())
+            if isinstance(elem, ExternVariable):
+                # Must be before functions
+                strs.insert(1, 'extern variable $%s %s\n' % (name,
+                                                             elem.type.name))
         return '\n'.join(strs)
 
     @staticmethod
@@ -379,7 +439,12 @@ class TopLevel(VariableHolder):
             return tops[0]
         out = TopLevel()
         externs = defaultdict(list)
+        extern_vars = defaultdict(list)
         all_blocks = []
+        # Things that should not reserve names in the scope
+        # until all other variables are reserved
+        # i.e renamed on conflict
+        private = []
         for top in tops:
             assert top.finished
             out.preamble.insns.extend(top.preamble.insns)
@@ -388,12 +453,23 @@ class TopLevel(VariableHolder):
                 if isinstance(var, VisibleFunction):
                     if isinstance(var, ExternFunction):
                         externs[name].append(var)
-                    else:
+                    elif isinstance(var, IRFunction):
                         # Name must be the same as global name
                         out.store(name, var)
                         # re-parent function scopes
                         var.scope.parent = out.scope
                         all_blocks.extend(var.blocks)
+                    elif isinstance(var, DynLinkFunction):
+                        out.store(name, var)
+                    else:
+                        assert False, var
+                elif isinstance(var, GlobalVariable):
+                    if var.is_extern:
+                        out.store(name, var)
+                    else:
+                        private.append((name, var))
+                elif isinstance(var, ExternVariable):
+                    extern_vars[name].append(var)
                 else:
                     out.generate_name(name, var)
         extern_mapping = {}
@@ -413,6 +489,30 @@ class TopLevel(VariableHolder):
         if extern_mapping:
             for block in all_blocks:
                 block.apply_mapping(ExternFunction, extern_mapping)
+
+        # Same again for extern variables
+        # We cannot make use of the proxy ability due to name conflicts
+        # with each extern in the externlist
+        extern_mapping = {}
+        for name, externlist in extern_vars.items():
+            new_var = externlist[0]
+            realvar = out.lookup(name)
+            if realvar is not None:
+                assert isinstance(realvar, GlobalVariable) \
+                       and realvar.is_extern, realvar
+            replacement = realvar or new_var
+            for var in externlist:
+                if replacement != var:
+                    extern_mapping[var] = replacement
+            if not realvar:
+                out.store(name, new_var)
+        if extern_mapping:
+            for block in all_blocks:
+                block.apply_mapping(ExternVariable, extern_mapping)
+
+        for name, var in private:
+            out.generate_name(name, var)
+
         out.end()
         return out
 
@@ -475,9 +575,10 @@ class VisibleFunction(FunctionLike):
     def extern_visibility(self):
         assert False, "Not implemented"
 
-class ExternFunction(VisibleFunction):
+class ExternCommon(VisibleFunction):
 
     def __init__(self, global_name, params=None, returns=None):
+        assert isinstance(global_name, NSName)
         self._gname = global_name
         self.params = list(params or [])
         self.returns = list(returns or [])
@@ -488,33 +589,17 @@ class ExternFunction(VisibleFunction):
     def finished(self):
         return True
 
-    def writeout(self, writer, temp_gen):
-        assert False, "Extern function not linked: %s" % self._gname
-
-    @property
-    def global_name(self):
-        assert False, "Extern function cannot be referenced: %s" % self._gname
-        return self._gname
-
     def expect_signature(self, other):
         # Special logic to check signature once finished
         if not other.finished:
             other.expect_signature(self)
         else:
-            assert self.params == other.params
+            assert self.params == other.params, (self.params, other.params)
             assert self.returns == other.returns
-
-    def get_func_table(self):
-        return []
 
     @property
     def extern_visibility(self):
         return True
-
-    @property
-    def is_pure(self):
-        # Even if the real function is pure don't require the extern to be
-        return False
 
     @property
     def is_inline(self):
@@ -533,16 +618,60 @@ class ExternFunction(VisibleFunction):
                                     for (t, p) in self.params)
         returns = 'NULL' if not self.returns else \
                   '(%s)' % ', '.join(t.name for t in self.returns)
-        return 'extern function %s %s %s\n' % (self._gname, params, returns)
+        return 'extern function %s %s %s\n' % (self._gname.uqn, params, returns)
+
+class ExternFunction(ExternCommon):
+
+    def __init__(self, name, params=None, returns=None):
+        super().__init__(NSName(name), params, returns)
+
+    def writeout(self, writer, temp_gen):
+        assert False, "Extern function not linked: %s" % self._gname.uqn
+
+    @property
+    def global_name(self):
+        assert False, "Extern function cannot be referenced: %s" % \
+               self._gname.uqn
+
+    def get_func_table(self):
+        return []
+
+    @property
+    def is_pure(self):
+        # Even if the real function is pure don't require the extern to be
+        return False
 
     def __str__(self):
-        return 'Extern(%s)' % self._gname
+        return 'Extern(%s)' % self._gname.uqn
+
+class DynLinkFunction(ExternCommon):
+
+    def __init__(self, name, params, returns, pure):
+        super().__init__(name, params, returns)
+        self._pure = pure
+
+    def writeout(self, writer, temp_gen):
+        pass
+
+    @property
+    def global_name(self):
+        return self._gname
+
+    def get_func_table(self):
+        return [self._gname]
+
+    @property
+    def is_pure(self):
+        return self._pure
+
+    def __str__(self):
+        return 'DynLink(%s)' % self._gname.uqn
 
 class IRFunction(VisibleFunction, VariableHolder):
 
     def __init__(self, name, top):
         self.scope = Scope(top.scope)
-        self._name = name
+        self._name = NSName(name)
         self.preamble = Preamble(self)
         self._finished = False
         self._use = 0
@@ -566,6 +695,21 @@ class IRFunction(VisibleFunction, VariableHolder):
     def usage(self):
         self._use += 1
         self.entry_point_usage()
+
+    def set_namespace(self, ns):
+        from .instructions import NamespaceInsn
+        from .core_types import VirtualString
+        if ns is None:
+            # Don't add the insn in this case
+            assert not self.is_defined
+            return
+        self.preamble.add(NamespaceInsn(VirtualString(ns)))
+
+    def _set_namespace(self, ns):
+        if ns == self._name.namespace:
+            return
+        assert not self.is_defined
+        self._name = self._name.with_namespace(ns)
 
     def add_parameter(self, vtype, passtype):
         self.params.append((vtype, passtype))
@@ -772,9 +916,10 @@ class IRFunction(VisibleFunction, VariableHolder):
         # Linked to InvokeInsn
         offset = 0
         rets = []
+        ns = self.namespace
         for var in self.scope.values():
             if isinstance(var, ParameterVariable):
-                var.set_proxy(LocalStackVariable(var.type, offset))
+                var.set_proxy(LocalStackVariable(var.type, ns, offset))
                 if hasownstackframe:
                     var.realign_frame(1)
                 offset += 1
@@ -782,7 +927,7 @@ class IRFunction(VisibleFunction, VariableHolder):
                 rets.append(var)
         # return variables go at the end
         for retvar in rets:
-            retvar.set_proxy(LocalStackVariable(retvar.type, offset))
+            retvar.set_proxy(LocalStackVariable(retvar.type, ns, offset))
             if hasownstackframe:
                 retvar.realign_frame(1)
             offset += 1
@@ -829,14 +974,14 @@ class IRFunction(VisibleFunction, VariableHolder):
         self._entryblock.add(RevokeEventAdvancement(self))
 
     def serialize(self):
-        return 'function %s {\n%s%s\n%s\n}\n' % (self._name,
+        return 'function %s {\n%s%s\n%s\n}\n' % (self._name.name,
                                                self.preamble.serialize(),
            ''.join(fn.serialize() for fn in self._compiletimes),
            '\n\n'.join(block.serialize() for block in (self.allblocks if \
                        self._varsfinalized else self.blocks)))
 
     def __str__(self):
-        return 'Function(%s)' % (self._name)
+        return 'Function(%s)' % (self._name.uqn)
 
 
 class BasicBlock(FunctionLike, InstructionSeq):
@@ -865,10 +1010,10 @@ class BasicBlock(FunctionLike, InstructionSeq):
 
     @property
     def global_name(self):
-        return self._func._name + '/' + self._name
+        return self._func._name.append_name('/' + self._name)
 
     def __str__(self):
-        return 'BasicBlock(%s)' % self.global_name
+        return 'BasicBlock(%s)' % self.global_name.uqn
 
     def end(self):
         assert self.defined, self
@@ -895,7 +1040,7 @@ class BasicBlock(FunctionLike, InstructionSeq):
         for insn in self.insns:
             insn.apply(writer, self._func)
         if self.needs_success_tracker:
-            writer.write(SetConst(Var('success_tracker'), 1))
+            writer.write(SetConst(Var('success_tracker', self.namespace), 1))
         return writer.get_output()
 
     def serialize(self, indent=4):
@@ -998,7 +1143,7 @@ class CompileTimeBlock(BasicBlock):
         assert False
 
     def __str__(self):
-        return 'CompileTimeBlock(%s::%s)' % (self._func._real_func._name,
+        return 'CompileTimeBlock(%s::%s)' % (self._func._real_func._name.uqn,
                                              self._name)
 
 class ObjectFormat:

@@ -1,4 +1,4 @@
-namespace Game {
+singleton Game {
     EntityCollection entities;
     async void tick();
 }

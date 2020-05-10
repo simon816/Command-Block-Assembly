@@ -1,17 +1,17 @@
 preamble {
-    $height = global i32
-    $width = global i32
-    $shape_id = global i32
-    $color = global i32
+    $height = global i32, internal, NULL
+    $width = global i32, internal, NULL
+    $shape_id = global i32, internal, NULL
+    $color = global i32, internal, NULL
 
-    $row = global i32
-    $offset = global i32
-    $rotation = global i32
+    $row = global i32, internal, NULL
+    $offset = global i32, internal, NULL
+    $rotation = global i32, internal, NULL
     
-    $mode = global i32
-    $can_fit = global i32
+    $mode = global i32, internal, NULL
+    $can_fit = global i32, internal, NULL
     
-    $random = global i32
+    $random = global i32, internal, NULL
     
     setupfn @setup0
     
@@ -36,8 +36,8 @@ function display_seek {
 
     preamble {
         $tmp0 = define i32
-        $row1 = parameter i32
-        $col1 = parameter i32
+        $row1 = parameter i32, byval
+        $col1 = parameter i32, byval
     }
 
     entry:
@@ -760,8 +760,8 @@ function new_shape {
 function array_get {
 
     preamble {
-        $arr = parameter nbt
-        $indexparam = parameter i32
+        $arr = parameter nbt, byval
+        $indexparam = parameter i32, byval
         $value = return i32
         $index = define i32
     }

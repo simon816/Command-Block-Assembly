@@ -204,7 +204,7 @@ class RawCommand(CmdFunction):
     def __init__(self, cmd):
         self.cmd = cmd
 
-    def as_cmd(self):
+    def as_cmd(self, func):
         return c.Cmd(self.cmd)
 
 class CreateCommand(ConstructorInsn):
@@ -292,16 +292,21 @@ class CompileOnlyVariable(PreambleOnlyInsn, ConstructorInsn):
 class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
     """Creates a global variable of the given variable type."""
 
-    args = [VarType]
-    argnames = 'type'
-    argdocs = ["Variable type"]
+    args = [VarType, str, Opt(VirtualString)]
+    argnames = 'type linkage namespace'
+    argdocs = ["Variable type", "Linkage (internal|external)", "Namespace"]
     rettype = Variable
 
     top_preamble_only = True
     insn_name = 'global'
 
+    def validate(self):
+        assert self.linkage in ('internal', 'external')
+
     def construct(self):
-        return GlobalVariable(self.type)
+        is_extern = self.linkage == 'external'
+        ns = None if self.namespace is None else self.namespace.val
+        return GlobalVariable(self.type, is_extern, ns)
 
     def apply(self, out, func):
         ref = self._value._direct_ref()
@@ -310,10 +315,9 @@ class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
             out.write_objective(name, None)
         nbt = self._value._direct_nbt()
         if nbt is not None:
-            path, entity = nbt
+            path, storage = nbt
             initval = self.type.nbt_type.new(self.type.default_val).serialize()
-            init_spec = '{%s:%s}' % (self.type.nbt_path_key, initval)
-            out.write_global_nbt(init_spec)
+            out.write_global_nbt(storage, path, initval)
 
 class ParameterInsn(DefineVariable):
     """Add a required parameter of a given type to a function."""

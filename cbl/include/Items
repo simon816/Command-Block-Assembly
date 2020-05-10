@@ -1,4 +1,4 @@
-namespace Items {
+singleton Items {
     ItemType air;
     ItemType stone;
     ItemType granite;

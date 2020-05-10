@@ -1,36 +1,54 @@
 type Text {
-    Text operator +=(IRVariable var);
-    Text operator <<(IRVariable var);
+
+    _IRType _text;
+
+    constexpr constructor(): _text("text") {}
+
+    constexpr Text operator +=(int val) {
+        ir(this._text, val) {
+            text_append $arg0, $arg1
+        }
+        return this;
+    }
+
+    constexpr void append_ref(int &ref) {
+        ir(this._text, ref) {
+            text_append $arg0, $arg1
+        }
+    }
+
+    constexpr Text operator <<(int val) {
+        ir(this._text, val) {
+            text_append $arg0, $arg1
+        }
+        return this;
+    }
+
     Text operator +=(string str);
     Text operator <<(string str);
-    void send_to_all();
+
+    macro void send_to_all() {
+        _IRType all_players("selector a");
+        ir(this._text, all_players) {
+            text_send $arg0, $arg1
+        }
+    }
+
 }
 
 intrinsic_extension {
 
-    Text Text::operator +=(IRVariable var) Python: {
-        compiler.add_insn(i.TextAppend(this.text, args.var.value))
-        return thisarg
-    }
-
-    Text Text::operator <<(IRVariable var) Python: {
-        compiler.add_insn(i.TextAppend(this.text, args.var.value))
-        return thisarg
-    }
-
     Text Text::operator <<(string str) Python: {
-        compiler.add_insn(i.TextAppend(this.text, i.VirtualString(args.str.value)))
-        return thisarg
+        with compiletime:
+            m = this.get_member(compiler, '_text')
+            compiler.add_insn(i.TextAppend(m.value.var, i.VirtualString(args.str.value)))
+            return thisarg
     }
 
     Text Text::operator +=(string str) Python: {
-        compiler.add_insn(i.TextAppend(this.text, i.VirtualString(args.str.value)))
-        return thisarg
-    }
-
-    void Text::send_to_all() Python: {
-        sel = compiler.define('all_players', i.CreateSelector(i.SelectorType.ALL_PLAYERS))
-        compiler.add_insn(i.TextSend(this.text, sel))
-        return void
+        with compiletime:
+            m = this.get_member(compiler, '_text')
+            compiler.add_insn(i.TextAppend(m.value.var, i.VirtualString(args.str.value)))
+            return thisarg
     }
 }

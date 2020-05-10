@@ -9,7 +9,7 @@ from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
 from .macro_type import MacroType
 from .base_types import VoidType, BoolType, IntType, DecimalType, StringType, \
-     BlockTypeType, ItemTypeType, EventType, TextType
+     BlockTypeType, ItemTypeType, EventType
 from .maybe_type import MaybeType
 from .template_type import TemplatedType
 from .types import Types
@@ -27,14 +27,17 @@ from cmd_ir.core_types import SelectorType
 import cmd_ir.instructions as i
 
 EventCondition = namedtuple('EventCondition', 'path value')
+FuncAnnotation = namedtuple('FuncAnnotation', 'event_handler namespace')
 
 VarDeclaration = namedtuple('VarDeclaration', 'type name')
+ExternVarDeclaration = namedtuple('ExternVarDeclaration', 'decl')
+StaticVarDeclaration = namedtuple('StaticVarDeclaration', 'decl')
 FuncDeclaration = namedtuple('FuncDeclaration', 'name ret_type params ' + \
                              'is_operator inline is_async typespace')
 CtorDeclaration = namedtuple('CtorDeclaration', 'params inline typespace')
 PropertyDeclaration = namedtuple('PropertyDeclaration', 'prop')
 
-FunctionDefinition = namedtuple('FunctionDefinition', 'decl body event_handler')
+FunctionDefinition = namedtuple('FunctionDefinition', 'decl body annot')
 CtorDefinition = namedtuple('CtorDefinition', 'decl init_list body')
 MemberInit = namedtuple('MemberInit', 'member args')
 
@@ -171,6 +174,7 @@ class Compiler(Transformer_WithPre):
         self.array_support = ArraySupport(self)
         self.entity_support = EntitySupport(self)
         self.intrinsic_support = IntrinsicSupport(self)
+        self.namespace = None
         self.func = None
         self.funcsym = None
         self.block = None
@@ -229,7 +233,6 @@ class Compiler(Transformer_WithPre):
         self.add_type('BlockType', BlockTypeType())
         self.add_type('ItemType', ItemTypeType())
         self.add_type('Event', EventType())
-        #self.add_type('Text', TextType())
 
     # === Support / Helpers === #
 
@@ -266,7 +269,8 @@ class Compiler(Transformer_WithPre):
 
     def __create_var(self, namehint, var_type):
         if self.func is None:
-            return self.top.create_global(namehint, var_type)
+            return self.top.create_global(namehint, var_type, True,
+                                          self.namespace)
         return self.func.create_var(namehint, var_type)
 
     @contextlib.contextmanager
@@ -383,6 +387,24 @@ class Compiler(Transformer_WithPre):
         type.run_constructor(self, tmp, args)
         return tmp
 
+    def _extern_variable_from_decl(self, decl):
+        from cmd_ir.variables import ExternVariable
+
+        def create_extern(vname, vtype):
+            var = ExternVariable(vtype)
+            self.top.store(vname, var)
+            return var
+
+        with self.set_create_var(create_extern):
+            self._construct_variable_from_decl(decl)
+
+    def _static_variable_from_decl(self, decl):
+        def create_global(vname, vtype):
+            return self.top.create_global(vname, vtype, False, self.namespace)
+
+        with self.set_create_var(create_global):
+            self._construct_variable_from_decl(decl)
+
     # === Tree Traversal === #
 
     def _call_userfunc(self, tree, new_children=None):
@@ -402,6 +424,10 @@ class Compiler(Transformer_WithPre):
     def process_top_decl(self, decl):
         if isinstance(decl, VarDeclaration):
             self._construct_variable_from_decl(decl)
+        elif isinstance(decl, ExternVarDeclaration):
+            self._extern_variable_from_decl(decl.decl)
+        elif isinstance(decl, StaticVarDeclaration):
+            self._static_variable_from_decl(decl.decl)
         elif isinstance(decl, FuncDeclaration):
             assert not decl.is_operator, "TODO"
             self._declare_function(decl, False)
@@ -421,8 +447,18 @@ class Compiler(Transformer_WithPre):
         elif decl is not None:
             assert False, decl
 
+    def namespace_change(self, ns=None):
+        self.namespace = None if ns is None else ns.value
+
     def var_declaration(self, type, name):
         return VarDeclaration(type, name.value)
+
+    def global_var_arr_decl(self, modifier, decl):
+        if modifier.type == 'EXTERN':
+            return ExternVarDeclaration(decl)
+        elif modifier.type == 'STATIC':
+            return StaticVarDeclaration(decl)
+        assert False, modifier
 
     @v_args(inline=False)
     def func_declaration_(self, children):
@@ -496,20 +532,25 @@ class Compiler(Transformer_WithPre):
             return self._modified(modifier, def_)
         return def_
 
-    def pre_event_handler_function(self, tree, post_transform):
-        event_handler, func_def = tree.children
-        event_handler = self.transform(event_handler)
+    def pre_annotated_function(self, tree, post_transform):
+        annots, func_def = tree.children
+        annots = self.transform(annots)
         func_def = self.transform(func_def)
-        return func_def._replace(event_handler=event_handler)
+        return func_def._replace(annot=annots)
 
     def process_func_definition(self, func_def):
         func_decl = func_def.decl
         body = func_def.body
-        event_handler = func_def.event_handler
+        annot = func_def.annot
         func_sym = self._declare_function(func_decl, True)
         func = func_sym.value.get_or_create_definition()
-        if event_handler is not None:
-            self.top.preamble.add(i.EventHandler(func, event_handler))
+        namespace = self.namespace
+        if annot is not None:
+            if annot.event_handler is not None:
+                self.top.preamble.add(i.EventHandler(func, annot.event_handler))
+            if annot.namespace is not None:
+                namespace = annot.namespace
+        func.set_namespace(namespace)
         if not func_decl.is_operator and not func_decl.inline \
            and not func_decl.typespace and not func_decl.params:
             func.preamble.add(i.ExternInsn())
@@ -648,6 +689,9 @@ class Compiler(Transformer_WithPre):
             init_name = name.value
         return MemberInit(init_name, args)
 
+    def func_annotations(self, event_handler, namespace_name):
+        return event_handler._replace(namespace=namespace_name.namespace)
+
     def pre_event_handler(self, tree, post_transform):
         event, *conditions = tree.children
         event_expr = self.transform(event)
@@ -658,12 +702,15 @@ class Compiler(Transformer_WithPre):
         for condition in conditions:
             cond = self.transform(condition)
             ev_inst.add_condition(event, cond)
-        return event
+        return FuncAnnotation(event_handler=event, namespace=None)
 
     @v_args(inline=False)
     def event_condition(self, children):
         *keyparts, value = children
         return EventCondition(tuple(tok.value for tok in keyparts), value)
+
+    def namespace_name(self, name):
+        return FuncAnnotation(namespace=name.value, event_handler=None)
 
     def var_init_expr(self, expr):
         return expr
@@ -841,7 +888,7 @@ class Compiler(Transformer_WithPre):
     def seq_type_names(self, *types):
         return types
 
-    def pre_namespace_definition(self, tree, post_transform):
+    def pre_singleton_definition(self, tree, post_transform):
         name, *decls = tree.children
         type = StructuredType()
         self.add_type(name.value, type)

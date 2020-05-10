@@ -6,6 +6,8 @@ from ..nbt import NBTType
 from ..variables import VarType, ProxyEmptyException
 from ..core import BasicBlock, VisibleFunction, Preamble
 
+import commands as c
+
 def get_subclasses(cls):
     for subclass in cls.__subclasses__():
         yield from get_subclasses(subclass)
@@ -176,18 +178,25 @@ class Insn(metaclass=InsnMeta):
 
     def single_command(self):
         # self.apply should be able to run multiple times without side-effects
-        return _get_if_single_cmd(self) is not None
+        # TODO mocking a function is bad
+        return _get_if_single_cmd(self, _MockFunction()) is not None
 
-    def as_single_cmd(self):
-        return _get_if_single_cmd(self)
+    def as_single_cmd(self, func):
+        return _get_if_single_cmd(self, func)
+
+class _MockFunction:
+
+    @property
+    def namespace(self):
+        return None
 
 class _NotASingleCommandError(Exception):
     pass
 
-def _get_if_single_cmd(insn):
+def _get_if_single_cmd(insn, func):
     out = _SingleCommandWriter()
     try:
-        insn.apply(out, None)
+        insn.apply(out, func)
     except (ProxyEmptyException, _NotASingleCommandError):
         return None
     return out.cmd
@@ -209,7 +218,7 @@ class _SingleCommandWriter:
         self.cmd = cmd
 
     def allocate_temp(self):
-        return 'dummy'
+        return c.Var('dummy')
 
     def free_temp(self, tmp):
         pass
@@ -284,13 +293,13 @@ class SingleCommandInsn(Insn, metaclass=abc.ABCMeta):
         return True
 
     def apply(self, out, func):
-        out.write(self.get_cmd())
+        out.write(self.get_cmd(func))
 
-    def as_single_cmd(self):
-        return self.get_cmd()
+    def as_single_cmd(self, func):
+        return self.get_cmd(func)
 
     @abc.abstractmethod
-    def get_cmd(self):
+    def get_cmd(self, func):
         pass
 
 class PreambleOnlyInsn:

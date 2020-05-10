@@ -8,7 +8,16 @@ function main {
         $y = define i32
         $old_x = define i32
         $counter = define i32
+        $msg = text
         extern
+    }
+
+    compiletime {
+        entry:
+        text_append $msg, "fib("
+        text_append $msg, $counter
+        text_append $msg, ") = "
+        text_append $msg, $x
     }
 
     entry:
@@ -18,11 +27,6 @@ function main {
     branch :loop
 
     loop:
-    $msg = text
-    text_append $msg, "fib("
-    text_append $msg, $counter
-    text_append $msg, ") = "
-    text_append $msg, $x
     text_send $msg, $all_players
     set_command_block :post_tick
 

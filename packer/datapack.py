@@ -91,10 +91,9 @@ class DataPackWriter:
         with self.open_file('pack.mcmeta') as f:
             json.dump({ 'pack': self.metadata }, f)
 
-    def write_function(self, name_parts, command_list):
-        name = self.sanitize_name(name_parts)
-        path = os.path.join('functions', name + '.mcfunction')
-        with self.open_data(path) as f:
+    def write_function(self, nsname, command_list):
+        path = os.path.join('functions', nsname.name + '.mcfunction')
+        with self.open_data(path, namespace=nsname.namespace) as f:
             for command in command_list:
                 f.write(command)
                 f.write('\n')
@@ -107,12 +106,14 @@ class DataPackWriter:
             json.dump({ 'values': values, 'replace': replace }, f)
 
     def write_advancement(self, advancement):
-        with self.open_data(os.path.join('advancements',
-                                         advancement.name + '.json')) as f:
+        nsname = advancement.name
+        path = os.path.join('advancements', nsname.name + '.json')
+        with self.open_data(path, namespace=nsname.namespace) as f:
             json.dump(advancement.to_json(), f)
 
-    def sanitize_name(self, parts):
-        return parts # TODO
+    def write_mcc_meta(self, meta):
+        with self.open_file('__mcc__.json') as f:
+            json.dump(meta, f)
 
     def open_data(self, name, namespace=None):
         if namespace is None:
@@ -164,7 +165,7 @@ class DummyWriter:
     def close(self):
         pass
 
-    def write_function(self, name_parts, command_list):
+    def write_function(self, nsname, command_list):
         self.func_count += 1
         self.command_count += len(command_list)
 
@@ -172,6 +173,9 @@ class DummyWriter:
         pass
 
     def write_tag(self, type, name, values, replace=False, namespace=None):
+        pass
+
+    def write_mcc_meta(self, meta):
         pass
 
 class DebugWriterWrapper:
@@ -193,15 +197,15 @@ class DebugWriterWrapper:
     def close(self):
         self.writer.close()
 
-    def write_function(self, name_parts, command_list):
-        print('Function', name_parts)
+    def write_function(self, nsname, command_list):
+        print('Function', nsname.uqn)
         for cmd in command_list:
             print(' ', cmd)
         print()
-        self.writer.write_function(name_parts, command_list)
+        self.writer.write_function(nsname, command_list)
 
     def write_advancement(self, advancement):
-        print('Advancement', advancement.name)
+        print('Advancement', advancement.name.uqn)
         print(advancement.to_json())
         print()
         self.writer.write_advancement(advancement)
@@ -211,3 +215,9 @@ class DebugWriterWrapper:
         print('%s: %s' % (name, values))
         print()
         self.writer.write_tag(type, name, values, replace, namespace)
+
+    def write_mcc_meta(self, meta):
+        print('MCC Metadata')
+        print(meta)
+        print()
+        self.writer.write_mcc_meta(meta)

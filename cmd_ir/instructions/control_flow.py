@@ -30,7 +30,7 @@ class Branch(SingleCommandInsn):
             # Same restriction as Return
             assert not seq.is_function, seq
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return c.Function(self.label.global_name)
 
     def run(self):
@@ -50,12 +50,13 @@ class Call(Branch):
     argdocs = ["Label tagged as a function"]
     insn_name = 'call'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         assert self.label.is_function, self.label
-        return super().get_cmd()
+        return super().get_cmd(func)
 
 
-def make_stack_frame_from(values, out):
+def make_stack_frame_from(values, out, destns):
+    stack_move = out.namespace == destns or destns is None
     stack = NBTList(NBTType.compound)
     for val in values:
         item = NBTCompound()
@@ -80,14 +81,16 @@ def make_stack_frame_from(values, out):
         stack.append(item)
     frame = NBTCompound()
     frame.set('stack', stack)
-    out.write(c.DataModifyStack(None, None, 'append', frame))
+    out.write(c.DataModifyStack(None, None, 'append', frame, destns))
     for i, val in enumerate(values):
         if isinstance(val, Variable):
-            dest = LocalStackVariable(val.type, i)
-            # Variable has moved down to the previous stack frame
-            val.realign_frame(1)
+            dest = LocalStackVariable(val.type, destns, i)
+            if stack_move:
+                # Variable has moved down to the previous stack frame
+                val.realign_frame(1)
             val.clone_to(dest, out)
-            val.realign_frame(-1)
+            if stack_move:
+                val.realign_frame(-1)
 
 class Invoke(Insn):
     """Invokes a function."""
@@ -143,7 +146,7 @@ class Invoke(Insn):
 
         frame = self.setup_frame(out, func)
         out.write(c.Function(self.func.global_name))
-        self.destroy_frame(out, frame)
+        self.destroy_frame(out, func, frame)
 
     def setup_frame(self, out, func):
         # See also: IRFunction.configure_parameters
@@ -176,52 +179,60 @@ class Invoke(Insn):
         self.allargs_hook(allargs)
 
         if allargs:
-            make_stack_frame_from(allargs, out)
+            make_stack_frame_from(allargs, out, self.func.namespace)
 
         return registers, reg_start, args_start, ret_start, allargs
 
     def allargs_hook(self, allargs):
         pass
 
-    def destroy_frame(self, out, frame):
+    def destroy_frame(self, out, func, frame):
         registers, reg_start, args_start, ret_start, allargs = frame
+        destns = self.func.namespace
+        stack_move = out.namespace == destns or destns is None
 
         # Restore registers
         if registers:
             for i, reg in enumerate(registers):
-                src = LocalStackVariable(reg.type, reg_start + i)
-                # shouldn't need to realign because they're registers,
-                # but just to be safe
-                reg.realign_frame(1)
+                src = LocalStackVariable(reg.type, destns, reg_start + i)
+                if stack_move:
+                    # shouldn't need to realign because they're registers,
+                    # but just to be safe
+                    reg.realign_frame(1)
                 src.clone_to(reg, out)
-                reg.realign_frame(-1)
+                if stack_move:
+                    reg.realign_frame(-1)
 
         # Mutate pass-by-reference arguments
         if self.fnargs:
             for i, (ptype, ppass) in enumerate(self.func.params):
                 if ppass == 'byref':
-                    src = LocalStackVariable(ptype, args_start + i)
+                    src = LocalStackVariable(ptype, destns, args_start + i)
                     arg = self.fnargs[i]
                     assert isinstance(arg, Variable), "%s passed by value!" % arg
                     # The mutated arguments are on frame 0
                     # We want to copy them to where they were from (now frame 1)
-                    arg.realign_frame(1)
+                    if stack_move:
+                        arg.realign_frame(1)
                     src.clone_to(arg, out)
-                    arg.realign_frame(-1)
+                    if stack_move:
+                        arg.realign_frame(-1)
 
         # Copy return values into return variables
         if self.retvars:
             for i, var in enumerate(self.retvars):
                 if var is None:
                     continue
-                src = LocalStackVariable(var.type, ret_start + i)
-                var.realign_frame(1)
+                src = LocalStackVariable(var.type, destns, ret_start + i)
+                if stack_move:
+                    var.realign_frame(1)
                 src.clone_to(var, out)
-                var.realign_frame(-1)
+                if stack_move:
+                    var.realign_frame(-1)
 
         # Pop invocation frame
         if allargs:
-            out.write(c.DataRemove(c.GlobalEntity.ref, c.StackPath(STACK_HEAD)))
+            out.write(c.DataRemove(c.GlobalNBT(destns), c.StackPath(STACK_HEAD)))
 
 class DeferredInvoke(Invoke):
     """Invokes an 'open' function. i.e. a function that does not return
@@ -263,7 +274,7 @@ class DeferredInvoke(Invoke):
 
         # Write frame destruction to the trampoline function
         tr_out = CmdWriter(out.func_writer, out.temp_gen)
-        self.destroy_frame(tr_out, frame)
+        self.destroy_frame(tr_out, func, frame)
         # Clear zero tick block
         tr_out.write(_zt.clear())
         tr_out.write(_zt.reset_last_exec())
@@ -272,17 +283,18 @@ class DeferredInvoke(Invoke):
         tr_out.write(c.Function(self.retblock.global_name))
         out.func_writer.write_function(tr_name, tr_out.get_output())
 
-def _branch_apply(out, if_true, if_false, apply):
+def _branch_apply(out, ns, if_true, if_false, apply):
     inverted = not if_true
     if inverted:
         if_true, if_false = if_false, if_true
     have_false = if_false is not None
+    st = c.Var('success_tracker', ns)
     if have_false:
         # Workaround: execute store doesn't set success to 0 if failed
         # See MC-125058
         # Can't use execute store anyway because it locks the success
         # tracker. See MC-125145
-        out.write(c.SetConst(c.Var('success_tracker'), 0))
+        out.write(c.SetConst(st, 0))
     true_fn = c.Function(if_true.global_name)
     out.write(apply(c.ExecuteChain().cond('unless' if inverted else 'if'))
               .run(true_fn))
@@ -290,7 +302,7 @@ def _branch_apply(out, if_true, if_false, apply):
         false_fn = c.Function(if_false.global_name)
         out.write(c.ExecuteChain()
                   .cond('if')
-                  .score_range(c.Var('success_tracker'), c.ScoreRange(0, 0))
+                  .score_range(st, c.ScoreRange(0, 0))
                   .run(false_fn))
 
 class RangeBr(Insn):
@@ -326,8 +338,8 @@ class RangeBr(Insn):
     def apply(self, out, func):
         range = c.ScoreRange(self.min, self.max)
         with self.var.open_for_read(out) as var:
-            _branch_apply(out, self.if_true, self.if_false, lambda cond:
-                          cond.score_range(var, range))
+            _branch_apply(out, func.namespace, self.if_true, self.if_false,
+                          lambda cond: cond.score_range(var, range))
 
     def run(self):
         assert isinstance(self.var, CompilerVariable)
@@ -379,8 +391,8 @@ class CmpBr(Insn):
         }[self.op]
         with self.left.open_for_read(out) as left:
             with self.right.open_for_read(out) as right:
-                _branch_apply(out, self.if_true, self.if_false, lambda cond:
-                              cond.score(left, op, right))
+                _branch_apply(out, func.namespace, self.if_true, self.if_false,
+                              lambda cond: cond.score(left, op, right))
 
 def make_yield_tick(block, func, callback):
     tr = func.create_block('yield_trampoline')
@@ -400,9 +412,9 @@ class UtilBlockFunctions:
     def cmd_set_func(self, func):
         return c.DataMerge(self.block, self.make_set_func_nbt(func))
 
-    def cmd_set_from(self, path, entity):
+    def cmd_set_from(self, path, storage):
         return c.DataModifyFrom(self.block, c.NbtPath('Command'), 'set',
-                                entity.ref, path.subpath('.cmd'))
+                                storage, path.subpath('.cmd'))
 
     def clear(self):
         return c.DataRemove(self.block, c.NbtPath('Command'))
@@ -438,7 +450,7 @@ class SetCommandBlock(SingleCommandInsn):
     def declare(self):
         self.func.usage()
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return _ut.cmd_set_func(self.func)
 
 class ClearCommandBlock(SingleCommandInsn):
@@ -448,7 +460,7 @@ class ClearCommandBlock(SingleCommandInsn):
     argnames = ''
     insn_name = 'clear_command_block'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         return _ut.clear()
 
 class SetCommandBlockFromStack(SingleCommandInsn):
@@ -459,8 +471,9 @@ class SetCommandBlockFromStack(SingleCommandInsn):
     argnames = ''
     insn_name = 'set_command_block_from_stack'
 
-    def get_cmd(self):
-        return _ut.cmd_set_from(c.StackPath(STACK_HEAD, None), c.GlobalEntity)
+    def get_cmd(self, func):
+        storage = c.GlobalNBT(func.namespace)
+        return _ut.cmd_set_from(c.StackPath(STACK_HEAD, None), storage)
 
 class SetZeroTick(Insn):
     """Sets the special zero-tick command block to the given function
@@ -486,8 +499,8 @@ class SetZeroTick(Insn):
         if isinstance(self.ref, Variable):
             direct = self.ref._direct_nbt()
             assert direct is not None
-            path, entity = direct
-            out.write(_zt.cmd_set_from(path, entity))
+            path, storage = direct
+            out.write(_zt.cmd_set_from(path, storage))
             out.write(_zt.clear_last_exec())
         else:
             out.write(_zt.cmd_set_func(func))
@@ -503,7 +516,7 @@ class SetZeroTickFromStack(Insn):
 
     def apply(self, out, func):
         out.write(_zt.cmd_set_from(c.StackPath(STACK_HEAD, None),
-                                    c.GlobalEntity))
+                                    c.GlobalNBT(func.namespace)))
         out.write(_zt.clear_last_exec())
 
 class RunDeferredCallback(Insn):
@@ -515,7 +528,8 @@ class RunDeferredCallback(Insn):
     insn_name = 'run_deferred_callback'
 
     def apply(self, out, func):
-        out.write(_zt.cmd_set_from(c.StackFrameHead(-1), c.GlobalEntity))
+        storage = c.GlobalNBT(func.namespace)
+        out.write(_zt.cmd_set_from(c.StackFrameHead(-1), storage))
 
 
 class ClearZeroTick(Insn):
@@ -555,8 +569,9 @@ class PopStack(SingleCommandInsn):
     argnames = ''
     insn_name = 'pop_stack'
 
-    def get_cmd(self):
-        return c.DataRemove(c.GlobalEntity.ref, c.StackPath(STACK_HEAD))
+    def get_cmd(self, func):
+        storage = c.GlobalNBT(func.namespace)
+        return c.DataRemove(storage, c.StackPath(STACK_HEAD))
 
 class GetStackHead(Insn):
     """Copies the head of the global stack into the given variable. Do not use
@@ -575,7 +590,8 @@ class GetStackHead(Insn):
         # This insn does not handle the general case - only works for
         # POP opcode in assembler
         assert self.dest._direct_ref()
-        VirtualStackPointer(self.dest.type, STACK_HEAD).clone_to(self.dest, out)
+        VirtualStackPointer(self.dest.type, func.namespace, STACK_HEAD) \
+                                            .clone_to(self.dest, out)
 
 class PushStackVal(Insn):
     """Push a value to the top of the global stack."""
@@ -594,7 +610,8 @@ class PushStackVal(Insn):
             vtype = VarType.i32
             tag = NBTCompound()
             tag.set(vtype.nbt_path_key, vtype.nbt_type.new(self.value))
-            out.write(c.DataModifyStack(None, None, 'append', tag))
+            ns = func.namespace
+            out.write(c.DataModifyStack(None, None, 'append', tag, ns))
         else:
             self.value.push_to_stack(out)
 
@@ -609,10 +626,10 @@ class PushFunction(SingleCommandInsn):
     def declare(self):
         self.func.usage()
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         tag = NBTCompound()
         tag.set('cmd', FutureNBTString(c.Function(self.func.global_name)))
-        return c.DataModifyStack(None, None, 'append', tag)
+        return c.DataModifyStack(None, None, 'append', tag, self.func.namespace)
 
 class PushNewStackFrame(Insn):
     """(Internal) Create a new stackframe."""
@@ -624,4 +641,4 @@ class PushNewStackFrame(Insn):
     insn_name = 'push_stack_frame'
 
     def apply(self, out, func):
-        make_stack_frame_from(self.framevals, out)
+        make_stack_frame_from(self.framevals, out, func.namespace)

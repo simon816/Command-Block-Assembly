@@ -53,6 +53,7 @@ class EntityLocal(NativeType):
 class VirtualString(NativeType):
 
     def __init__(self, val):
+        assert type(val) == str, val
         self.val = val
 
     def __str__(self):
@@ -70,6 +71,10 @@ class FunctionLike(NativeType, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def global_name(self):
         pass
+
+    @property
+    def namespace(self):
+        return self.global_name.namespace
 
 class PlayerRef(EntityRef):
 
@@ -169,10 +174,18 @@ class PosUtilEntity(EntityRef):
     def clone(self):
         return self
 
+class ResolveEntityRef(EntityRef):
+
+    def __init__(self, res):
+        self.res = res
+
+    def as_resolve(self):
+        return self.res
+
 class GlobalEntity(EntityRef):
 
     def as_resolve(self):
-        return c.GlobalEntity
+        return c.GlobalEntity(None)
 
     def clone(self):
         return self
@@ -219,7 +232,7 @@ class AncPosVal(NativeType):
 class CmdFunction(NativeType, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
-    def as_cmd(self):
+    def as_cmd(self, func):
         pass
 
 class BlockType(c.Resolvable, NativeType):

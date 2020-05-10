@@ -15,9 +15,6 @@ class DeclareVisitor(TopVisitor):
     def visit_preamble(self, preamble):
         preamble.transform(self.visit_pre_insn)
 
-    def visit_compiletime(self, compiletime):
-        compiletime.transform_scope(self.visit_var)
-
     def visit_pre_insn(self, insn):
         insn.declare()
         return insn
@@ -36,6 +33,9 @@ class DeclareFnVisitor(FuncVisitor):
 
     def visit_preamble(self, preamble):
         preamble.transform(self.visit_pre_insn)
+
+    def visit_compiletime(self, compiletime):
+        compiletime.transform_scope(self.visit_var)
 
     def visit_pre_insn(self, insn):
         insn.declare()

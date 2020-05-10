@@ -1,4 +1,4 @@
-namespace Blocks {
+singleton Blocks {
     BlockType air;
     BlockType stone;
     BlockType granite;

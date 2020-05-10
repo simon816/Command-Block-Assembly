@@ -73,13 +73,10 @@ class SimpleOperationInsn(Insn):
         with self.dest.open_for_write(out, read=True) as ref:
             if isinstance(self.src, Variable):
                 with self.src.open_for_read(out) as srcref:
-                    scaled = self.dest.scale_other_to_this(self.src,
-                                                           srcref, out)
-                    if scaled != srcref:
-                        # TODO this is a hack because a temp is allocated
-                        srcref = c.Var(scaled)
-                    out.write(self.with_ref(ref, srcref))
-                    if scaled != srcref:
+                    scaled, is_temp = self.dest.scale_other_to_this(self.src,
+                                                                    srcref, out)
+                    out.write(self.with_ref(ref, scaled))
+                    if is_temp:
                         out.free_temp(scaled)
             else:
                 self.apply_const_src(ref, self.dest.to_int(self.src), out)
@@ -120,11 +117,10 @@ import operator
 class OnlyRefOperationInsn(SimpleOperationInsn):
 
     def apply_const_src(self, ref, val, out):
-        tmp = out.allocate_temp()
-        srcref = c.Var(tmp)
+        srcref = out.allocate_temp()
         out.write(c.SetConst(srcref, val))
         out.write(self.with_ref(ref, srcref))
-        out.free_temp(tmp)
+        out.free_temp(srcref)
 
 class AddScore(SimpleOperationInsn):
     with_ref = c.OpAdd

@@ -25,7 +25,6 @@ class TemplatedType(NativeType):
         self._late_decls.append(decl)
         # Process any already constructed types
         for args in self._memo_types.keys():
-            print(args)
             with self.with_args(compiler, args):
                 compiler.process_top_decl(compiler.transform(decl))
 

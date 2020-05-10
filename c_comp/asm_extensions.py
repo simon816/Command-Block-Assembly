@@ -25,7 +25,7 @@ class CompilerSession(Session):
         self.define_objective('memory_address', None)
 
         def pair_name(fn, pair):
-            return 'memory/%s_%d_%d' % (fn, pair.min, pair.max)
+            return c.NSName('memory/%s_%d_%d' % (fn, pair.min, pair.max))
 
         def create_function(pair, force=False):
             getter = []
@@ -72,11 +72,13 @@ class CompilerSession(Session):
             create_function(entry_point, force=True)
 
         # Redirect mem_get and mem_set to the actual entry point
+        mem_get = c.NSName('mem_get')
+        mem_set = c.NSName('mem_set')
         getter = [c.Function(pair_name('mem_get', entry_point))]
         setter = [c.Function(pair_name('mem_set', entry_point))]
-        self.scope.add_function_names(('mem_get', 'mem_set'))
-        self.add_function('mem_get', getter)
-        self.add_function('mem_set', setter)
+        self.scope.add_function_names((mem_get, mem_set))
+        self.add_function(mem_get, getter)
+        self.add_function(mem_set, setter)
 
 
     def generate_bin_tree(self, size, callback):
@@ -118,8 +120,8 @@ class FunctionRef(CmdFunction):
     def __init__(self, name):
         self.name = name
 
-    def as_cmd(self):
-        return c.Function(self.name)
+    def as_cmd(self, func):
+        return c.Function(c.NSName(self.name))
 
 class MemGetFn(RunCommand):
 

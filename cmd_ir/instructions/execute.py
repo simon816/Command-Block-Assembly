@@ -202,11 +202,13 @@ class ExecCondNBTVar(VoidApplicationInsn):
         self.var.usage_read()
 
 class ExecIfNBTVar(ExecCondNBTVar):
-    """"""
+    """Executes the rest of the chain if the NBT path to the given variable
+    exists. Note that the variable must be backed by NBT."""
     insn_name = 'exec_if_nbt_var'
     cond = 'if'
 class ExecUnlessNBTVar(ExecCondNBTVar):
-    """"""
+    """Executes the rest of the chain if the NBT path to the given variable
+    does not exist. Note that the variable must be backed by NBT."""
     insn_name = 'exec_unless_nbt_var'
     cond = 'unless'
 
@@ -426,7 +428,7 @@ class ExecRun(Insn):
                     assert self.func.is_function, self.func
                 cmd = c.Function(self.func.global_name)
             else:
-                cmd = self.func.as_cmd()
+                cmd = self.func.as_cmd(func)
             out.write(chain.run(cmd))
 
 class ExecFinish(Insn):

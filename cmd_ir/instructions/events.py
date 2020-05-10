@@ -68,7 +68,7 @@ class RevokeEventAdvancement(SingleCommandInsn):
     argdocs = ["Handler"]
     insn_name = 'revoke_event_adv'
 
-    def get_cmd(self):
+    def get_cmd(self, func):
         # Advancement name = handler func name
         return c.Advancement('revoke', Selector.new(SelectorType.SENDER) \
                              .as_resolve(),
