@@ -1,3 +1,5 @@
+from ._core import Insn
+
 from .basic import *
 from .control_flow import *
 from .events import *

@@ -1,24 +1,31 @@
+import abc
 import contextlib
-from ._core import MultiOpen
+
+from ._core import MultiOpen, READ, WRITE
 from ..core_types import NativeType
+from ..variables import Variable
+from ..holder import HolderHolder
 import commands as c
 
-class ExecChain(NativeType, MultiOpen):
+class ExecChain(HolderHolder, NativeType, MultiOpen):
 
     def __init__(self):
         self.components = []
-        super().__init__()
+        MultiOpen.__init__(self)
+        HolderHolder.__init__(self)
 
     def add(self, component):
         self.components.append(component)
-        return len(self.components) - 1
+        component.add_holder(self)
 
-    def set(self, index, component):
-        self.components[index] = component
+    def declare(self):
+        for component in self.components:
+            component.declare()
 
     def clone(self):
         copy = ExecChain()
-        copy.components.extend(c.clone() for c in self.components)
+        for c in self.components:
+            copy.add(c.clone())
         return copy
 
     @contextlib.contextmanager
@@ -29,7 +36,24 @@ class ExecChain(NativeType, MultiOpen):
         yield chain
         self.close()
 
-class ExecStoreSpec(NativeType):
+class ExecComponent(metaclass=abc.ABCMeta):
+
+    def declare(self):
+        pass
+
+    def add_holder(self, chain):
+        pass
+
+    @abc.abstractmethod
+    def apply(self, exec, chain, out):
+        pass
+
+    @abc.abstractmethod
+    def clone(self):
+        pass
+
+
+class ExecStoreSpec(ExecComponent, NativeType):
     pass
 
 class ExecStoreEntitySpec(ExecStoreSpec):
@@ -52,16 +76,23 @@ class ExecStoreEntitySpec(ExecStoreSpec):
 class ExecStoreVarSpec(ExecStoreSpec):
 
     def __init__(self, var):
-        self.var = var
+        self._var = var
+
+    def declare(self):
+        self.holder.val.usage_write()
+
+    def add_holder(self, chain):
+        self.holder = chain.hold(self._var, Variable, WRITE)
 
     def apply(self, out, chain, storechain):
-        with chain.context(self.var.open_for_write(out)) as ref:
+        var = self.holder.val
+        with chain.context(var.open_for_write(out)) as ref:
             if storechain.store_type == 'success':
                 out.write(c.SetConst(ref, 0)) # MC-125058
             storechain.score(ref)
 
     def clone(self):
-        return ExecStoreVarSpec(self.var.clone())
+        return ExecStoreVarSpec(self.holder.clone().val)
 
 class ExecStoreBossbarSpec(ExecStoreSpec):
 
@@ -75,11 +106,17 @@ class ExecStoreBossbarSpec(ExecStoreSpec):
     def clone(self):
         return ExecStoreBossbarSpec(self.bar.clone(), self.attr)
 
-class ExecComponentStore:
+class ExecComponentStore(ExecComponent):
 
     def __init__(self, spec, storetype):
         self.spec = spec
         self.storetype = storetype
+
+    def add_holder(self, chain):
+        self.spec.add_holder(chain)
+
+    def declare(self):
+        self.spec.declare()
 
     def apply(self, exec, chain, out):
         self.spec.apply(out, exec, chain.store(self.storetype))
@@ -87,7 +124,7 @@ class ExecComponentStore:
     def clone(self):
         return ExecComponentStore(self.spec.clone(), self.storetype)
 
-class ExecComponentCondBlock:
+class ExecComponentCondBlock(ExecComponent):
 
     def __init__(self, condtype, pos, block):
         self.condtype = condtype
@@ -101,7 +138,7 @@ class ExecComponentCondBlock:
         return ExecComponentCondBlock(self.condtype, self.pos.clone(),
                                       self.block.clone())
 
-class ExecComponentCondBlocks:
+class ExecComponentCondBlocks(ExecComponent):
 
     def __init__(self, condtype, begin, end, dest, type):
         self.condtype = condtype
@@ -120,37 +157,50 @@ class ExecComponentCondBlocks:
                                        self.end.clone(), self.dest.clone(),
                                        self.type)
 
-class ExecComponentCondVar:
+class ExecComponentCondVar(ExecComponent):
 
     def __init__(self, condtype, var, min, max):
         self.condtype = condtype
-        self.var = var
+        self._var = var
         self.min = min
         self.max = max
 
+    def declare(self):
+        self.holder.val.usage_read()
+
+    def add_holder(self, chain):
+        self.holder = chain.hold(self._var, Variable)
+
     def apply(self, exec, chain, out):
-        with exec.context(self.var.open_for_read(out)) as ref:
+        var = self.holder.val
+        with exec.context(var.open_for_read(out)) as ref:
             chain.cond(self.condtype).score_range(ref,
                                   c.ScoreRange(self.min, self.max))
 
     def clone(self):
-        return ExecComponentCondVar(self.condtype, self.var.clone(), self.min,
-                                    self.max)
+        var = self.holder.clone().val
+        return ExecComponentCondVar(self.condtype, var, self.min, self.max)
 
-class ExecComponentCondNBTVar:
+class ExecComponentCondNBTVar(ExecComponent):
 
     def __init__(self, condtype, var):
         self.condtype = condtype
-        self.var = var
+        self._var = var
+
+    def add_holder(self, chain):
+        self.holder = chain.hold(self._var)
+
+    def declare(self):
+        self.holder.val.usage_read()
 
     def apply(self, exec, chain, out):
-        path, storage = self.var._direct_nbt()
+        path, storage = self.holder.val._direct_nbt()
         chain.cond(self.condtype).data(storage, path)
 
     def clone(self):
-        return ExecComponentCondNBTVar(self.condtype, self.var.clone())
+        return ExecComponentCondNBTVar(self.condtype, self.holder.clone().val)
 
-class ExecComponentCondEntity:
+class ExecComponentCondEntity(ExecComponent):
 
     def __init__(self, condtype, target):
         self.condtype = condtype
@@ -162,7 +212,7 @@ class ExecComponentCondEntity:
     def clone(self):
         return ExecComponentCondEntity(self.condtype, self.target.clone())
 
-class ExecComponentCondCmp:
+class ExecComponentCondCmp(ExecComponent):
 
     def __init__(self, condtype, left, op, right):
         self.condtype = condtype
@@ -170,19 +220,28 @@ class ExecComponentCondCmp:
         self.op = op
         self.right = right
 
+    def add_holder(self, chain):
+        self.lholder = chain.hold(self.left)
+        self.rholder = chain.hold(self.right)
+
+    def declare(self):
+        self.lholder.val.usage_read()
+        self.rholder.val.usage_read()
+
     def apply(self, exec, chain, out):
         op = {
             'lt': '<', 'le': '<=', 'eq': '=', 'ge': '>=', 'gt': '>'
         }[self.op]
-        with exec.context(self.left.open_for_read(out)) as left:
-            with exec.context(self.right.open_for_read(out)) as right:
+        with exec.context(self.lholder.val.open_for_read(out)) as left:
+            with exec.context(self.rholder.val.open_for_read(out)) as right:
                 chain.cond(self.condtype).score(left, op, right)
 
     def clone(self):
-        return ExecComponentCondCmp(self.condtype, self.left.clone(), self.op,
-                                    self.right.clone())
+        left = self.lholder.clone().val
+        right = self.rholder.clone().val
+        return ExecComponentCondCmp(self.condtype, left, self.op, right)
 
-class ExecComponentAsEntity:
+class ExecComponentAsEntity(ExecComponent):
 
     def __init__(self, target):
         self.target = target
@@ -193,7 +252,7 @@ class ExecComponentAsEntity:
     def clone(self):
         return ExecComponentAsEntity(self.target.clone())
 
-class ExecComponentAtEntity:
+class ExecComponentAtEntity(ExecComponent):
 
     def __init__(self, target):
         self.target = target
@@ -204,7 +263,7 @@ class ExecComponentAtEntity:
     def clone(self):
         return ExecComponentAtEntity(self.target.clone())
 
-class ExecComponentAtEntityPos:
+class ExecComponentAtEntityPos(ExecComponent):
 
     def __init__(self, target):
         self.target = target
@@ -215,7 +274,7 @@ class ExecComponentAtEntityPos:
     def clone(self):
         return ExecComponentAtEntityPos(self.target.clone())
 
-class ExecComponentAtPos:
+class ExecComponentAtPos(ExecComponent):
 
     def __init__(self, pos):
         self.pos = pos
@@ -226,7 +285,7 @@ class ExecComponentAtPos:
     def clone(self):
         return ExecComponentAtPos(self.pos.clone())
 
-class ExecComponentAlign:
+class ExecComponentAlign(ExecComponent):
 
     def __init__(self, axes):
         self.axes = axes
@@ -237,7 +296,7 @@ class ExecComponentAlign:
     def clone(self):
         return self
 
-class ExecComponentFacePos:
+class ExecComponentFacePos(ExecComponent):
 
     def __init__(self, pos):
         self.pos = pos
@@ -248,7 +307,7 @@ class ExecComponentFacePos:
     def clone(self):
         return ExecComponentFacePos(self.pos.clone())
 
-class ExecComponentFaceEntity:
+class ExecComponentFaceEntity(ExecComponent):
 
     def __init__(self, target, feature):
         self.target = target
@@ -260,7 +319,7 @@ class ExecComponentFaceEntity:
     def clone(self):
         return ExecComponentFaceEntity(self.target.clone(), self.feature)
 
-class ExecComponentRotate:
+class ExecComponentRotate(ExecComponent):
 
     def __init__(self, y, x):
         self.y = y
@@ -272,7 +331,7 @@ class ExecComponentRotate:
     def clone(self):
         return self
 
-class ExecComponentRotatedAsEntity:
+class ExecComponentRotatedAsEntity(ExecComponent):
 
     def __init__(self, target):
         self.target = target
@@ -283,7 +342,7 @@ class ExecComponentRotatedAsEntity:
     def clone(self):
         return ExecComponentRotatedAsEntity(self.target.clone())
 
-class ExecComponentAnchor:
+class ExecComponentAnchor(ExecComponent):
 
     def __init__(self, anchor):
         self.anchor = anchor

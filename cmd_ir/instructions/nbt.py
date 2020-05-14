@@ -1,7 +1,7 @@
 """NBT Instructions"""
 
-from ._core import (ConstructorInsn, VoidApplicationInsn, SingleCommandInsn,
-                    Insn, READ, WRITE)
+from ._core import (ConstructorInsn, CompileTimeInsn, SingleCommandInsn,
+                    RuntimeHeldInsn, READ, WRITE)
 from ..core_types import (VirtualString,
                           Opt,
                           BlockRef,
@@ -10,9 +10,9 @@ from ..core_types import (VirtualString,
                           EntitySelection,
                           FunctionLike,
                           )
-from ..variables import (Variable, VarType, VirtualNbtVariable,
+from ..variables import (Variable, VarType, SubNbtVariable,
                          EntityLocalNbtVariable)
-from ..nbt import NBTType, NBTList, NBTBase, NBTCompound, FutureNBTString
+from ..nbt import NBTType, NBTList, NBTBase, NBTCompound, FuncRefNBTString
 
 import commands as c
 
@@ -47,7 +47,7 @@ class CreateNBTList(ConstructorInsn):
     def construct(self):
         return NBTList(self.list_type)
 
-class NBTListAppend(VoidApplicationInsn):
+class NBTListAppend(CompileTimeInsn):
     """Appends the given NBT value to an NBT list."""
 
     args = [NBTList, NBTBase]
@@ -56,7 +56,7 @@ class NBTListAppend(VoidApplicationInsn):
                "be compatible with the list's element type"]
     insn_name = 'nbt_list_append'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.list.append(self.value)
 
 class CreateNBTCompound(ConstructorInsn):
@@ -68,7 +68,7 @@ class CreateNBTCompound(ConstructorInsn):
     def construct(self):
         return NBTCompound()
 
-class NBTCompoundSet(VoidApplicationInsn):
+class NBTCompoundSet(CompileTimeInsn):
     """Sets a key to the given NBT value in a compound tag."""
 
     args = [NBTCompound, str, NBTBase]
@@ -76,10 +76,10 @@ class NBTCompoundSet(VoidApplicationInsn):
     argdocs = ["Compound to set on", "Key", "Value"]
     insn_name = 'nbt_compound_set'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.var.set(self.name, self.val)
 
-class NBTDataMerge(SingleCommandInsn):
+class NBTDataMerge(SingleCommandInsn, RuntimeHeldInsn):
     """Merge the given NBT compound with a block or entity."""
 
     args = [(BlockRef, EntityRef), NBTCompound]
@@ -87,6 +87,10 @@ class NBTDataMerge(SingleCommandInsn):
     argdocs = ["Block or entity to merge with", "Compound tag holding values" \
                + " to merge into the target"]
     insn_name = 'nbt_data_merge'
+    held = 'data'
+
+    def declare(self):
+        self.data.declare()
 
     def get_cmd(self, func):
         if isinstance(self.target, BlockRef):
@@ -134,26 +138,23 @@ class FuncRefInsn(ConstructorInsn):
     insn_name = 'func_ref'
     rettype = NBTCompound
 
-    def declare(self):
-        self.func.usage()
-
     def construct(self):
         tag = NBTCompound()
-        self._set_value(tag)
+        tag.set('cmd', FuncRefNBTString(self.func))
         return tag
 
-    def _set_value(self, tag):
-        tag.set('cmd', FutureNBTString(c.Function(self.func.global_name)))
-
-    def changed(self, prop):
-        self._set_value(self._value)
-
-class _ModifyNBTVariable(Insn):
+class _ModifyNBTVariable(RuntimeHeldInsn):
 
     args = [Variable, (NBTBase, Variable)]
     access = [WRITE, READ]
     argnames = 'var nbt'
     argdocs = ["Variable to set the value on", "NBT value"]
+
+    @property
+    def held(self):
+        if isinstance(self.nbt, Variable):
+            return ''
+        return 'nbt'
 
     def validate(self):
         assert self.var.type is VarType.nbt
@@ -162,6 +163,8 @@ class _ModifyNBTVariable(Insn):
         self.var.usage_write()
         if isinstance(self.nbt, Variable):
             self.nbt.usage_read()
+        else:
+            self.nbt.declare()
 
     def apply(self, out, func):
         direct = self.var._direct_nbt()
@@ -212,9 +215,6 @@ class NBTDataRemove(SingleCommandInsn):
         path, storage = direct
         return c.DataRemove(storage, path)
 
-# TODO problem if this is not in the preamble - optimizers may make
-# copies and change the root, but the constructed variable is not updated
-# Solution - make it preamble only
 class NBTSubPath(ConstructorInsn):
     """Create a derivative NBT variable from a sub-path of a parent NBT
     variable."""
@@ -227,16 +227,7 @@ class NBTSubPath(ConstructorInsn):
 
     def construct(self):
         assert self.root.type is VarType.nbt
-        # Needs to be getter because path might not be resolved at this stage
-        return VirtualNbtVariable(self.vartype, self._getdirect,
-                                  self.root.realign_frame)
-
-    def _getdirect(self):
-        path, storage = self.root._direct_nbt()
-        return path.subpath(str(self.path)), storage
-
-    def declare(self):
-        self.root.usage_read()
+        return SubNbtVariable(self.vartype, self.root, str(self.path))
 
 class EntityLocalNBT(ConstructorInsn):
     """Create an NBT variable that references an entity's NBT"""
@@ -252,7 +243,7 @@ class EntityLocalNBT(ConstructorInsn):
         path = c.NbtPath(str(self.path))
         return EntityLocalNbtVariable(self.type, self.target, path)
 
-class NBTModifyValueInsn(SingleCommandInsn):
+class NBTModifyValueInsn(SingleCommandInsn, RuntimeHeldInsn):
     """Modify a block or entity at the given NBT path, performing the
     given action, with the given NBT value."""
 
@@ -262,10 +253,14 @@ class NBTModifyValueInsn(SingleCommandInsn):
     argdocs = ["Block or entity to modify", "NBT path to modify", "Action, " + \
                "one of: append|insert|merge|prepend|set", "Value"]
     insn_name = 'nbt_modify_val'
+    held = 'source'
 
     def validate(self):
         assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
         assert self.action != 'insert', "TODO"
+
+    def declare(self):
+        self.source.declare()
 
     def get_cmd(self, func):
         if isinstance(self.target, BlockRef):

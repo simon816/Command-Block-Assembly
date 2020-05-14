@@ -60,11 +60,11 @@ class Insn(metaclass=InsnMeta):
                     cls.__lookup_cache[clz.insn_name] = clz
         return cls.__lookup_cache.get(name)
 
-    preamble_safe = False
+    is_preamble_insn = False
+    is_compiletime = False
+    is_runtime = False
     is_block_terminator = False
     is_branch = False
-    is_virtual = False
-    inline_copyable = True
 
     def __init__(self, *args):
         assert hasattr(self.__class__, 'insn_name'), self
@@ -97,18 +97,20 @@ class Insn(metaclass=InsnMeta):
     def validate(self):
         pass
 
-    def activate(self, seq):
+    def declare(self):
         pass
 
-    def declare(self):
+    @abc.abstractmethod
+    def activate(self, seq):
         pass
 
     @abc.abstractmethod
     def apply(self, out, func):
         pass
 
-    def run(self):
-        assert False, "Not a compile time instruction, %s" % self
+    @abc.abstractmethod
+    def run(self, ev):
+        pass
 
     def serialize_args(self, holder):
         def serialize(val):
@@ -256,22 +258,76 @@ class QueryResult:
     def accepts(self, vtype):
         return issubclass(vtype, self.__type)
 
-class VoidApplicationInsn(Insn):
+class PreambleInsn(Insn, metaclass=abc.ABCMeta):
 
-    is_virtual = True
+    is_preamble_insn = True
+    top_preamble_only = False
+    func_preamble_only = False
 
     def apply(self, out, func):
+        assert False, "This is a preamble insn, %s" % self
+
+    def run(self, ev):
+        assert False, "Not a compile time instruction, %s" % self
+
+    def activate(self, seq):
+        assert isinstance(seq, Preamble), self
+        if self.top_preamble_only:
+            assert seq.is_top, self
+        if self.func_preamble_only:
+            assert not seq.is_top, self
+        return self.preapply(seq)
+
+    @abc.abstractmethod
+    def preapply(self, preamble):
         pass
 
-class ConstructorInsn(VoidApplicationInsn):
+    def postapply(self, out, func):
+        pass
+
+class CompileTimeInsn(Insn):
+
+    is_compiletime = True
+
+    def declare(self):
+        assert False, "Compile time insns don't declare"
+
+    def activate(self, seq):
+        pass
+
+    def apply(self, out, func):
+        assert False, "This is a compiletime insn, %s" % self
+
+class RuntimeInsn(Insn):
+
+    is_runtime = True
+
+    def activate(self, seq):
+        pass
+
+    def run(self, ev):
+        assert False, "Not a compile time instruction, %s" % self
+
+class RunAndCompileInsn(Insn):
+
+    is_compiletime = True
+    is_runtime = True
+
+    def activate(self, seq):
+        pass
+
+class ConstructorInsn(PreambleInsn, metaclass=abc.ABCMeta):
 
     args = []
     argnames = ''
-    preamble_safe = True
 
-    def activate(self, seq):
+    def preapply(self, preamble):
         self._value = self.construct()
         return self._value
+
+    @abc.abstractmethod
+    def construct(self):
+        pass
 
     def copy(self):
         cpy = super().copy()
@@ -287,7 +343,7 @@ class ConstructorInsn(VoidApplicationInsn):
                             super().serialize(holder))
 
 # Instruction that always returns one command
-class SingleCommandInsn(Insn, metaclass=abc.ABCMeta):
+class SingleCommandInsn(RuntimeInsn, metaclass=abc.ABCMeta):
 
     def single_command(self):
         return True
@@ -301,23 +357,6 @@ class SingleCommandInsn(Insn, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def get_cmd(self, func):
         pass
-
-class PreambleOnlyInsn:
-
-    preamble_safe = True
-    top_preamble_only = False
-    func_preamble_only = False
-
-    def single_command(self):
-        return False
-
-    def activate(self, seq):
-        assert isinstance(seq, Preamble), self
-        if self.top_preamble_only:
-            assert seq.is_top, self
-        if self.func_preamble_only:
-            assert not seq.is_top, self
-        return super().activate(seq)
 
 class TupleQueryResult(QueryResult):
 
@@ -351,3 +390,22 @@ class MultiOpen:
 
     def close(self):
         self.ctxstack.close()
+
+class RuntimeHeldInsn(RuntimeInsn):
+
+    def copy_with_changes(self, mapping):
+        insn = super().copy_with_changes(mapping)
+        if not self.held:
+            return insn
+        for attr in self.held.split(' '):
+            getattr(insn, attr).apply_mapping(mapping)
+        return insn
+
+    def query(self, argtype):
+        yield from super().query(argtype)
+        if not self.held:
+            return
+        for attr in self.held.split(' '):
+            for h in getattr(self, attr)._holders:
+                if h.matches(argtype):
+                    yield h

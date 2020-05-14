@@ -1,6 +1,6 @@
 """Events"""
 
-from ._core import PreambleOnlyInsn, ConstructorInsn, Insn, SingleCommandInsn
+from ._core import PreambleInsn, ConstructorInsn, SingleCommandInsn
 from ..core_types import (VirtualString,
                           EventRef,
                           Selector,
@@ -9,7 +9,7 @@ from ..core_types import (VirtualString,
 from ..core import IRFunction, VisibleFunction
 import commands as c
 
-class CreateEvent(PreambleOnlyInsn, ConstructorInsn):
+class CreateEvent(ConstructorInsn):
     """Creates a new event object."""
 
     args = [VirtualString]
@@ -22,11 +22,9 @@ class CreateEvent(PreambleOnlyInsn, ConstructorInsn):
     def construct(self):
         return EventRef(str(self.event_name))
 
-class AddEventCondition(PreambleOnlyInsn, Insn):
+class AddEventCondition(PreambleInsn):
     """Add a condition to an event that must be true for the event handler
     to be invoked."""
-
-    is_virtual = True
 
     args = [EventRef, VirtualString, VirtualString]
     argnames = 'event path value'
@@ -35,12 +33,11 @@ class AddEventCondition(PreambleOnlyInsn, Insn):
     top_preamble_only = True
     insn_name = 'add_event_condition'
 
-    def apply(self, out, top):
-        # TODO put in activate
+    def preapply(self, preamble):
         self.event.add_condition(tuple(str(self.path).split('.')),
                                  str(self.value))
 
-class EventHandler(PreambleOnlyInsn, Insn):
+class EventHandler(PreambleInsn):
     """Add an event handler to the given event specification."""
 
     args = [IRFunction, EventRef]
@@ -49,14 +46,14 @@ class EventHandler(PreambleOnlyInsn, Insn):
     top_preamble_only = True
     insn_name = 'event_handler'
 
-    def activate(self, seq):
+    def preapply(self, preamble):
         if self.event.name not in ['minecraft:tick', 'minecraft:load']:
             self.handler.add_advancement_revoke(self.event)
 
     def declare(self):
         self.handler.usage()
 
-    def apply(self, out, top):
+    def postapply(self, out, top):
         assert not self.handler.is_inline
         out.write_event_handler(self.handler, self.event)
 
@@ -74,7 +71,7 @@ class RevokeEventAdvancement(SingleCommandInsn):
                              .as_resolve(),
                            'only', c.AdvancementRef(self.func.global_name))
 
-class SetupInsn(PreambleOnlyInsn, Insn):
+class SetupInsn(PreambleInsn):
     """Tags a function as being part of the setup phase. It is called whenever
     the datapack is reloaded."""
 
@@ -87,6 +84,9 @@ class SetupInsn(PreambleOnlyInsn, Insn):
     def declare(self):
         self.func.usage()
 
-    def apply(self, out, top):
+    def preapply(self, preamble):
+        pass
+
+    def postapply(self, out, top):
         assert not self.func.is_inline
         out.write_setup_function(self.func)

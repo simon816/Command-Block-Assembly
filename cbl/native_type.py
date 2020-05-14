@@ -89,9 +89,6 @@ class NativeType:
     def coerce_to(self, compiler, container, type):
         if type == self:
             return container
-        if isinstance(type, IRVarType):
-            from .containers import Temporary
-            return Temporary(type, as_var(container))
         return None
 
 class IRTypeInstance:

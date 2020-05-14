@@ -52,9 +52,9 @@ type point {
 inline void point::print() {
     Text output;
     output += "(";
-    output += this.x;
+    output.append_ref(this.x);
     output += ", ";
-    output += this.y;
+    output.append_ref(this.y);
     output += ")";
     output.send_to_all();
 }
@@ -200,13 +200,17 @@ Here is a hello world program:
 function hello {
     preamble {
         $all_players = selector a
+        $message = text
         extern
     }
 
+    compiletime {
+        entry:
+        text_append $message, "Hello, "
+        text_append $message, "World!"
+    }
+
     begin:
-    $message = text
-    text_append $message, "Hello, "
-    text_append $message, "World!"
     text_send $message, $all_players
     ret
 }
@@ -275,18 +279,19 @@ To get an idea of the hierarchy of components, here is a diagram:
 |           |               |
 |    CBL    |   Assembler   |
 |           |               |
-+-----------+---------------+   +-----------------------+
-|                           |   |                       |
-|        Command IR         |   |  Datapack Definition  |
-|                           |   +---------|-------------+
-+---------------------------+----+        |
-|                                |  <-----+-----+
-|      Command Abstraction       |              |
-+--------------------------------+---------+    |
-|             Minecraft Commands           |    v
-+------------------------------------------+------------+
-|                       Datapack                        |
++-----------+---------------+
+|                           |
+|        Command IR         |
+|                           |
++---------------------------+----+
+|                                |
+|      Command Abstraction       |       +--------------+
++--------------------------------+-------|   Datapack   |
+|          Minecraft Commands            |  Definition  |
++----------------------------------------+--------------+
+|                           Datapack                    |
 +-------------------------------------------------------+
+
 ```
 
 # Running MCC

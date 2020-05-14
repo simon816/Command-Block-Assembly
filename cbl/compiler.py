@@ -300,6 +300,24 @@ class Compiler(Transformer_WithPre):
     def add_insn(self, insn):
         self.block.add(insn)
 
+    @contextlib.contextmanager
+    def compiletime(self):
+        old_func = self.func
+        old_block = self.block
+        fn = self.func
+        from cmd_ir.core import CompileTimeFunction
+        in_compiletime = isinstance(fn, CompileTimeFunction)
+        # If we're already inside a compiletime function, remain within
+        # the current one instead of creating a new one
+        if not in_compiletime:
+            self.func = fn = fn.create_compiletime()
+            self.block = fn.create_block('entry')
+        yield
+        if not in_compiletime:
+            fn.run_and_return()
+            self.func = old_func
+            self.block = old_block
+
     def type(self, name):
         t = self.types.lookup(name)
         assert t is not None, "Unknown type %s" % name
@@ -332,7 +350,7 @@ class Compiler(Transformer_WithPre):
         return self.func.preamble.add(insn, True, namehint)
 
     def insn_def(self, insn):
-        return self.block.define(insn)
+        return self.define(None, insn)
 
     def _declare_macro(self, name, ret_type, params, body, compiletime):
         fn_type = MacroType(ret_type, params, body, compiletime)
@@ -969,8 +987,9 @@ class Compiler(Transformer_WithPre):
         loop_var, iter_expr, body = tree.children
         iter_expr = self.transform(iter_expr)
         assert iter_expr.type == self.type('EntityCollection'), iter_expr
-        exec = self.block.define(i.CreateExec())
-        self.block.add(i.ExecAsEntity(exec, iter_expr.value.selector))
+        exec = self.insn_def(i.CreateExec())
+        with self.compiletime():
+            self.add_insn(i.ExecAsEntity(exec, iter_expr.value.selector))
         trampoline = self.func.create_block('for_in_trampoline')
         break_flag = self.create_var('brkflg', VarType.i32)
         self.block.add(i.SetScore(break_flag, 0))
@@ -1050,20 +1069,21 @@ class Compiler(Transformer_WithPre):
         expr, body = tree.children
         expr = self.transform(expr)
         if expr.type == self.type('Entity'):
-            entity = expr.value
+            entity = self.entity_support.get_pointer(expr)
         elif expr.type == self.type('EntityPos'):
             entity = expr.value.ptr
         else:
             assert False, expr.type
         block, sender = entity.as_entity()
-        exec = block.define(i.CreateExec())
-        block.add(i.ExecAtEntity(exec, sender))
+        exec = self.insn_def(i.CreateExec())
+        with self.compiletime():
+            self.add_insn(i.ExecAtEntity(exec, sender))
         # TODO bring back relative offsets
         if expr.type == self.type('EntityPos') and False:
-            x = block.define(i.CreateRelPos(expr.value.xoff))
-            y = block.define(i.CreateRelPos(expr.value.yoff))
-            z = block.define(i.CreateRelPos(expr.value.zoff))
-            pos = block.define(i.CreatePosition(x, y, z))
+            x = self.insn_def(i.CreateRelPos(expr.value.xoff))
+            y = self.insn_def(i.CreateRelPos(expr.value.yoff))
+            z = self.insn_def(i.CreateRelPos(expr.value.zoff))
+            pos = self.insn_def(i.CreatePosition(x, y, z))
             block.add(i.ExecuteAtPos(exec, pos))
         body_block = self.create_block('exec_at')
         body_block.set_is_function()

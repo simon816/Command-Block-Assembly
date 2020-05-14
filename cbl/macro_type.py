@@ -33,19 +33,5 @@ class MacroType(FunctionType, Invokable):
             return ret
 
     def __expand_compiletime(self, compiler, args):
-        old_func = compiler.func
-        old_block = compiler.block
-        fn = compiler.func
-        from cmd_ir.core import CompileTimeFunction
-        in_compiletime = isinstance(fn, CompileTimeFunction)
-        # If we're expanding inside a compiletime function, expand in-place
-        # rather than create a new function
-        if not in_compiletime:
-            compiler.func = fn = fn.create_compiletime()
-            compiler.block = fn.create_block('entry')
-        ret = self.__expand_macro(compiler, args)
-        if not in_compiletime:
-            fn.run_and_return()
-            compiler.func = old_func
-            compiler.block = old_block
-        return ret
+        with compiler.compiletime():
+            return self.__expand_macro(compiler, args)

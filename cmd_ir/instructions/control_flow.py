@@ -1,17 +1,17 @@
 """Control Flow"""
 
-from ._core import (Insn, SingleCommandInsn, READ, WRITE, VoidApplicationInsn,
-                    TupleQueryResult, STACK_HEAD)
+from ._core import (RuntimeInsn, RunAndCompileInsn, SingleCommandInsn,
+                    READ, WRITE, TupleQueryResult, STACK_HEAD)
 from ..core import BasicBlock, VisibleFunction, FunctionLike, CmdWriter
 from ..core_types import (Opt,
                           )
 from ..variables import (Variable, VarType, LocalStackVariable,
                          VirtualStackPointer, CompilerVariable)
-from ..nbt import (NBTBase, NBTList, NBTType, NBTCompound, FutureNBTString,
+from ..nbt import (NBTBase, NBTList, NBTType, NBTCompound, FuncRefNBTString,
                    NBTByte)
 import commands as c
 
-class Branch(SingleCommandInsn):
+class Branch(RunAndCompileInsn, SingleCommandInsn):
     """Unconditionally branch to the given label."""
 
     args = [BasicBlock]
@@ -33,8 +33,8 @@ class Branch(SingleCommandInsn):
     def get_cmd(self, func):
         return c.Function(self.label.global_name)
 
-    def run(self):
-        self.label.run()
+    def run(self, ev):
+        ev.jump(self.label)
 
     def serialize(self, holder):
         if self.label == self.label._func._exitblock:
@@ -47,6 +47,7 @@ class Call(Branch):
     label has been executed."""
 
     is_block_terminator = False
+    is_compiletime = False
     argdocs = ["Label tagged as a function"]
     insn_name = 'call'
 
@@ -92,7 +93,7 @@ def make_stack_frame_from(values, out, destns):
             if stack_move:
                 val.realign_frame(-1)
 
-class Invoke(Insn):
+class Invoke(RuntimeInsn):
     """Invokes a function."""
 
     args = [VisibleFunction, Opt(tuple), Opt(tuple)]
@@ -254,9 +255,8 @@ class DeferredInvoke(Invoke):
         self.retblock.usage()
 
     def allargs_hook(self, allargs):
-        tr_name = self.retblock._name + '/trampoline'
         tr_nbt = NBTCompound()
-        tr_nbt.set('cmd', FutureNBTString(c.Function(tr_name)))
+        tr_nbt.set('cmd', FuncRefNBTString(self.__tr))
         # Stick callback on the end of the stackframe
         allargs.append(tr_nbt)
 
@@ -265,8 +265,9 @@ class DeferredInvoke(Invoke):
         self.func.validate_args(self.fnargs, self.retvars)
 
         # Create a trampoline function as the real callback
-        tr_name = self.retblock._name + '/trampoline'
-        out.func_writer.write_func_table([tr_name])
+        tr = self.func.create_block(self.retblock._name + '/trampoline')
+        self.__tr = tr
+        out.func_writer.write_func_table([tr.global_name])
 
         # Setup frame and call function as before
         frame = self.setup_frame(out, func)
@@ -281,7 +282,7 @@ class DeferredInvoke(Invoke):
 
         # Finally, make the trampoline bounce to the desired callback
         tr_out.write(c.Function(self.retblock.global_name))
-        out.func_writer.write_function(tr_name, tr_out.get_output())
+        out.func_writer.write_function(tr.global_name, tr_out.get_output())
 
 def _branch_apply(out, ns, if_true, if_false, apply):
     inverted = not if_true
@@ -305,7 +306,7 @@ def _branch_apply(out, ns, if_true, if_false, apply):
                   .score_range(st, c.ScoreRange(0, 0))
                   .run(false_fn))
 
-class RangeBr(Insn):
+class RangeBr(RunAndCompileInsn):
     """Branch to a label depending on the value of a variable."""
 
     args = [Variable, Opt(int), Opt(int), Opt(FunctionLike), Opt(FunctionLike)]
@@ -341,7 +342,7 @@ class RangeBr(Insn):
             _branch_apply(out, func.namespace, self.if_true, self.if_false,
                           lambda cond: cond.score_range(var, range))
 
-    def run(self):
+    def run(self, ev):
         assert isinstance(self.var, CompilerVariable)
         val = self.var.get_value()
         matches = True
@@ -350,11 +351,11 @@ class RangeBr(Insn):
         if self.max is not None:
             matches &= val <= self.max
         if matches and self.if_true:
-            self.if_true.run()
+            ev.jump(self.if_true)
         elif not matches and self.if_false:
-            self.if_false.run()
+            ev.jump(self.if_false)
 
-class CmpBr(Insn):
+class CmpBr(RunAndCompileInsn):
     """Compare two variables and jump depending on the comparison."""
 
     args = [Variable, str, Variable, Opt(FunctionLike), Opt(FunctionLike)]
@@ -394,6 +395,20 @@ class CmpBr(Insn):
                 _branch_apply(out, func.namespace, self.if_true, self.if_false,
                               lambda cond: cond.score(left, op, right))
 
+    def run(self, ev):
+        assert isinstance(self.left, CompilerVariable)
+        assert isinstance(self.right, CompilerVariable)
+        left = self.left.get_value()
+        right = self.right.get_value()
+        import operator
+        op = getattr(operator, self.op)
+        if op(left, right):
+            if self.if_true:
+                ev.jump(self.if_true)
+        else:
+            if self.if_false:
+                ev.jump(self.if_false)
+
 def make_yield_tick(block, func, callback):
     tr = func.create_block('yield_trampoline')
     tr.add(ClearCommandBlock())
@@ -406,7 +421,7 @@ class UtilBlockFunctions:
 
     def make_set_func_nbt(self, func):
         tag = NBTCompound()
-        tag.set('Command', FutureNBTString(c.Function(func.global_name)))
+        tag.set('Command', FuncRefNBTString(func))
         return tag
 
     def cmd_set_func(self, func):
@@ -475,7 +490,7 @@ class SetCommandBlockFromStack(SingleCommandInsn):
         storage = c.GlobalNBT(func.namespace)
         return _ut.cmd_set_from(c.StackPath(STACK_HEAD, None), storage)
 
-class SetZeroTick(Insn):
+class SetZeroTick(RuntimeInsn):
     """Sets the special zero-tick command block to the given function
     or function reference. The function will execute in the same tick once
     control is returned to the command block."""
@@ -505,7 +520,7 @@ class SetZeroTick(Insn):
         else:
             out.write(_zt.cmd_set_func(func))
 
-class SetZeroTickFromStack(Insn):
+class SetZeroTickFromStack(RuntimeInsn):
     """Sets the special zero-tick command block to execute the function
     at the top of the global stack. The function will execute in the same
     tick once control is returned to the command block."""
@@ -519,7 +534,7 @@ class SetZeroTickFromStack(Insn):
                                     c.GlobalNBT(func.namespace)))
         out.write(_zt.clear_last_exec())
 
-class RunDeferredCallback(Insn):
+class RunDeferredCallback(RuntimeInsn):
     """(Internal) Copies the callback function from the stackframe
     into the zero tick block. See deferred_invoke."""
 
@@ -532,7 +547,7 @@ class RunDeferredCallback(Insn):
         out.write(_zt.cmd_set_from(c.StackFrameHead(-1), storage))
 
 
-class ClearZeroTick(Insn):
+class ClearZeroTick(RuntimeInsn):
     """Remove any function from the special zero-tick command block and clear
     the zero-tick flag."""
 
@@ -545,7 +560,7 @@ class ClearZeroTick(Insn):
         out.write(_zt.reset_last_exec())
 
 # application defined in IRFunction
-class Return(VoidApplicationInsn):
+class Return(RunAndCompileInsn):
     """Return from a function."""
 
     args = []
@@ -556,6 +571,12 @@ class Return(VoidApplicationInsn):
 
     def activate(self, seq):
         assert not seq.is_function, seq
+
+    def apply(self, out, func):
+        pass
+
+    def run(self, ev):
+        ev.stop()
 
 # Direct stack manipulation. Should not be called when stack-based variables
 # may be possible (stack frames will be unaligned)
@@ -573,7 +594,7 @@ class PopStack(SingleCommandInsn):
         storage = c.GlobalNBT(func.namespace)
         return c.DataRemove(storage, c.StackPath(STACK_HEAD))
 
-class GetStackHead(Insn):
+class GetStackHead(RuntimeInsn):
     """Copies the head of the global stack into the given variable. Do not use
     in normal circumstances, instead use paramteter passing."""
 
@@ -593,7 +614,7 @@ class GetStackHead(Insn):
         VirtualStackPointer(self.dest.type, func.namespace, STACK_HEAD) \
                                             .clone_to(self.dest, out)
 
-class PushStackVal(Insn):
+class PushStackVal(RuntimeInsn):
     """Push a value to the top of the global stack."""
 
     args = [(Variable, int)]
@@ -628,10 +649,10 @@ class PushFunction(SingleCommandInsn):
 
     def get_cmd(self, func):
         tag = NBTCompound()
-        tag.set('cmd', FutureNBTString(c.Function(self.func.global_name)))
+        tag.set('cmd', FuncRefNBTString(self.func))
         return c.DataModifyStack(None, None, 'append', tag, self.func.namespace)
 
-class PushNewStackFrame(Insn):
+class PushNewStackFrame(RuntimeInsn):
     """(Internal) Create a new stackframe."""
 
     args = [tuple]

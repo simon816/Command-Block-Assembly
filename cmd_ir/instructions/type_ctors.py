@@ -1,6 +1,6 @@
 """Type Constructor Instructions"""
 
-from ._core import ConstructorInsn, VoidApplicationInsn, PreambleOnlyInsn
+from ._core import ConstructorInsn, CompileTimeInsn
 from ..core_types import (SelectorType,
                           Selector,
                           VirtualString,
@@ -41,7 +41,7 @@ class CreateSelector(ConstructorInsn):
     def serialize_args(self, holder):
         return [self.type.letter]
 
-class SetSelector(VoidApplicationInsn):
+class SetSelector(CompileTimeInsn):
     """Sets a selector key to the given value."""
 
     args = [Selector, str, VirtualString]
@@ -49,10 +49,10 @@ class SetSelector(VoidApplicationInsn):
     argdocs = ["Selector", "Key", "Value"]
     insn_name = 'set_selector'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.sel.set(self.key, str(self.value))
 
-class SelectScoreRange(VoidApplicationInsn):
+class SelectScoreRange(CompileTimeInsn):
     """Adds a score range parameter to the selector."""
 
     args = [Selector, EntityLocal, Opt(int), Opt(int)]
@@ -64,10 +64,10 @@ class SelectScoreRange(VoidApplicationInsn):
     def validate(self):
         assert self.min is not None or self.max is not None
 
-    def activate(self, seq):
+    def run(self, ev):
         self.sel.set_score_range(self.score.obj_ref, self.min, self.max)
 
-class SelectNbt(VoidApplicationInsn):
+class SelectNbt(CompileTimeInsn):
     """Adds an NBT specification to the selector. Candidate entities must have
     the NBT value specified in the given NBT value."""
 
@@ -77,7 +77,7 @@ class SelectNbt(VoidApplicationInsn):
                "Value that candidate entities must match"]
     insn_name = 'sel_nbt'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.sel.set_nbt(str(self.path), self.val)
 
 class CreatePosition(ConstructorInsn):
@@ -129,7 +129,7 @@ class BlockInsn(ConstructorInsn):
     def construct(self):
         return BlockType(str(self.block_id))
 
-class AddBlockPropInsn(VoidApplicationInsn):
+class AddBlockPropInsn(CompileTimeInsn):
     """Adds a property to the block reference."""
 
     args = [BlockType, str, VirtualString]
@@ -137,10 +137,10 @@ class AddBlockPropInsn(VoidApplicationInsn):
     argdocs = ["Block", "Property name", "Property value"]
     insn_name = 'add_block_prop'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.block.add_prop(self.key, self.value)
 
-class SetBlockNBT(VoidApplicationInsn):
+class SetBlockNBT(CompileTimeInsn):
     """Sets NBT data to a block reference."""
 
     args = [BlockType, NBTCompound]
@@ -148,7 +148,7 @@ class SetBlockNBT(VoidApplicationInsn):
     argdocs = ["Block", "NBT value"]
     insn_name = 'set_block_nbt'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.block.set_nbt(self.nbt)
 
 class ItemInsn(ConstructorInsn):
@@ -163,7 +163,7 @@ class ItemInsn(ConstructorInsn):
     def construct(self):
         return ItemType(str(self.item_id))
 
-class AddItemPropInsn(VoidApplicationInsn):
+class AddItemPropInsn(CompileTimeInsn):
     """Adds an NBT value to the item properties."""
 
     args = [ItemType, NBTCompound]
@@ -171,7 +171,7 @@ class AddItemPropInsn(VoidApplicationInsn):
     argdocs = ["Item", "NBT value"]
     insn_name = 'add_item_prop'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.item.add_nbt(self.nbtprop)
 
 class CreateEntityLocalAccess(ConstructorInsn):
@@ -219,7 +219,7 @@ class CreateCommand(ConstructorInsn):
     def construct(self):
         return RawCommand(str(self.cmd))
 
-class CreateTeamInsn(PreambleOnlyInsn, ConstructorInsn):
+class CreateTeamInsn(ConstructorInsn):
     """Creates a team reference."""
 
     args = [str, Opt(TextObject)]
@@ -230,13 +230,9 @@ class CreateTeamInsn(PreambleOnlyInsn, ConstructorInsn):
     top_preamble_only = True
 
     def construct(self):
-        return TeamRef(self.name)
+        return TeamRef(self.name, self.display)
 
-    def apply(self, out, top):
-        out.write_team(self.name, self.display.to_component(out) \
-                       if self.display is not None else None)
-
-class CreateBossbarInsn(PreambleOnlyInsn, ConstructorInsn):
+class CreateBossbarInsn(ConstructorInsn):
     """Creates a bossbar reference."""
 
     args = [str, TextObject]
@@ -249,10 +245,7 @@ class CreateBossbarInsn(PreambleOnlyInsn, ConstructorInsn):
     def construct(self):
         return BossbarRef(self.name)
 
-    def apply(self, out, top):
-        out.write_bossbar(self.name, self.display.to_component(out))
-
-class DefineVariable(PreambleOnlyInsn, ConstructorInsn):
+class DefineVariable(ConstructorInsn):
     """Creates a local variable of the given variable type."""
 
     args = [VarType]
@@ -266,13 +259,7 @@ class DefineVariable(PreambleOnlyInsn, ConstructorInsn):
     def construct(self):
         return LocalVariable(self.type)
 
-    def apply(self, out, func):
-        ref = self._value._direct_ref()
-        if ref is not None:
-            name = ref.objective.objective
-            out.write_objective(name, None)
-
-class CompileOnlyVariable(PreambleOnlyInsn, ConstructorInsn):
+class CompileOnlyVariable(ConstructorInsn):
     """Creates a local variable of the given variable type."""
 
     args = [VarType]
@@ -286,10 +273,7 @@ class CompileOnlyVariable(PreambleOnlyInsn, ConstructorInsn):
     def construct(self):
         return CompilerVariable(self.type)
 
-    def apply(self, out, func):
-        pass
-
-class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
+class DefineGlobal(ConstructorInsn):
     """Creates a global variable of the given variable type."""
 
     args = [VarType, str, Opt(VirtualString)]
@@ -308,17 +292,6 @@ class DefineGlobal(PreambleOnlyInsn, ConstructorInsn):
         ns = None if self.namespace is None else self.namespace.val
         return GlobalVariable(self.type, is_extern, ns)
 
-    def apply(self, out, func):
-        ref = self._value._direct_ref()
-        if ref is not None:
-            name = ref.objective.objective
-            out.write_objective(name, None)
-        nbt = self._value._direct_nbt()
-        if nbt is not None:
-            path, storage = nbt
-            initval = self.type.nbt_type.new(self.type.default_val).serialize()
-            out.write_global_nbt(storage, path, initval)
-
 class ParameterInsn(DefineVariable):
     """Add a required parameter of a given type to a function."""
 
@@ -326,7 +299,6 @@ class ParameterInsn(DefineVariable):
     argnames = 'type passtype'
     argdocs = ["Parameter type", "Parameter pass type (byref or byval)"]
     insn_name = 'parameter'
-    inline_copyable = False
 
     def validate(self):
         assert self.passtype in ('byref', 'byval')
@@ -345,7 +317,6 @@ class ReturnVarInsn(DefineVariable):
 
     argdocs = ["Return type"]
     insn_name = 'return'
-    inline_copyable = False
 
     def construct(self):
         return ReturnVariable(self.type)
@@ -355,7 +326,7 @@ class ReturnVarInsn(DefineVariable):
         seq.holder.add_return(self.type)
         return var
 
-class DefineObjective(PreambleOnlyInsn, ConstructorInsn):
+class DefineObjective(ConstructorInsn):
     """Creates a new objective reference, optionally with some criteria."""
 
     args = [VirtualString, Opt(VirtualString)]
@@ -366,8 +337,5 @@ class DefineObjective(PreambleOnlyInsn, ConstructorInsn):
     top_preamble_only = True
 
     def construct(self):
-        return EntityLocal(str(self.name))
-
-    def apply(self, out, top):
-        out.write_objective(str(self.name),
-                            str(self.criteria) if self.criteria else None)
+        criteria = str(self.criteria) if self.criteria else None
+        return EntityLocal(str(self.name), criteria)

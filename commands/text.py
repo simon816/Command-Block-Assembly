@@ -67,11 +67,10 @@ class TextNBTComponent(TextComponent):
     def __init__(self, storage, path):
         assert isinstance(storage, NBTStorable)
         assert isinstance(path, Path)
-        self.storage = entity
+        self.storage = storage
         self.path = path
 
     def resolve(self, scope):
-        assert self.entity.is_single_entity(scope)
         obj = {'nbt': self.path.resolve(scope) }
         obj.update(self.storage.as_text(scope))
         return obj

@@ -39,8 +39,9 @@ class ArrayType(NativeType):
     def _init_array(self, compiler, var):
         array = compiler.insn_def(i.CreateNBTList(self.nbt_type))
         init_val = self._init_val(compiler)
-        for _ in range(self.size):
-            compiler.add_insn(i.NBTListAppend(array, init_val))
+        with compiler.compiletime():
+            for _ in range(self.size):
+                compiler.add_insn(i.NBTListAppend(array, init_val))
         compiler.add_insn(i.NBTAssign(var, array))
 
     def _init_val(self, compiler):
@@ -140,13 +141,13 @@ class ArraySupport:
     @staticmethod
     def _gen_getter(block, indexvar, indexval, arr, retvar):
         path = i.VirtualString('[%d]' % indexval)
-        path_var = block.define(i.NBTSubPath(arr, path, retvar.type))
+        path_var = block._func.preamble.define(i.NBTSubPath(arr, path, retvar.type))
         block.add(i.SetScore(retvar, path_var))
 
     @staticmethod
     def _gen_setter(block, indexvar, indexval, arr, value):
         path = i.VirtualString('[%d]' % indexval)
-        path_var = block.define(i.NBTSubPath(arr, path, value.type))
+        path_var = block._func.preamble.define(i.NBTSubPath(arr, path, value.type))
         block.add(i.SetScore(path_var, value))
 
     @staticmethod

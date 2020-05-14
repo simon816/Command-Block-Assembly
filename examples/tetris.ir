@@ -7,14 +7,14 @@ preamble {
     $row = global i32, internal, NULL
     $offset = global i32, internal, NULL
     $rotation = global i32, internal, NULL
-    
+
     $mode = global i32, internal, NULL
     $can_fit = global i32, internal, NULL
-    
+
     $random = global i32, internal, NULL
-    
+
     setupfn @setup0
-    
+
     $startpos = position 202, 56, -33
     $leverpos = position 206, 57, -9
     $rotatepos = position 206, 57, -11
@@ -38,6 +38,17 @@ function display_seek {
         $tmp0 = define i32
         $row1 = parameter i32, byval
         $col1 = parameter i32, byval
+        $e = execute
+        $e2 = execute
+
+        $p0 = position $rel0, $rel0, $rel1
+        $p1 = position $rel1, $rel0, $rel0
+    }
+
+    compiletime {
+    entry:
+        exec_at_entity $e, $pos_util
+        exec_at_entity $e2, $pos_util
     }
 
     entry:
@@ -48,32 +59,26 @@ function display_seek {
     $tmp0 = $row1
     $row1 -= 1
     rangebr $tmp0, 0, 0, :whilecol, :moverow
-    
+
     whilecol:
     $tmp0 = $col1
     $col1 -= 1
     rangebr $tmp0, 0, 0, :end, :movecol
 
     moverow:
-    $e = execute
-    exec_at_entity $e, $pos_util
     exec_run $e, :tp0
     branch :whilerow
 
     movecol:
-    $e2 = execute
-    exec_at_entity $e2, $pos_util
     exec_run $e2, :tp1
     branch :whilecol
-    
+
     [function] tp0:
-    $p0 = position $rel0, $rel0, $rel1
     teleport $pos_util, $p0
 
     [function] tp1:
-    $p1 = position $rel1, $rel0, $rel0
     teleport $pos_util, $p1
-    
+
     end:
     ret
 
@@ -83,6 +88,67 @@ function set1 {
 
     preamble {
         $p0 = position $rel0, $rel0, $rel0
+        $e0 = execute
+        $spec = exec_store_var $can_fit
+        $pos0 = position $rel0, $rel0, $rel0
+        $black = block "black_wool"
+        $e1 = execute
+        $e2 = execute
+        $e3 = execute
+        $e4 = execute
+        $e5 = execute
+        $e6 = execute
+        $e7 = execute
+        $e8 = execute
+        $e9 = execute
+        $e10 = execute
+        $e11 = execute
+        $e12 = execute
+        $e13 = execute
+        $e14 = execute
+        $e15 = execute
+        $e16 = execute
+
+        $block0 = block "white_wool"
+        $block1 = block "orange_wool"
+        $block2 = block "magenta_wool"
+        $block3 = block "light_blue_wool"
+        $block4 = block "yellow_wool"
+        $block5 = block "lime_wool"
+        $block6 = block "pink_wool"
+        $block7 = block "gray_wool"
+        $block8 = block "light_gray_wool"
+        $block9 = block "cyan_wool"
+        $block10 = block "purple_wool"
+        $block11 = block "blue_wool"
+        $block12 = block "brown_wool"
+        $block13 = block "green_wool"
+        $block14 = block "red_wool"
+        $block15 = block "black_wool"
+    }
+
+    compiletime {
+        entry:
+        exec_at_entity $e0, $pos_util
+        exec_store $e0, success, $spec
+        exec_if_block $e0, $pos0, $black
+
+        exec_at_entity $e1, $pos_util
+        exec_at_entity $e2, $pos_util
+        exec_at_entity $e3, $pos_util
+        exec_at_entity $e4, $pos_util
+        exec_at_entity $e5, $pos_util
+        exec_at_entity $e6, $pos_util
+        exec_at_entity $e7, $pos_util
+        exec_at_entity $e8, $pos_util
+        exec_at_entity $e9, $pos_util
+        exec_at_entity $e10, $pos_util
+        exec_at_entity $e11, $pos_util
+        exec_at_entity $e12, $pos_util
+        exec_at_entity $e13, $pos_util
+        exec_at_entity $e14, $pos_util
+        exec_at_entity $e15, $pos_util
+        exec_at_entity $e16, $pos_util
     }
 
     entry:
@@ -92,16 +158,9 @@ function set1 {
     rangebr $can_fit, 0, 0, :end, :do_can_fit
 
     do_can_fit:
-    $e0 = execute
-    exec_at_entity $e0, $pos_util
-    $spec = exec_store_var $can_fit
-    exec_store $e0, success, $spec
-    $pos0 = position $rel0, $rel0, $rel0
-    $black = block "black_wool"
-    exec_if_block $e0, $pos0, $black
     exec_finish $e0
     branch :end
-    
+
     do_set0:
     rangebr $color, 0, 0, :set_white, :do_set1
     do_set1:
@@ -134,167 +193,119 @@ function set1 {
     rangebr $color, 14, 14, :set_red, :do_set15
     do_set15:
     rangebr $color, 15, 15, :set_black, :end
-    
+
     set_white:
-    $e1 = execute
-    exec_at_entity $e1, $pos_util
     exec_run $e1, :set_white0
     branch :end
-    
+
     [function] set_white0:
-    $block0 = block "white_wool"
     setblock $p0, $block0
-    
+
     set_orange:
-    $e2 = execute
-    exec_at_entity $e2, $pos_util
     exec_run $e2, :set_orange0
     branch :end
 
     [function] set_orange0:
-    $block1 = block "orange_wool"
     setblock $p0, $block1
-    
+
     set_magenta:
-    $e3 = execute
-    exec_at_entity $e3, $pos_util
     exec_run $e3, :set_magenta0
     branch :end
 
     [function] set_magenta0:
-    $block2 = block "magenta_wool"
     setblock $p0, $block2
-    
+
     set_light_blue:
-    $e4 = execute
-    exec_at_entity $e4, $pos_util
     exec_run $e4, :set_light_blue0
     branch :end
 
     [function] set_light_blue0:
-    $block3 = block "light_blue_wool"
     setblock $p0, $block3
-    
+
     set_yellow:
-    $e5 = execute
-    exec_at_entity $e5, $pos_util
     exec_run $e5, :set_yellow0
     branch :end
 
     [function] set_yellow0:
-    $block4 = block "yellow_wool"
     setblock $p0, $block4
-    
+
     set_lime:
-    $e6 = execute
-    exec_at_entity $e6, $pos_util
     exec_run $e6, :set_lime0
     branch :end
 
     [function] set_lime0:
-    $block5 = block "lime_wool"
     setblock $p0, $block5
-    
+
     set_pink:
-    $e7 = execute
-    exec_at_entity $e7, $pos_util
     exec_run $e7, :set_pink0
     branch :end
 
     [function] set_pink0:
-    $block6 = block "pink_wool"
     setblock $p0, $block6
-    
+
     set_grey:
-    $e8 = execute
-    exec_at_entity $e8, $pos_util
     exec_run $e8, :set_grey0
     branch :end
 
     [function] set_grey0:
-    $block7 = block "gray_wool"
     setblock $p0, $block7
-    
+
     set_light_grey:
-    $e9 = execute
-    exec_at_entity $e9, $pos_util
     exec_run $e9, :set_light_grey0
     branch :end
 
     [function] set_light_grey0:
-    $block8 = block "light_gray_wool"
     setblock $p0, $block8
-    
+
     set_cyan:
-    $e10 = execute
-    exec_at_entity $e10, $pos_util
     exec_run $e10, :set_cyan0
     branch :end
 
     [function] set_cyan0:
-    $block9 = block "cyan_wool"
     setblock $p0, $block9
-    
+
     set_purple:
-    $e11 = execute
-    exec_at_entity $e11, $pos_util
     exec_run $e11, :set_purple0
     branch :end
 
     [function] set_purple0:
-    $block10 = block "purple_wool"
     setblock $p0, $block10
-    
+
     set_blue:
-    $e12 = execute
-    exec_at_entity $e12, $pos_util
     exec_run $e12, :set_blue0
     branch :end
 
     [function] set_blue0:
-    $block11 = block "blue_wool"
     setblock $p0, $block11
-    
+
     set_brown:
-    $e13 = execute
-    exec_at_entity $e13, $pos_util
     exec_run $e13, :set_brown0
     branch :end
 
     [function] set_brown0:
-    $block12 = block "brown_wool"
     setblock $p0, $block12
-    
+
     set_green:
-    $e14 = execute
-    exec_at_entity $e14, $pos_util
     exec_run $e14, :set_green0
     branch :end
 
     [function] set_green0:
-    $block13 = block "green_wool"
     setblock $p0, $block13
-    
+
     set_red:
-    $e15 = execute
-    exec_at_entity $e15, $pos_util
     exec_run $e15, :set_red0
     branch :end
 
     [function] set_red0:
-    $block14 = block "red_wool"
     setblock $p0, $block14
-    
+
     set_black:
-    $e16 = execute
-    exec_at_entity $e16, $pos_util
     exec_run $e16, :set_black0
     branch :end
 
     [function] set_black0:
-    $block15 = block "black_wool"
     setblock $p0, $block15
-    
+
     end:
     ret
 }
@@ -306,6 +317,41 @@ function draw_shape {
         $rel2 = rel_pos 2
         $relm2 = rel_pos -2
         $relm1 = rel_pos -1
+        $e0 = execute
+        $e1 = execute
+        $e2 = execute
+        $e3 = execute
+        $e4 = execute
+        $e5 = execute
+        $e6 = execute
+        $e7 = execute
+        $e8 = execute
+        $e9 = execute
+
+        $pos0 = position $rel0, $rel0, $rel1
+        $pos1 = position $rel1, $rel0, $rel0
+        $pos2 = position $rel2, $rel0, $rel0
+        $pos3 = position $rel0, $rel0, $rel2
+        $pos4 = position $relm2, $rel0, $rel1
+        $pos5 = position $rel0, $rel0, $relm1
+        $pos6 = position $rel1, $rel0, $relm1
+        $pos7 = position $relm1, $rel0, $rel1
+        $pos8 = position $relm1, $rel0, $relm1
+        $pos9 = position $relm1, $rel0, $rel0
+    }
+
+    compiletime {
+        entry:
+        exec_at_entity $e0, $pos_util
+        exec_at_entity $e1, $pos_util
+        exec_at_entity $e2, $pos_util
+        exec_at_entity $e3, $pos_util
+        exec_at_entity $e4, $pos_util
+        exec_at_entity $e5, $pos_util
+        exec_at_entity $e6, $pos_util
+        exec_at_entity $e7, $pos_util
+        exec_at_entity $e8, $pos_util
+        exec_at_entity $e9, $pos_util
     }
 
     entry:
@@ -318,7 +364,7 @@ function draw_shape {
     rangebr $shape_id, 5, 5, :shape_z, NULL
     rangebr $shape_id, 6, 6, :shape_j, NULL
     ret
-    
+
     [function] shape_i:
     rangebr $rotation, 0, 0, :shape_i_0, NULL
     rangebr $rotation, 1, 1, :shape_i_1, NULL
@@ -346,7 +392,7 @@ function draw_shape {
     [function] shape_i_2:
     call :move_2_0_0
     call :shape_i_0
-    
+
     [function] shape_i_3:
     call :move_0_0_2
     call :shape_i_1
@@ -356,7 +402,7 @@ function draw_shape {
     rangebr $rotation, 1, 1, :shape_l_1, NULL
     rangebr $rotation, 2, 2, :shape_l_2, NULL
     rangebr $rotation, 3, 3, :shape_l_3, NULL
-    
+
     [function] shape_l_0:
     invoke @set1, NULL, NULL
     call :move_0_0_1
@@ -542,95 +588,65 @@ function draw_shape {
     invoke @set1, NULL, NULL
     call :move_0_0_1
     invoke @set1, NULL, NULL
-    
+
     [function] move_0_0_1:
-    $e0 = execute
-    exec_at_entity $e0, $pos_util
     exec_run $e0, :tp_0_0_1
 
     [function] move_1_0_0:
-    $e1 = execute
-    exec_at_entity $e1, $pos_util
     exec_run $e1, :tp_1_0_0
 
     [function] move_2_0_0:
-    $e2 = execute
-    exec_at_entity $e2, $pos_util
     exec_run $e2, :tp_2_0_0
 
     [function] move_0_0_2:
-    $e3 = execute
-    exec_at_entity $e3, $pos_util
     exec_run $e3, :tp_0_0_2
 
     [function] move_m2_0_1:
-    $e4 = execute
-    exec_at_entity $e4, $pos_util
     exec_run $e4, :tp_m2_0_1
 
     [function] move_0_0_m1:
-    $e5 = execute
-    exec_at_entity $e5, $pos_util
     exec_run $e5, :tp_0_0_m1
 
     [function] move_1_0_m1:
-    $e6 = execute
-    exec_at_entity $e6, $pos_util
     exec_run $e6, :tp_1_0_m1
 
     [function] move_m1_0_1:
-    $e7 = execute
-    exec_at_entity $e7, $pos_util
     exec_run $e7, :tp_m1_0_1
 
     [function] move_m1_0_m1:
-    $e8 = execute
-    exec_at_entity $e8, $pos_util
     exec_run $e8, :tp_m1_0_m1
 
     [function] move_m1_0_0:
-    $e9 = execute
-    exec_at_entity $e9, $pos_util
     exec_run $e9, :tp_m1_0_0
-    
+
     [function] tp_0_0_1:
-    $pos0 = position $rel0, $rel0, $rel1
     teleport $pos_util, $pos0
 
     [function] tp_1_0_0:
-    $pos1 = position $rel1, $rel0, $rel0
     teleport $pos_util, $pos1
 
     [function] tp_2_0_0:
-    $pos2 = position $rel2, $rel0, $rel0
     teleport $pos_util, $pos2
 
     [function] tp_0_0_2:
-    $pos3 = position $rel0, $rel0, $rel2
     teleport $pos_util, $pos3
 
     [function] tp_m2_0_1:
-    $pos4 = position $relm2, $rel0, $rel1
     teleport $pos_util, $pos4
 
     [function] tp_0_0_m1:
-    $pos5 = position $rel0, $rel0, $relm1
     teleport $pos_util, $pos5
 
     [function] tp_1_0_m1:
-    $pos6 = position $rel1, $rel0, $relm1
     teleport $pos_util, $pos6
 
     [function] tp_m1_0_1:
-    $pos7 = position $relm1, $rel0, $rel1
     teleport $pos_util, $pos7
 
     [function] tp_m1_0_m1:
-    $pos8 = position $relm1, $rel0, $relm1
     teleport $pos_util, $pos8
 
     [function] tp_m1_0_0:
-    $pos9 = position $relm1, $rel0, $rel0
     teleport $pos_util, $pos9
 }
 
@@ -650,7 +666,7 @@ function can_shape_fit_next {
     ret0:
     $ret = 0
     ret
-    
+
     draw:
     $mode = 1
     $can_fit = 1
@@ -663,13 +679,13 @@ function can_shape_fit_next {
 }
 
 function next_random {
-    
+
     preamble {
         $tmp0 = define i32
         $tmp1 = define i32
         $tmp2 = define i32
     }
-    
+
     entry:
     $tmp1 = 9
     $tmp0 = $random
@@ -687,11 +703,11 @@ function next_random {
     $random += $row
     $random += $offset
     ret
-    
+
 }
 
 function new_shape {
-    
+
     preamble {
         $one = nbt_val int, 1
         $two = nbt_val int, 2
@@ -702,47 +718,50 @@ function new_shape {
         $thirteen = nbt_val int, 13
         $fourteen = nbt_val int, 14
         $eleven = nbt_val int, 11
-        
+
         $shape_heights = define nbt
         $shape_width = define nbt
         $shape_colors = define nbt
-        
-        $tmp0 = define i32
-    }
-    
-    entry:
-    $shape_heights_arr = nbt_list int
-    $shape_width_arr = nbt_list int
-    $shape_colors_arr = nbt_list int
 
-    nbt_list_append $shape_heights_arr, $four
-    nbt_list_append $shape_heights_arr, $three
-    nbt_list_append $shape_heights_arr, $two
-    nbt_list_append $shape_heights_arr, $three
-    nbt_list_append $shape_heights_arr, $three
-    nbt_list_append $shape_heights_arr, $three
-    nbt_list_append $shape_heights_arr, $three
-    
-    nbt_list_append $shape_width_arr, $one
-    nbt_list_append $shape_width_arr, $two
-    nbt_list_append $shape_width_arr, $two
-    nbt_list_append $shape_width_arr, $two
-    nbt_list_append $shape_width_arr, $two
-    nbt_list_append $shape_width_arr, $two
-    nbt_list_append $shape_width_arr, $two
-    
-    nbt_list_append $shape_colors_arr, $nine
-    nbt_list_append $shape_colors_arr, $one
-    nbt_list_append $shape_colors_arr, $four
-    nbt_list_append $shape_colors_arr, $ten
-    nbt_list_append $shape_colors_arr, $thirteen
-    nbt_list_append $shape_colors_arr, $fourteen
-    nbt_list_append $shape_colors_arr, $eleven
-    
+        $tmp0 = define i32
+
+        $shape_heights_arr = nbt_list int
+        $shape_width_arr = nbt_list int
+        $shape_colors_arr = nbt_list int
+    }
+
+    compiletime {
+        entry:
+        nbt_list_append $shape_heights_arr, $four
+        nbt_list_append $shape_heights_arr, $three
+        nbt_list_append $shape_heights_arr, $two
+        nbt_list_append $shape_heights_arr, $three
+        nbt_list_append $shape_heights_arr, $three
+        nbt_list_append $shape_heights_arr, $three
+        nbt_list_append $shape_heights_arr, $three
+
+        nbt_list_append $shape_width_arr, $one
+        nbt_list_append $shape_width_arr, $two
+        nbt_list_append $shape_width_arr, $two
+        nbt_list_append $shape_width_arr, $two
+        nbt_list_append $shape_width_arr, $two
+        nbt_list_append $shape_width_arr, $two
+        nbt_list_append $shape_width_arr, $two
+
+        nbt_list_append $shape_colors_arr, $nine
+        nbt_list_append $shape_colors_arr, $one
+        nbt_list_append $shape_colors_arr, $four
+        nbt_list_append $shape_colors_arr, $ten
+        nbt_list_append $shape_colors_arr, $thirteen
+        nbt_list_append $shape_colors_arr, $fourteen
+        nbt_list_append $shape_colors_arr, $eleven
+    }
+
+    entry:
     nbt_assign $shape_heights, $shape_heights_arr
     nbt_assign $shape_width, $shape_width_arr
     nbt_assign $shape_colors, $shape_colors_arr
-    
+
     invoke @next_random, NULL, NULL
     $shape_id = $random
     $tmp0 = 7
@@ -750,7 +769,7 @@ function new_shape {
     invoke @array_get, ($shape_heights, $shape_id), ($height)
     invoke @array_get, ($shape_width, $shape_id), ($width)
     invoke @array_get, ($shape_colors, $shape_id), ($color)
-    
+
     $row = 0
     $offset = 5
     $rotation = 0
@@ -764,6 +783,15 @@ function array_get {
         $indexparam = parameter i32, byval
         $value = return i32
         $index = define i32
+
+        $value0 = nbtsubpath $arr, "[0]", i32
+        $value1 = nbtsubpath $arr, "[1]", i32
+        $value2 = nbtsubpath $arr, "[2]", i32
+        $value3 = nbtsubpath $arr, "[3]", i32
+        $value4 = nbtsubpath $arr, "[4]", i32
+        $value5 = nbtsubpath $arr, "[5]", i32
+        $value6 = nbtsubpath $arr, "[6]", i32
+        $value7 = nbtsubpath $arr, "[7]", i32
     }
 
     entry:
@@ -772,35 +800,27 @@ function array_get {
     ret
 
     [function] get_0_0:
-    $value0 = nbtsubpath $arr, "[0]", i32
     $value = $value0
 
     [function] get_1_1:
-    $value1 = nbtsubpath $arr, "[1]", i32
     $value = $value1
 
     [function] get_2_2:
-    $value2 = nbtsubpath $arr, "[2]", i32
     $value = $value2
 
     [function] get_3_3:
-    $value3 = nbtsubpath $arr, "[3]", i32
     $value = $value3
 
     [function] get_4_4:
-    $value4 = nbtsubpath $arr, "[4]", i32
     $value = $value4
 
     [function] get_5_5:
-    $value5 = nbtsubpath $arr, "[5]", i32
     $value = $value5
 
     [function] get_6_6:
-    $value6 = nbtsubpath $arr, "[6]", i32
     $value = $value6
 
     [function] get_7_7:
-    $value7 = nbtsubpath $arr, "[7]", i32
     $value = $value7
 
     [function] get_0_1:
@@ -840,44 +860,49 @@ function clear_line {
         $tmp0 = define i32
         $relm1 = rel_pos -1
         $relm10 = rel_pos -10
+        $e1 = execute
+        $e2 = execute
+
+        $src0 = position $rel0, $rel0, $relm1
+        $src1 = position $relm10, $rel0, $relm1
+        $dest = position $relm10, $rel0, $rel0
+        $pos0 = position $rel0, $rel0, $relm1
+        $pos1 = position $rel0, $rel0, $rel1
     }
-    
+
+    compiletime {
+        entry:
+        exec_at_entity $e1, $pos_util
+        exec_at_entity $e2, $pos_util
+    }
+
     entry:
     branch :loop
 
     loop:
-    $e1 = execute
-    exec_at_entity $e1, $pos_util
     exec_run $e1, :seek
     $shift += 1
     $tmp0 = 20
     $tmp0 -= $row
     $tmp0 -= $shift
     rangebr $tmp0, 1, NULL, :loop, :decrement
-    
+
     decrement:
     $tmp0 = $shift
     $shift -= 1
     rangebr $tmp0, 0, 0, :end, :seek_return
-    
+
     [function] seek:
-    $src0 = position $rel0, $rel0, $relm1
-    $src1 = position $relm10, $rel0, $relm1
-    $dest = position $relm10, $rel0, $rel0
     clone $src0, $src1, $dest
-    $pos0 = position $rel0, $rel0, $relm1
     teleport $pos_util, $pos0
-    
+
     seek_return:
-    $e2 = execute
-    exec_at_entity $e2, $pos_util
     exec_run $e2, :tp1
     branch :decrement
-    
+
     [function] tp1:
-    $pos1 = position $rel0, $rel0, $rel1
     teleport $pos_util, $pos1
-    
+
     end:
     ret
 }
@@ -889,65 +914,74 @@ function check_line {
         $j = define i32
         $tmp0 = define i32
         $has_black = define i32
+
+        $e = execute
+        $spec = exec_store_var $tmp0
+        $pos = position $rel0, $rel0, $rel0
+        $black = block "black_wool"
+
+        $e2 = execute
+        $e3 = execute
+
+        $pos0 = position $rel1, $rel0, $rel0
+        $x = rel_pos -10
+        $pos1 = position $x, $rel0, $rel1
+    }
+
+    compiletime {
+        entry:
+        exec_at_entity $e, $pos_util
+        exec_store $e, success, $spec
+        exec_if_block $e, $pos, $black
+
+        exec_at_entity $e2, $pos_util
+
+        exec_at_entity $e3, $pos_util
     }
 
     entry:
     invoke @display_seek, ($row, 0), NULL
     $i = 0
     branch :loop0
-    
+
     loop0:
     $tmp0 = $height
     $tmp0 -= $i
     rangebr $tmp0, 1, NULL, :inner0, :end
-    
+
     inner0:
     $has_black = 0
     $j = 0
     branch :loop1
-    
+
     loop1:
     rangebr $j, NULL, 9, :inner1, :inner_end
-    
+
     inner1:
-    $e = execute
-    exec_at_entity $e, $pos_util
-    $spec = exec_store_var $tmp0
-    exec_store $e, success, $spec
-    $pos = position $rel0, $rel0, $rel0
-    $black = block "black_wool"
-    exec_if_block $e, $pos, $black
     exec_finish $e
     rangebr $tmp0, 0, 0, :cont, :setblack
-    
+
     setblack:
     $has_black = 1
     branch :cont
-    
+
     cont:
-    $e2 = execute
-    exec_at_entity $e2, $pos_util
     exec_run $e2, :tp0
     $j += 1
     branch :loop1
-    
+
     [function] tp0:
-    $pos0 = position $rel1, $rel0, $rel0
     teleport $pos_util, $pos0
 
     inner_end:
     rangebr $has_black, 0, 0, @clear_line, NULL
-    $e3 = execute
-    exec_at_entity $e3, $pos_util
     exec_run $e3, :tp1
     $i += 1
     branch :loop0
-    
+
     [function] tp1:
-    $x = rel_pos -10
-    $pos1 = position $x, $rel0, $rel1
     teleport $pos_util, $pos1
-    
+
     end:
     ret
 }
@@ -958,6 +992,29 @@ function tick {
         $old_color = define i32
         $tmp0 = define i32
         $four = define i32
+        $powbutton = block "stone_button"
+        $unpowbutton = block "stone_button"
+
+        $e0 = execute
+        $spec = exec_store_var $tmp0
+
+        $e1 = execute
+        $e2 = execute
+    }
+
+    compiletime {
+        entry:
+        add_block_prop $powbutton, powered, "true"
+        add_block_prop $unpowbutton, powered, "false"
+        add_block_prop $unpowbutton, face, "floor"
+        exec_store $e0, success, $spec
+        exec_if_block $e0, $rotatepos, $powbutton
+
+        exec_store $e1, success, $spec
+        exec_if_block $e1, $leftpos, $powbutton
+
+        exec_store $e2, success, $spec
+        exec_if_block $e2, $rightpos, $powbutton
     }
 
     entry:
@@ -976,31 +1033,15 @@ function tick {
 
     can_fit0:
     $row += 1
-    
-    $powbutton = block "stone_button"
-    add_block_prop $powbutton, powered, "true"
-    $unpowbutton = block "stone_button"
-    add_block_prop $unpowbutton, powered, "false"
-    add_block_prop $unpowbutton, face, "floor"
-    
-    $e0 = execute
-    $spec = exec_store_var $tmp0
-    exec_store $e0, success, $spec
-    exec_if_block $e0, $rotatepos, $powbutton
+
     exec_finish $e0
     rangebr $tmp0, 0, 0, :check_left, :rotate
 
     check_left:
-    $e1 = execute
-    exec_store $e1, success, $spec
-    exec_if_block $e1, $leftpos, $powbutton
     exec_finish $e1
     rangebr $tmp0, 0, 0, :check_right, :left
 
     check_right:
-    $e2 = execute
-    exec_store $e2, success, $spec
-    exec_if_block $e2, $rightpos, $powbutton
     exec_finish $e2
     rangebr $tmp0, 0, 0, :draw, :right
 
@@ -1034,14 +1075,38 @@ function tick {
 
 
 function main {
-    
+
     preamble {
         $i = define i32
         $j = define i32
-        
+
         $tmp0 = define i32
-        
+
         extern
+
+        $e4 = execute
+        $lever = block "lever"
+        $spec = exec_store_var $tmp0
+
+        $e = execute
+        $e2 = execute
+        $e3 = execute
+
+        $x = rel_pos -10
+        $block = block "black_wool"
+        $pos = position $rel0, $rel0, $rel0
+        $pos1 = position $rel1, $rel0, $rel0
+        $pos2 = position $x, $rel0, $rel1
+    }
+
+    compiletime {
+        entry:
+        add_block_prop $lever, powered, "true"
+        exec_store $e4, success, $spec
+        exec_if_block $e4, $leverpos, $lever
+        exec_at_entity $e, $pos_util
+        exec_at_entity $e2, $pos_util
+        exec_at_entity $e3, $pos_util
     }
 
     entry:
@@ -1055,18 +1120,12 @@ function main {
     branch :for_1
 
     while:
-    $e4 = execute
-    $lever = block "lever"
-    add_block_prop $lever, powered, "true"
-    $spec = exec_store_var $tmp0
-    exec_store $e4, success, $spec
-    exec_if_block $e4, $leverpos, $lever
     exec_finish $e4
     rangebr $tmp0, 0, 0, :end, :loop
-    
+
     loop:
     set_command_block :yield_trampoline
-    
+
     yield_trampoline:
     clear_command_block
     invoke @tick, NULL, NULL
@@ -1074,50 +1133,39 @@ function main {
 
     for_1:
     rangebr $i, NULL, 19, :inner_for, :cont1
-    
+
     cont1:
     invoke @new_shape, NULL, NULL
     invoke @draw_shape, NULL, NULL
     branch :while
-    
+
     inner_for:
     $j = 0
     branch :for_2
-    
+
     for_2:
     rangebr $j, NULL, 9, :inner_for_2, :for_2_end
 
     inner_for_2:
-    $e = execute
-    exec_at_entity $e, $pos_util
     exec_run $e, :set
-    $e2 = execute
-    exec_at_entity $e2, $pos_util
     exec_run $e2, :tp0
     $j += 1
     branch :for_2
-    
+
     for_2_end:
-    $x = rel_pos -10
-    $e3 = execute
-    exec_at_entity $e3, $pos_util
     exec_run $e3, :tp1
     $i += 1
     branch :for_1
-    
+
     [function] set:
-    $pos = position $rel0, $rel0, $rel0
-    $block = block "black_wool"
     setblock $pos, $block
-    
+
     [function] tp0:
-    $pos1 = position $rel1, $rel0, $rel0
     teleport $pos_util, $pos1
-    
+
     [function] tp1:
-    $pos2 = position $x, $rel0, $rel1
     teleport $pos_util, $pos2
-    
+
     end:
     ret
 

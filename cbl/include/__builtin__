@@ -54,7 +54,7 @@ intrinsic_extension {
         vec = [comp.type.as_variable(comp.value) for comp in [
                 args.pos.type.get_property(compiler, args.pos, c) for c in 'xyz']]
         # TODO non-constant positions
-        pos = block.add(i.CreatePosition(*vec), True)
+        pos = compiler.insn_def(i.CreatePosition(*vec))
         block.add(i.SpawnEntityInsn(entity_id, pos, None))
         return void
     }

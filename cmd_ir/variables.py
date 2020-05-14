@@ -371,6 +371,12 @@ class ProxyVariable(Variable):
         self._al_write = always_write
         self._namespace = ns
 
+    def clone(self):
+        if self.proxy_set:
+            return self.var.clone()
+        import copy
+        return copy.copy(self)
+
     def set_proxy(self, var):
         assert self.__var is None
         assert var.type == self.type
@@ -424,7 +430,12 @@ class ProxyVariable(Variable):
     def _store_from_cmd(self, cmd, out): return self.var._store_from_cmd(cmd, out)
 
 class LocalVariable(ProxyVariable):
-    pass
+
+    def write_out(self, out):
+        ref = self._direct_ref()
+        if ref is not None:
+            name = ref.objective.objective
+            out.write_objective(name, None)
 
 class GlobalVariable(ProxyVariable):
 
@@ -432,6 +443,17 @@ class GlobalVariable(ProxyVariable):
         # If it's extern, it's always read and written to
         super().__init__(type, is_extern, is_extern, namespace)
         self.is_extern = is_extern
+
+    def write_out(self, out):
+        ref = self._direct_ref()
+        if ref is not None:
+            name = ref.objective.objective
+            out.write_objective(name, None)
+        nbt = self._direct_nbt()
+        if nbt is not None:
+            path, storage = nbt
+            initval = self.type.nbt_type.new(self.type.default_val).serialize()
+            out.write_global_nbt(storage, path, initval)
 
 class ExternVariable(ProxyVariable):
 
@@ -480,12 +502,13 @@ class GlobalScoreVariable(ScoreStorableVariable):
 class VirtualStackPointer(LocalStackVariable):
     path_type = c.StackPath # out-of-bounds stack path
 
-class VirtualNbtVariable(NbtStorableVariable):
 
-    def __init__(self, type, directgetter, realigner):
+class SubNbtVariable(NbtStorableVariable):
+
+    def __init__(self, type, root, subpath):
         super().__init__(type, None)
-        self._directgetter = directgetter
-        self._realigner = realigner
+        self.__root = root
+        self.__subpath = subpath
 
     @property
     def namespace(self):
@@ -493,8 +516,8 @@ class VirtualNbtVariable(NbtStorableVariable):
 
     @property
     def path(self):
-        path, storage = self._directgetter()
-        return path
+        path, storage = self.__root._direct_nbt()
+        return path.subpath(self.__subpath)
 
     @property
     def root_path(self):
@@ -502,15 +525,23 @@ class VirtualNbtVariable(NbtStorableVariable):
 
     @property
     def storage(self):
-        path, storage = self._directgetter()
+        path, storage = self.__root._direct_nbt()
         return storage
+
+    def usage_read(self):
+        super().usage_read()
+        self.__root.usage_read()
+
+    def usage_write(self):
+        super().usage_write()
+        self.__root.usage.usage_write()
 
     @property
     def is_read_from(self):
-        return True # Prevent getting eliminated
+        return True # Prevent beign eliminated
 
     def realign_frame(self, shift):
-        self._realigner(shift)
+        self.__root.realign_frame(shift)
 
 class WorkingNbtVariable(NbtStorableVariable):
 
@@ -567,6 +598,11 @@ class CompilerVariable(Variable):
     def __init__(self, type):
         super().__init__(type)
         self.value = None
+
+    def clone(self):
+        v = CompilerVariable(self.type)
+        v.value = self.value
+        return v
 
     @property
     def namespace(self):

@@ -18,8 +18,9 @@ class EntityFilterExpression:
         self.sel_val = value
 
     def apply_to_selector(self, selector, compiler):
-        compiler.add_insn(i.SetSelector(selector, self.sel_key,
-                                        i.VirtualString(self.sel_val)))
+        with compiler.compiletime():
+            compiler.add_insn(i.SetSelector(selector, self.sel_key,
+                                            i.VirtualString(self.sel_val)))
 
 class EntityCollection(CBLTypeInstance):
 
@@ -81,8 +82,9 @@ class EntityPointer(CBLTypeInstance):
         block = self.sup.compiler.create_block('at_entity')
         block.set_is_function()
         as_block, sender = self.as_entity()
-        ex = as_block.add(i.CreateExec(), True)
-        as_block.add(i.ExecAtEntity(ex, sender))
+        with self.sup.compiler.compiletime():
+            ex = self.sup.compiler.insn_def(i.CreateExec())
+            self.sup.compiler.add_insn(i.ExecAtEntity(ex, sender))
         as_block.add(i.ExecRun(ex, block))
         return block
 
@@ -142,7 +144,7 @@ class PositionComponent:
 
     def _create_var(self):
         block, sender = self.ptr.as_entity()
-        var = block.define(i.EntityLocalNBT(i.VarType.q10, sender, self.path))
+        var = self.compiler.insn_def(i.EntityLocalNBT(i.VarType.q10, sender, self.path))
         return block, var
 
     @contextlib.contextmanager
@@ -165,8 +167,8 @@ class PositionComponent:
         block, sender = self.ptr.as_entity()
         vec = [0, 0, 0]
         vec[self.idx] = offset
-        components = [block.define(i.CreateRelPos(c)) for c in vec]
-        pos = block.define(i.CreatePosition(*components))
+        components = [self.compiler.insn_def(i.CreateRelPos(c)) for c in vec]
+        pos = self.compiler.insn_def(i.CreatePosition(*components))
         block.add(i.TeleportInsn(sender, pos))
 
 class EntityPosComponentType(DecimalType):
@@ -362,8 +364,9 @@ class EntitySupport:
                 i.SelectorType.ALL_ENTITIES))
             test_uid = self.compiler.insn_def(i.CreateEntityLocalAccess(
                 self.uid_obj, sender))
-            self.compiler.add_insn(i.ExecAsEntity(exec, sel))
-            self.compiler.add_insn(i.ExecIfCmp(exec, test_uid, 'eq', ptr))
+            with self.compiler.compiletime():
+                self.compiler.add_insn(i.ExecAsEntity(exec, sel))
+                self.compiler.add_insn(i.ExecIfCmp(exec, test_uid, 'eq', ptr))
             self.compiler.add_insn(i.ExecRun(exec, block))
         else:
             self.compiler.add_insn(i.Call(block))
@@ -384,9 +387,9 @@ class EntitySupport:
         end = func.create_block('end')
 
         uid_obj = top.preamble.add(cls.objective(), True, '__uid')
-        sender = entry.define(i.CreateSelector(i.SelectorType.SENDER))
-        self_uid = entry.define(i.CreateEntityLocalAccess(uid_obj, sender))
-        next_uid = entry.define(i.CreateEntityLocalAccess(uid_obj,
+        sender = func.preamble.define(i.CreateSelector(i.SelectorType.SENDER))
+        self_uid = func.preamble.define(i.CreateEntityLocalAccess(uid_obj, sender))
+        next_uid = func.preamble.define(i.CreateEntityLocalAccess(uid_obj,
                                       top.lookup('_global_entity')))
         entry.add(i.RangeBr(self_uid, 0, 0, set_uid, end))
         set_uid.add(i.SetScore(self_uid, next_uid))

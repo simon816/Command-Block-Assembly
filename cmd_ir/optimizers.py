@@ -34,9 +34,6 @@ class DeclareFnVisitor(FuncVisitor):
     def visit_preamble(self, preamble):
         preamble.transform(self.visit_pre_insn)
 
-    def visit_compiletime(self, compiletime):
-        compiletime.transform_scope(self.visit_var)
-
     def visit_pre_insn(self, insn):
         insn.declare()
         return insn
@@ -271,7 +268,7 @@ class AliasInliner(FuncVisitor):
         super().visit(func)
 
     def visit_block(self, name, block):
-        insns = [insn for insn in block.insns if not insn.is_virtual]
+        insns = block.insns
         if len(insns) == 1:
             insn = insns[0]
             if isinstance(insn, Branch) and insn.label != block:
@@ -496,7 +493,7 @@ class VariableAliasing(BlockVisitor):
                 self.remove_alias(insn.var)
             if isinstance(insn.value, Variable) and insn.value != insn.var and \
                self.entity_local_compat(insn.var, insn.value) and \
-               not isinstance(insn.value, VirtualNbtVariable):
+               not isinstance(insn.value, SubNbtVariable):
                 # For now, don't allow aliasing nbt subpath variables
                 # The root nbt variable may change but that is not
                 # detected so we don't invalidate the alias

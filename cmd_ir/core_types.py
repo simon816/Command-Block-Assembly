@@ -17,6 +17,13 @@ class NativeType(InsnArg):
     def clone(self):
         raise TypeError(self.typename() + ' does not support cloning')
 
+    def inline_copy(self):
+        import copy
+        return copy.copy(self)
+
+    def write_out(self, out):
+        pass
+
 class EntitySelection(NativeType, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
@@ -43,12 +50,16 @@ class BlockRef(NativeType):
 
 class EntityLocal(NativeType):
 
-    def __init__(self, name):
+    def __init__(self, name, criteria):
         self.name = name
         self.obj_ref = c.ObjectiveRef(name)
+        self.criteria = criteria
 
     def clone(self):
         return self
+
+    def write_out(self, out):
+        out.write_objective(self.name, self.criteria)
 
 class VirtualString(NativeType):
 
@@ -280,12 +291,17 @@ class ItemType(c.Resolvable, NativeType):
 
 class TeamRef(NativeType):
 
-    def __init__(self, name):
+    def __init__(self, name, display):
         self.name = name
         self.ref = c.TeamName(name)
+        self.display = display
 
     def clone(self):
         return self
+
+    def write_out(self, out):
+        out.write_team(self.name, self.display.to_component(out) \
+                       if self.display is not None else None)
 
 class TextColor(InsnArg):
 
@@ -337,12 +353,16 @@ TextColor.reset = TextColor('reset')
 
 class BossbarRef(NativeType):
 
-    def __init__(self, name):
+    def __init__(self, name, display):
         self.name = name
         self.ref = c.Bossbar(name)
+        self.display = display
 
     def clone(self):
         return self
+
+    def write_out(self, out):
+        out.write_bossbar(self.name, self.display.to_component(out))
 
 PosType = (int, float, RelPosVal, AncPosVal)
 

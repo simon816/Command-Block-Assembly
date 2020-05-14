@@ -1,3 +1,5 @@
+import contextlib
+
 from .asm_reader import AsmReader
 from cmd_ir.core import *
 from cmd_ir.instructions import *
@@ -518,11 +520,12 @@ void OP(int src, int *dest) {
         self.block = self.func.create_block('dead_after_ret')
 
     def handle_test_cmd(self, cmd):
-        cmd = self.block.define(CreateCommand(VirtualString(cmd)))
+        cmd = self.func.preamble.define(CreateCommand(VirtualString(cmd)))
         res = self.get_working()
-        spec = self.block.define(ExecStoreVar(res))
-        ex = self.block.define(CreateExec())
-        self.block.add(ExecStore(ex, 'result', spec))
+        spec = self.func.preamble.define(ExecStoreVar(res))
+        ex = self.func.preamble.define(CreateExec())
+        with self._compiletime():
+            self.block.add(ExecStore(ex, 'result', spec))
         self.block.add(ExecRun(ex, cmd))
         failed_branch = self.func.create_block('test_after')
         success_branch = self.func.create_block('test_success')
@@ -532,7 +535,7 @@ void OP(int src, int *dest) {
 
     def handle_print(self, arg1, *args):
         args = [arg1] + list(args)
-        text = self.block.define(CreateText())
+        text = self.func.preamble.define(CreateText())
         ct = self.func.create_compiletime()
         block = ct.create_block('entry')
         for arg_type, arg in args:
@@ -544,17 +547,17 @@ void OP(int src, int *dest) {
                     raise RuntimeError('Bad argument type %r' % arg_type)
             block.add(TextAppend(text, arg))
         ct.run_and_return()
-        selector = self.block.define(CreateSelector(SelectorType.ALL_PLAYERS))
+        selector = self.func.preamble.define(CreateSelector(SelectorType.ALL_PLAYERS))
         self.block.add(TextSend(text, selector))
 
     def handle_cmd(self, cmd):
-        cmd = self.block.define(CreateCommand(VirtualString(cmd)))
+        cmd = self.func.preamble.define(CreateCommand(VirtualString(cmd)))
         self.block.add(RunCommand(cmd))
 
     def _read_selector(self, sel_type, pairs):
         assert sel_type[0] == 'string'
         assert len(pairs) % 2 == 0
-        sel = self.block.define(CreateSelector(SelectorType.lookup(sel_type[1])))
+        sel = self.func.preamble.define(CreateSelector(SelectorType.lookup(sel_type[1])))
         for i in range(0, len(pairs), 2):
             key_type, key = pairs[i]
             val_type, val = pairs[i + 1]
@@ -567,7 +570,7 @@ void OP(int src, int *dest) {
                 assert isinstance(var, EntityLocalAccess)
                 min, max = map(lambda v: int(v) if v else None, val.split('..')) \
                            if '..' in val else [int(val)]*2
-                local = EntityLocal(var._direct_ref().objective.objective)
+                local = EntityLocal(var._direct_ref().objective.objective, None)
                 self.block.add(SelectScoreRange(sel, local, min, max))
             else:
                 assert False, "Bad key type: " + str(pairs[i])
@@ -584,89 +587,91 @@ void OP(int src, int *dest) {
                 fval = 0.0
                 if len(val) > 1:
                     fval = float(val[1:])
-                val = self.block.define(CreateVal(fval))
+                val = self.func.preamble.define(CreateVal(fval))
             else:
                 ref = self.resolve_ref(type_, val)
                 assert type(ref) == int, "Unknown type %s %s" % (type(ref), ref)
                 val = ref
             coords.append(val)
-        return self.block.define(CreatePosition(*coords))
+        return self.func.preamble.define(CreatePosition(*coords))
 
+    @contextlib.contextmanager
+    def _compiletime(self):
+        fn = self.func = self.func.create_compiletime()
+        old_block = self.block
+        self.block = self.func.create_block('entry')
+        yield
+        self.func = fn.run_and_return()
+        self.block = old_block
+
+    @contextlib.contextmanager
     def _execute_helper(self, lbl):
         arg_type, symbol = lbl
         assert arg_type == 'symbol'
-        exec = self.block.define(CreateExec())
+        exec = self.func.preamble.define(CreateExec())
         exec_func = self.lookup_symbol(symbol)
-        return exec, ExecRun(exec, exec_func)
+        with self._compiletime():
+            yield exec
+        self.block.add(ExecRun(exec, exec_func))
 
+    @contextlib.contextmanager
     def _execute_select_helper(self, lbl, sel_type, pairs):
-        exec, run = self._execute_helper(lbl)
-        selector = self._read_selector(sel_type, pairs)
-        return exec, selector, run
+        with self._execute_helper(lbl) as exec:
+            selector = self._read_selector(sel_type, pairs)
+            yield exec, selector
 
     def handle_execute_as(self, lbl, sel_type, *pairs):
-        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
-        self.block.add(ExecAsEntity(exec, selector))
-        self.block.add(run)
+        with self._execute_select_helper(lbl, sel_type, pairs) as (exec, sel):
+            self.block.add(ExecAsEntity(exec, sel))
 
     def handle_execute_as_not(self, lbl, sel_type, *pairs):
-        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
-        self.block.add(ExecUnlessEntity(exec, selector))
-        self.block.add(run)
+        with self._execute_select_helper(lbl, sel_type, pairs) as (exec, sel):
+            self.block.add(ExecUnlessEntity(exec, sel))
 
     def handle_execute_at(self, lbl, sel_type, *pairs):
-        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
-        self.block.add(ExecAtEntity(exec, selector))
-        self.block.add(run)
+        with self._execute_select_helper(lbl, sel_type, pairs) as (exec, sel):
+            self.block.add(ExecAtEntity(exec, sel))
 
     def handle_execute_at_position(self, lbl, sel_type, *pairs):
-        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
-        self.block.add(ExecAtEntityPos(exec, selector))
-        self.block.add(run)
+        with self._execute_select_helper(lbl, sel_type, pairs) as (exec, sel):
+            self.block.add(ExecAtEntityPos(exec, sel))
 
     def handle_execute_position(self, lbl, x, y, z):
-        exec, run = self._execute_helper(lbl)
-        self.block.add(ExecuteAtPos(exec, self._read_pos(x, y, z)))
-        self.block.add(run)
+        with self._execute_helper(lbl) as exec:
+            self.block.add(ExecuteAtPos(exec, self._read_pos(x, y, z)))
 
     def handle_execute_align(self, lbl, axes):
         arg_type, axes = axes
         assert arg_type == 'string'
-        exec, run = self._execute_helper(lbl)
-        self.block.add(ExecAlign(exec, axes))
-        self.block.add(run)
+        with self._execute_helper(lbl) as exec:
+            self.block.add(ExecAlign(exec, axes))
 
     def handle_execute_face_pos(self, lbl, x, y, z):
-        exec, run = self._execute_helper(lbl)
-        self.block.add(ExecFacePos(exec, self._read_pos(x, y, z)))
-        self.block.add(run)
+        with self._execute_helper(lbl) as exec:
+            self.block.add(ExecFacePos(exec, self._read_pos(x, y, z)))
 
     def handle_execute_face_entity(self, lbl, feature, sel_type, *pairs):
         arg_type, feature = feature
         assert arg_type == 'string'
-        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
-        self.block.add(ExecFaceEntity(exec, selector, feature))
-        self.block.add(run)
+        with self._execute_select_helper(lbl, sel_type, pairs) as (exec, sel):
+            self.block.add(ExecFaceEntity(exec, sel, feature))
 
     def handle_execute_rotate(self, lbl, y, x):
         y, x = self.resolve_ref(*y), self.resolve_ref(*x)
         assert type(y) == int
         assert type(x) == int
-        exec, run = self._execute_helper(lbl)
-        self.block.add(ExecRotate(exec, y, x))
-        self.block.add(run)
+        with self._execute_helper(lbl) as exec:
+            self.block.add(ExecRotate(exec, y, x))
 
     def handle_execute_rotate_entity(self, lbl, sel_type, *pairs):
-        exec, selector, run = self._execute_select_helper(lbl, sel_type, pairs)
-        self.block.add(ExecRotatedAsEntity(exec, selector))
-        self.block.add(run)
+        with self._execute_select_helper(lbl, sel_type, pairs) as (exec, sel):
+            self.block.add(ExecRotatedAsEntity(exec, sel))
 
     def handle_execute_anchor(self, lbl, anchor):
         arg_type, anchor = anchor
         assert arg_type == 'string'
-        exec, run = self._execute_helper(lbl)
-        self.block.add(ExecAnchor(exec, anchor))
-        self.block.add(run)
+        with self._execute_helper(lbl) as exec:
+            self.block.add(ExecAnchor(exec, anchor))
 
     def handle_push(self):
         self.block.add(PushStackVal(self.constants['sr']))

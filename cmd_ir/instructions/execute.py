@@ -2,7 +2,7 @@
 
 from .execute_components import *
 
-from ._core import ConstructorInsn, WRITE, VoidApplicationInsn, Insn
+from ._core import ConstructorInsn, WRITE, CompileTimeInsn, RuntimeHeldInsn
 from ..core_types import (EntitySelection,
                           VirtualString,
                           BossbarRef,
@@ -47,7 +47,6 @@ class ExecStoreVar(ConstructorInsn):
     """Creates an execute store specification that stores into a variable."""
 
     args = [Variable]
-    access = [WRITE]
     argnames = 'var'
     argdocs = ["Variable to store into"]
     rettype = ExecStoreSpec
@@ -57,9 +56,6 @@ class ExecStoreVar(ConstructorInsn):
         assert self.var.type.isnumeric
         assert self.var.type.scale == 1
         return ExecStoreVarSpec(self.var)
-
-    def declare(self):
-        self.var.usage_write()
 
 class ExecStoreBossbar(ConstructorInsn):
     """Creates an execute store specification that stores into a bossbar."""
@@ -75,7 +71,7 @@ class ExecStoreBossbar(ConstructorInsn):
         assert self.attr in ['value', 'max']
         return ExecStoreBossbarSpec(self.bar, self.attr)
 
-class ExecStore(VoidApplicationInsn):
+class ExecStore(CompileTimeInsn):
     """Adds an execute store component to the execute chain."""
 
     args = [ExecChain, str, ExecStoreSpec]
@@ -84,16 +80,16 @@ class ExecStore(VoidApplicationInsn):
                "Execute store specificaion"]
     insn_name = 'exec_store'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentStore(self.spec, self.storetype))
 
-class ExecCondBlock(VoidApplicationInsn):
+class ExecCondBlock(CompileTimeInsn):
 
     args = [ExecChain, Position, BlockType]
     argnames = 'chain pos block'
     argdocs = ["Execute chain", "Block position", "Block type to test for"]
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentCondBlock(self.cond, self.pos, self.block))
 
 class ExecIfBlock(ExecCondBlock):
@@ -107,7 +103,7 @@ class ExecUnlessBlock(ExecCondBlock):
     insn_name = 'exec_unless_block'
     cond = 'unless'
 
-class ExecCondBlocks(VoidApplicationInsn):
+class ExecCondBlocks(CompileTimeInsn):
 
     args = [ExecChain, Position, Position, Position, str]
     argnames = 'chain begin end dest type'
@@ -117,7 +113,7 @@ class ExecCondBlocks(VoidApplicationInsn):
     def validate(self):
         assert self.type in ['all', 'masked']
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentCondBlocks(self.cond, self.begin, self.end,
                                                self.dest, self.type))
 
@@ -130,7 +126,7 @@ class ExecUnlessBlocks(ExecCondBlocks):
     insn_name = 'exec_unless_blocks'
     cond = 'unless'
 
-class ExecCondVar(VoidApplicationInsn):
+class ExecCondVar(CompileTimeInsn):
 
     args = [ExecChain, Variable, Opt(int), Opt(int)]
     argnames = 'chain var min max'
@@ -143,23 +139,9 @@ class ExecCondVar(VoidApplicationInsn):
         assert self.var.type.isnumeric, self
         assert self.var.type.scale == 1, "TODO"
 
-    def activate(self, seq):
-        self._index = self.chain.add(ExecComponentCondVar(self.cond, self.var,
-                                                          self.min, self.max))
-
-    def copy(self):
-        insn = super().copy()
-        insn._index = self._index
-        return insn
-
-    def changed(self, prop):
-        # TODO refactor
-        if prop == 'var':
-            self.chain.set(self._index, ExecComponentCondVar(self.cond,
-                                         self.var, self.min, self.max))
-
-    def declare(self):
-        self.var.usage_read()
+    def run(self, ev):
+        self.chain.add(ExecComponentCondVar(self.cond, self.var,
+                                            self.min, self.max))
 
 class ExecIfVar(ExecCondVar):
     """Execute the rest of the chain if the given variable is within the given
@@ -172,7 +154,7 @@ class ExecUnlessVar(ExecCondVar):
     insn_name = 'exec_unless_var'
     cond = 'unless'
 
-class ExecCondNBTVar(VoidApplicationInsn):
+class ExecCondNBTVar(CompileTimeInsn):
 
     args = [ExecChain, Variable]
     argnames = 'chain var'
@@ -184,22 +166,8 @@ class ExecCondNBTVar(VoidApplicationInsn):
         # non-nbt value
         pass
 
-    def activate(self, seq):
-        self._index = self.chain.add(ExecComponentCondNBTVar(self.cond,
-                                                             self.var))
-
-    def copy(self):
-        insn = super().copy()
-        insn._index = self._index
-        return insn
-
-    def changed(self, prop):
-        if prop == 'var':
-            self.chain.set(self._index, ExecComponentCondNBTVar(self.cond,
-                                                                self.var))
-
-    def declare(self):
-        self.var.usage_read()
+    def run(self, ev):
+        self.chain.add(ExecComponentCondNBTVar(self.cond, self.var))
 
 class ExecIfNBTVar(ExecCondNBTVar):
     """Executes the rest of the chain if the NBT path to the given variable
@@ -212,13 +180,13 @@ class ExecUnlessNBTVar(ExecCondNBTVar):
     insn_name = 'exec_unless_nbt_var'
     cond = 'unless'
 
-class ExecCondEntity(VoidApplicationInsn):
+class ExecCondEntity(CompileTimeInsn):
 
     args = [ExecChain, EntitySelection]
     argnames = 'chain target'
     argdocs = ["Execute chain", "Entities"]
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentCondEntity(self.cond, self.target))
 
 class ExecIfEntity(ExecCondEntity):
@@ -232,7 +200,7 @@ class ExecUnlessEntity(ExecCondEntity):
     insn_name = 'exec_unless_entity'
     cond = 'unless'
 
-class ExecCondCmp(VoidApplicationInsn):
+class ExecCondCmp(CompileTimeInsn):
 
     args = [ExecChain, Variable, str, Variable]
     argnames = 'chain left op right'
@@ -245,24 +213,9 @@ class ExecCondCmp(VoidApplicationInsn):
         assert self.right.type.isnumeric
         assert self.left.type.scale == self.right.type.scale, "TODO"
 
-    def activate(self, seq):
-        self._index = self.chain.add(ExecComponentCondCmp(self.cond, self.left,
-                                                          self.op, self.right))
-
-    def copy(self):
-        insn = super().copy()
-        insn._index = self._index
-        return insn
-
-    def changed(self, prop):
-        # TODO refactor
-        if prop == 'left' or prop == 'right':
-            self.chain.set(self._index, ExecComponentCondCmp(self.cond,
-                                             self.left, self.op, self.right))
-
-    def declare(self):
-        self.left.usage_read()
-        self.right.usage_read()
+    def run(self, ev):
+        self.chain.add(ExecComponentCondCmp(self.cond, self.left, self.op,
+                                            self.right))
 
 class ExecIfCmp(ExecCondCmp):
     """Executes the rest of the chain if the left variable relates to the right
@@ -275,7 +228,7 @@ class ExecUnlessCmp(ExecCondCmp):
     insn_name = 'exec_unless_cmp'
     cond = 'unless'
 
-class ExecAsEntity(VoidApplicationInsn):
+class ExecAsEntity(CompileTimeInsn):
     """Executes the rest of the chain for each entity matching the given
     selection, changing `@s` to refer to the current matching entity."""
 
@@ -284,10 +237,10 @@ class ExecAsEntity(VoidApplicationInsn):
     argdocs = ["Execute chain", "Entities to iterate over"]
     insn_name = 'exec_as'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentAsEntity(self.target))
 
-class ExecAtEntity(VoidApplicationInsn):
+class ExecAtEntity(CompileTimeInsn):
     """Executes the rest of the chain for each entity matching the given
     selection, changing the relative position, rotation and dimension to
     originate from the matching entity."""
@@ -297,10 +250,10 @@ class ExecAtEntity(VoidApplicationInsn):
     argdocs = ["Execute chain", "Entities to iterate over"]
     insn_name = 'exec_at_entity'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentAtEntity(self.target))
 
-class ExecAtEntityPos(VoidApplicationInsn):
+class ExecAtEntityPos(CompileTimeInsn):
     """Executes the rest of the chain using just the position of each matching
     entity."""
 
@@ -309,10 +262,10 @@ class ExecAtEntityPos(VoidApplicationInsn):
     argdocs = ["Execute chain", "Entities to iterate over"]
     insn_name = 'exec_at_entity_pos'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentAtEntityPos(self.target))
 
-class ExecuteAtPos(VoidApplicationInsn):
+class ExecuteAtPos(CompileTimeInsn):
     """Executes the rest of the chain from the given position."""
 
     args = [ExecChain, Position]
@@ -320,10 +273,10 @@ class ExecuteAtPos(VoidApplicationInsn):
     argdocs = ["Execute chain", "Position"]
     insn_name = 'exec_at_pos'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentAtPos(self.pos))
 
-class ExecAlign(VoidApplicationInsn):
+class ExecAlign(CompileTimeInsn):
     """Executes the rest of the chain with the position aligned to the given
     axes. See `/execute align` for details."""
 
@@ -332,10 +285,10 @@ class ExecAlign(VoidApplicationInsn):
     argdocs = ["Execute chain", "Axes"]
     insn_name = 'exec_align'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentAlign(self.axes))
 
-class ExecFacePos(VoidApplicationInsn):
+class ExecFacePos(CompileTimeInsn):
     """Executes the rest of the chain with a rotation that faces the given
     position."""
 
@@ -344,10 +297,10 @@ class ExecFacePos(VoidApplicationInsn):
     argdocs = ["Execute chain", "Look position"]
     insn_name = 'exec_face_pos'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentFacePos(self.pos))
 
-class ExecFaceEntity(VoidApplicationInsn):
+class ExecFaceEntity(CompileTimeInsn):
     """Executes the rest of the chain with a rotation that faces the given
     target entity's feature."""
 
@@ -356,10 +309,10 @@ class ExecFaceEntity(VoidApplicationInsn):
     argdocs = ["Execute chain", "Target entity to face", "'eyes' or 'feet'"]
     insn_name = 'exec_face_entity'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentFaceEntity(self.target, self.feature))
 
-class ExecRotate(VoidApplicationInsn):
+class ExecRotate(CompileTimeInsn):
     """Executes the rest of the chain with the given rotation."""
 
     args = [ExecChain, RelPosType, RelPosType]
@@ -367,7 +320,7 @@ class ExecRotate(VoidApplicationInsn):
     argdocs = ["Execute chain", "Y rotation", "X rotation"]
     insn_name = 'exec_rotate'
 
-    def activate(self, seq):
+    def run(self, ev):
         if isinstance(self.y, RelPosVal):
             y = str(self.y.as_coord)
         else:
@@ -378,7 +331,7 @@ class ExecRotate(VoidApplicationInsn):
             x = str(self.x)
         self.chain.add(ExecComponentRotate(y, x))
 
-class ExecRotatedAsEntity(VoidApplicationInsn):
+class ExecRotatedAsEntity(CompileTimeInsn):
     """Executes the rest of the chain with the rotation equivalent to the
     rotation of the given entity."""
 
@@ -387,10 +340,10 @@ class ExecRotatedAsEntity(VoidApplicationInsn):
     argdocs = ["Execute chain", "Entities to execute with the rotation of"]
     insn_name = 'exec_rot_entity'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentRotatedAsEntity(self.target))
 
-class ExecAnchor(VoidApplicationInsn):
+class ExecAnchor(CompileTimeInsn):
     """Execute the rest of the chain with the anchor position (^) fixed to
     either feet or eyes of the current entity."""
 
@@ -399,10 +352,10 @@ class ExecAnchor(VoidApplicationInsn):
     argdocs = ["Execute chain", "'feet' or 'eyes'"]
     insn_name = 'exec_anchor'
 
-    def activate(self, seq):
+    def run(self, ev):
         self.chain.add(ExecComponentAnchor(self.anchor))
 
-class ExecRun(Insn):
+class ExecRun(RuntimeHeldInsn):
     """Finishes the execute chain by running either a command variable,
     a function label, or a function that takes no parameters."""
 
@@ -411,8 +364,10 @@ class ExecRun(Insn):
     argdocs = ["Execute chain", "Function or command to run"]
     insn_name = 'exec_run'
     is_branch = True
+    held = 'exec'
 
     def declare(self):
+        self.exec.declare()
         if isinstance(self.func, FunctionLike):
             self.func.usage()
         else:
@@ -431,7 +386,7 @@ class ExecRun(Insn):
                 cmd = self.func.as_cmd(func)
             out.write(chain.run(cmd))
 
-class ExecFinish(Insn):
+class ExecFinish(RuntimeHeldInsn):
     """Finishes an execute chain without running an action. Used when only
     interested in whether a conditional matched or not."""
 
@@ -439,6 +394,10 @@ class ExecFinish(Insn):
     argnames = 'exec'
     argdocs = ["Execute chain"]
     insn_name = 'exec_finish'
+    held = 'exec'
+
+    def declare(self):
+        self.exec.declare()
 
     def apply(self, out, func):
         with self.exec.apply(out) as chain:

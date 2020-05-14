@@ -1,11 +1,11 @@
 """Variable Arithmetic Instructions"""
 
-from ._core import Insn, READ, WRITE, get_subclasses
+from ._core import RunAndCompileInsn, READ, WRITE, get_subclasses
 from ..variables import Variable, VarType, CompilerVariable
 
 import commands as c
 
-class SetScore(Insn):
+class SetScore(RunAndCompileInsn):
 
     args = [Variable, (int, Variable, float)]
     access = [WRITE, READ]
@@ -33,7 +33,7 @@ class SetScore(Insn):
         else:
             self.var.set_const_val(self.value, out)
 
-    def run(self):
+    def run(self, ev):
         assert isinstance(self.var, CompilerVariable)
         if isinstance(self.value, Variable):
             assert isinstance(self.value, CompilerVariable), self
@@ -45,7 +45,7 @@ class SetScore(Insn):
     def serialize(self, holder):
         return '%s = %s' % tuple(self.serialize_args(holder))
 
-class SimpleOperationInsn(Insn):
+class SimpleOperationInsn(RunAndCompileInsn):
 
     args = [Variable, (int, Variable, float)]
     access = [WRITE, READ]
@@ -89,7 +89,7 @@ class SimpleOperationInsn(Insn):
         else:
             out.write(self.with_const(ref, val))
 
-    def run(self):
+    def run(self, ev):
         assert isinstance(self.dest, CompilerVariable)
         if isinstance(self.src, Variable):
             assert isinstance(self.src, CompilerVariable)

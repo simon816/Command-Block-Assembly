@@ -1,7 +1,7 @@
 """Basic Commands and Instructions"""
 
-from ._core import (Insn, SingleCommandInsn, ConstructorInsn, BasicBlock,
-                    PreambleOnlyInsn, VoidApplicationInsn)
+from ._core import (RuntimeInsn, SingleCommandInsn, ConstructorInsn, BasicBlock,
+                    PreambleInsn)
 from ..core_types import (CmdFunction,
                           Opt,
                           Position,
@@ -23,7 +23,7 @@ from .text import TextObject
 
 import commands as c
 
-class PragmaInsn(PreambleOnlyInsn, VoidApplicationInsn):
+class PragmaInsn(PreambleInsn):
     """Set a pragma value. Pragmas are implementation defined and generally
     should not be configured by end users."""
 
@@ -33,7 +33,7 @@ class PragmaInsn(PreambleOnlyInsn, VoidApplicationInsn):
     argdocs = ["Pragma name", "Pragma value"]
     insn_name = 'pragma'
 
-    def activate(self, seq):
+    def preapply(self, seq):
         seq.holder.pragmas.append((self.key, str(self.value)))
 
 class CopyInsn(ConstructorInsn):
@@ -92,7 +92,7 @@ class BlockAsCommand(CmdFunction):
         self.block = block
 
     def _get_insn(self):
-        insns = [insn for insn in self.block.insns if not insn.is_virtual]
+        insns = self.block.insns
         assert len(insns) == 1
         insn = insns[0]
         assert insn.single_command()
@@ -293,7 +293,7 @@ class SpawnParticleInsn(SingleCommandInsn):
                         self.delta.as_worldpos(), self.speed,
                         self.count, self.mode, self.targets)
 
-class TitleInsn(Insn):
+class TitleInsn(RuntimeInsn):
     """Show a title text to the specified players."""
 
     args = [EntitySelection, str, Opt(TextObject)]

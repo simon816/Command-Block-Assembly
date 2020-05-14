@@ -1,6 +1,7 @@
 from collections import OrderedDict
-from commands import Resolvable
+from commands import Resolvable, Function
 from .core_types import NativeType
+from .holder import HolderHolder
 
 class NBTType(NativeType):
 
@@ -75,12 +76,15 @@ NBTType.string = NBTType('string')
 NBTType.list = NBTType('list', True)
 NBTType.compound = NBTType('compound', True)
 
-class NBTBase(Resolvable, NativeType):
-    pass
+class NBTBase(HolderHolder, Resolvable, NativeType):
+
+    def declare(self):
+        pass
 
 class NBTValue(NBTBase):
 
     def __init__(self, val):
+        super().__init__()
         self.val = self.validator(val)
 
     def __str__(self):
@@ -152,13 +156,21 @@ class NBTString(NBTValue):
     def serialize(self):
         return self.quote(self.val)
 
-class FutureNBTString(NBTString):
+class FuncRefNBTString(NBTString):
 
-    def __init__(self, future):
-        self.future = future
+    def __init__(self, func):
+        HolderHolder.__init__(self)
+        self._func = self.hold(func)
+
+    def declare(self):
+        self._func.val.usage()
+
+    def clone(self):
+        return FuncRefNBTString(self._func.val)
 
     def resolve(self, scope):
-        return self.quote(self.future.resolve(scope))
+        fn = Function(self._func.val.global_name)
+        return self.quote(fn.resolve(scope))
 
     def serialize(self):
         assert False
@@ -176,12 +188,20 @@ class NBTCompound(RecurseMixin):
     type = NBTType.compound
 
     def __init__(self, items=[]):
+        super().__init__()
         self.items = OrderedDict(items)
+        for v in items:
+            self.hold(v)
 
     def set(self, name, value):
         assert isinstance(name, str)
         assert isinstance(value, NBTBase)
         self.items[name] = value
+        self.hold(value)
+
+    def declare(self):
+        for item in self.items.values():
+            item.declare()
 
     def clone(self):
         return NBTCompound((k, v.clone()) for k, v in self.items.items())
@@ -204,6 +224,11 @@ class NBTList(RecurseMixin):
         assert isinstance(item, NBTBase)
         assert item.type == self.list_type or self.list_type is None
         self.items.append(item)
+        self.hold(item)
+
+    def declare(self):
+        for item in self.items:
+            item.declare()
 
     def clone(self):
         copy = NBTList(self.list_type)

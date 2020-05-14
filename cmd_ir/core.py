@@ -3,7 +3,7 @@ import abc
 
 from commands import SetConst, Var, NSName
 
-from .core_types import FunctionLike, PosUtilEntity, GlobalEntity
+from .core_types import NativeType, FunctionLike, PosUtilEntity, GlobalEntity
 
 from .variables import (Variable, VarType, ParameterVariable, ReturnVariable,
                         LocalStackVariable, LocalVariable, NbtOffsetVariable,
@@ -120,6 +120,10 @@ class InstructionSeq:
         return insn
 
     def add(self, insn, with_name=False, namehint=None):
+        if with_name and not isinstance(self, Preamble):
+            import warnings
+            warnings.warn("block-level define is deprecated: %s" % insn)
+            return self._func.preamble.add(insn, with_name, namehint)
         insn = self.validate_insn(insn)
         ret = insn.activate(self)
         self.insns.append(insn)
@@ -168,12 +172,12 @@ class Preamble(InstructionSeq):
         self.is_top = isinstance(parent, TopLevel)
 
     def validate_insn(self, insn):
-        assert insn.preamble_safe, insn
+        assert insn.is_preamble_insn, insn
         return insn
 
     def apply(self, writer):
         for insn in self.insns:
-            insn.apply(writer, self.holder)
+            insn.postapply(writer, self.holder)
 
     def serialize(self):
         indent = '' if self.is_top else '    '
@@ -193,6 +197,8 @@ class Scope(OrderedDict):
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
+        assert type(key) == str, key
+        assert isinstance(value, NativeType), value
         self.inverse_dict[value] = key
 
     def __missing__(self, key):
@@ -358,6 +364,8 @@ class TopLevel(VariableHolder):
     def writeout(self, writer):
         assert self.finished
         self.preamble.apply(writer)
+        for var in self.scope.values():
+            var.write_out(writer)
 
         table = []
         functions = []
@@ -830,6 +838,8 @@ class IRFunction(VisibleFunction, VariableHolder):
     def writeout(self, writer, temp_gen):
         assert self.finished
         self.preamble.apply(writer)
+        for var in self.scope.values():
+            var.write_out(writer)
         for block in self.allblocks:
             writer.write_function(block.global_name, block.writeout(writer,
                                                                     temp_gen))
@@ -844,19 +854,15 @@ class IRFunction(VisibleFunction, VariableHolder):
         return all(b.is_terminated() for b in self.blocks)
 
     def _inline_seq(self, from_seq, to_seq, scope_mapping):
+        # Don't declare compile time blocks
+        declare = not isinstance(from_seq, CompileTimeBlock)
         #print("inline", from_seq, "->", to_seq)
         #print(from_seq.serialize())
-        from .instructions import ConstructorInsn
         for insn in from_seq.insns:
-            if not insn.inline_copyable:
-                continue
             new_insn = insn.copy_with_changes(scope_mapping)
-            if isinstance(insn, ConstructorInsn):
-                name = self.name_for(insn._value)
-                scope_mapping[insn._value] = to_seq.add(new_insn, True, name)
-            else:
-                to_seq.add(new_insn)
-            new_insn.declare()
+            to_seq.add(new_insn)
+            if declare:
+                new_insn.declare()
 
     def inline_into(self, other, args, retvars):
         self.validate_args(args, retvars)
@@ -870,11 +876,9 @@ class IRFunction(VisibleFunction, VariableHolder):
 
         for name, var in self.scope.items():
             if isinstance(var, BasicBlock):
-                new_block = other.create_block(var._name)
+                new_block = var.copy_to(other)
                 scope_mapping[var] = new_block
                 block_mapping[var] = new_block
-                new_block.is_function = var.is_function
-                new_block.defined = var.defined
             elif isinstance(var, ParameterVariable):
                 arg_var = next(argiter)
                 if isinstance(arg_var, (float, int)):
@@ -890,12 +894,22 @@ class IRFunction(VisibleFunction, VariableHolder):
                     scope_mapping[var] = arg_var
             elif isinstance(var, ReturnVariable):
                 scope_mapping[var] = next(retiter)
+            else:
+                copy = var.inline_copy()
+                scope_mapping[var] = other.generate_name(name, copy)
 
         # Check iterators have been consumed
         assert all(False for _ in argiter)
         assert all(False for _ in retiter)
 
-        self._inline_seq(self.preamble, other.preamble, scope_mapping)
+        # We copy for reference, but don't run the compiletimes
+        for ct in self.get_compiletimes():
+            other_ct = other.create_compiletime()
+            for name, block in ct.scope.items():
+                if isinstance(block, CompileTimeBlock):
+                    other_block = other_ct.create_block(name)
+                    scope_mapping[block] = other_block
+                    block_mapping[block] = other_block
 
         entry_block = block_mapping[self.blocks[0]]
         for insn in entry_insns:
@@ -1008,6 +1022,12 @@ class BasicBlock(FunctionLike, InstructionSeq):
     def set_is_function(self):
         self.is_function = True
 
+    def copy_to(self, func):
+        copy = func.create_block(self._name)
+        copy.is_function = self.is_function
+        copy.defined = self.defined
+        return copy
+
     @property
     def global_name(self):
         return self._func._name.append_name('/' + self._name)
@@ -1027,6 +1047,7 @@ class BasicBlock(FunctionLike, InstructionSeq):
         return self.insns[-1].terminator()
 
     def validate_insn(self, insn):
+        assert insn.is_runtime, insn
         from .instructions import Branch, Return
         if not self.force and self.insns and self.insns[-1].terminator():
             assert False, "Block %s is terminated by %s. Tried adding %s" % (
@@ -1086,6 +1107,27 @@ class SuperBlock(BasicBlock):
         if self._clear:
             super().reset()
 
+class Evaluator:
+
+    def __init__(self, entry):
+        self.insns = []
+        self.ptr = 0
+        self.jump(entry)
+
+    def jump(self, block):
+        assert isinstance(block, CompileTimeBlock)
+        self.insns = block.insns
+        self.ptr = 0
+
+    def run(self):
+        while self.ptr < len(self.insns):
+            p = self.ptr
+            self.ptr += 1
+            self.insns[p].run(self)
+
+    def stop(self):
+        self.insns = []
+
 class CompileTimeFunction(VariableHolder):
 
     def __init__(self, real_func):
@@ -1119,10 +1161,13 @@ class CompileTimeFunction(VariableHolder):
         return self.preamble.add(var, True, namehint)
 
     def run_and_return(self):
+        entry = None
         for block in self.scope.values():
             if isinstance(block, CompileTimeBlock) and block != self._exitblock:
-                block.run()
+                entry = block
                 break
+        if entry is not None:
+            Evaluator(entry).run()
         return self._real_func
 
     def serialize(self):
@@ -1134,9 +1179,9 @@ class CompileTimeFunction(VariableHolder):
 
 class CompileTimeBlock(BasicBlock):
 
-    def run(self):
-        for insn in self.insns:
-            insn.run()
+    def validate_insn(self, insn):
+        assert insn.is_compiletime, insn
+        return insn
 
     @property
     def global_name(self):

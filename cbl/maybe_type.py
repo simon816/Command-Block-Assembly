@@ -118,7 +118,8 @@ class MaybeWrappedType(CBLType):
         set_empty = compiler.create_block('set_empty')
         set_empty.is_function = True
         set_empty.add(i.SetScore(result, 1))
-        compiler.add_insn(i.ExecUnlessNBTVar(exec, valvar))
+        with compiler.compiletime():
+            compiler.add_insn(i.ExecUnlessNBTVar(exec, valvar))
         compiler.add_insn(i.ExecRun(exec, set_empty))
         return Temporary(bool, result)
 
