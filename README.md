@@ -367,7 +367,7 @@ Packer arguments:
 
 MCC will dispatch a different tool depending on what the file extension of each input file is:
 
- * `.cmdl` Will compile the CBL source code file
+ * `.cbl` Will compile the CBL source code file
  * `.c` Will compile the C source code file
  * `.asm` Will compile the assembly file
  * `.ir` Will read the Command IR file
@@ -389,9 +389,9 @@ Compiling `examples/hdd_driver.c` into Command IR `examples/hdd_driver.ir`:
 python mcc.py examples/hdd_driver.c -S
 ```
 
-Compiling `mylib.cmdl` into an object file, statically linking `myprogram.cmdl` with the object and `examples/fib.ir`,
+Compiling `mylib.cbl` into an object file, statically linking `myprogram.cbl` with the object and `examples/fib.ir`,
 then using `mydatapack.dpd` to create `mysuperdatapack.zip`:
 ```
-python mcc.py mylib.cmdl -c
-python mcc.py mylib.o myprogram.cmdl examples/fib.ir mydatapack.dpd -o mysuperdatapack.zip
+python mcc.py mylib.cbl -c
+python mcc.py mylib.o myprogram.cbl examples/fib.ir mydatapack.dpd -o mysuperdatapack.zip
 ```

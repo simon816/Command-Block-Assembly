@@ -1,1 +1,2 @@
 *.asm   text eol=lf
+*.cbl   linguist-language=C++

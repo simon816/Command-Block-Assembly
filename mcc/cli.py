@@ -250,7 +250,7 @@ def write_datapack(top, dispatchers, pragma_results, args):
         print("Cleanup function:", cleanup_func)
 
 action_dispatch = {
-    '.cmdl': CBLDispatcher,
+    '.cbl': CBLDispatcher,
     '.o': IRObjectDispatcher,
     '.ir': IRDispatcher,
     '.c': CDispatcher,
