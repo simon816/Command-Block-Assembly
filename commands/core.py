@@ -67,6 +67,9 @@ class NSName(namedtuple('NSName', 'namespace name')):
     def append_name(self, extra):
         return self.with_name(self.name + extra)
 
+    def prepend_name(self, before):
+        return self.with_name(before + self.name)
+
 class Command(Resolvable):
     pass
 

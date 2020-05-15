@@ -958,7 +958,8 @@ class Compiler(Transformer_WithPre):
             self.block.add(i.RangeBr(as_var(cond), 0, 0, end, body_block))
             self.block = body_block
             self.transform(body)
-            self.block.add(i.Branch(begin))
+            if not self.block.is_terminated:
+                self.block.add(i.Branch(begin))
             self.block = end
 
     def pre_for_statement(self, tree, post_transform):
@@ -977,7 +978,8 @@ class Compiler(Transformer_WithPre):
                 self.block.add(i.Branch(body_block))
             self.block = body_block
             self.transform(body)
-            self.block.add(i.Branch(after_block))
+            if not self.block.is_terminated:
+                self.block.add(i.Branch(after_block))
             self.block = after_block
             self.transform(after)
             self.block.add(i.Branch(cond_block))
@@ -1013,7 +1015,7 @@ class Compiler(Transformer_WithPre):
             if iter_expr.value.boolvar is not None:
                 boolvar = iter_expr.value.boolvar.value
                 filter_true = self.func.create_block('filtered_bool')
-                body_block.add(RangeBr(boolvar, 0, 0, skip_to_begin,
+                body_block.add(i.RangeBr(boolvar, 0, 0, skip_to_begin,
                                        filter_true))
                 self.block = filter_true
 
@@ -1036,7 +1038,8 @@ class Compiler(Transformer_WithPre):
             self.block.add(i.Branch(begin))
             self.block = begin
             self.transform(body)
-            self.block.add(i.Branch(cond_block))
+            if not self.block.is_terminated:
+                self.block.add(i.Branch(cond_block))
             self.block = cond_block
             cond = self.transform(cond)
             self.block.add(i.RangeBr(as_var(cond), 0, 0, end, begin))
@@ -1056,11 +1059,13 @@ class Compiler(Transformer_WithPre):
                                  true_block))
         self.block = true_block
         self.transform(if_true)
-        self.block.add(i.Branch(end))
+        if not self.block.is_terminated:
+            self.block.add(i.Branch(end))
         if if_false:
             self.block = false_block
             self.transform(if_false)
-            self.block.add(i.Branch(end))
+            if not self.block.is_terminated:
+                self.block.add(i.Branch(end))
         else:
             false_block.add(i.Branch(end))
         self.block = end

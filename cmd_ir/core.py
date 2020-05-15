@@ -785,8 +785,14 @@ class IRFunction(VisibleFunction, VariableHolder):
         return self._varsfinalized
 
     @property
+    def is_internal(self):
+        return not self._is_extern and (self.params or self.returns)
+
+    @property
     def global_name(self):
         assert self.is_defined, self._name
+        if self.is_internal:
+            return self._name.prepend_name('_internal/')
         return self._name
 
     @property
@@ -1030,7 +1036,10 @@ class BasicBlock(FunctionLike, InstructionSeq):
 
     @property
     def global_name(self):
-        return self._func._name.append_name('/' + self._name)
+        fname = self._func.global_name
+        if not self._func.is_internal:
+            fname = fname.prepend_name('_internal/')
+        return fname.append_name('/' + self._name)
 
     def __str__(self):
         return 'BasicBlock(%s)' % self.global_name.uqn
