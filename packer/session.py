@@ -228,8 +228,7 @@ class Session:
                'Small:0b,NoGravity:1b,Marker:1b,Invulnerable:1b,' + \
                'NoBasePlate:1b}') % (namespace + '_global', item)
         ge = self.scope.global_entity(namespace)
-        check = 'execute unless entity %s' % ge
-        setup.append('%s kill %s' % (check, ge))
+        check = 'execute unless entity %s run' % ge
         setup.append('%s summon armor_stand %s %s' %
                      (check, self.entity_pos, globalnbt))
         clean.append('kill %s' % ge)
