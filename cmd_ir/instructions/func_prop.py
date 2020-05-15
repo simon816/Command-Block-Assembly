@@ -23,6 +23,7 @@ class NamespaceInsn(PreambleInsn):
 
     args = [VirtualString]
     argnames = 'namespace'
+    argdocs = ["The namespace"]
     func_preamble_only = True
     insn_name = 'namespace'
 

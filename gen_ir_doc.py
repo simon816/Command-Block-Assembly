@@ -36,6 +36,21 @@ class InstructionDoc:
             descs.append('**%s**: `%s` %s' % (name, typename(argtype), doc))
         return '\n\n'.join(descs)
 
+    def get_location(self):
+        locs = []
+        if self.cls.is_preamble_insn:
+            if self.cls.top_preamble_only:
+                locs.append('global preamble')
+            elif self.cls.func_preamble_only:
+                locs.append('function preamble')
+            else:
+                locs.append('preamble')
+        if self.cls.is_compiletime:
+            locs.append('compiletime')
+        if self.cls.is_runtime:
+            locs.append('runtime code')
+        return ', '.join(locs)
+
     def to_markdown(self):
         spec = self.name + self.get_argnames()
         argdesc = self.get_argdesc()
@@ -44,7 +59,9 @@ class InstructionDoc:
             argdesc += '\n\n' + '**ret**: `%s`' % typename(self.cls.rettype)
         doc = self.cls.__doc__
         assert doc is not None, self.name
-        return '### %s\n`%s`\n\n%s\n\n%s' % (self.name, spec, doc, argdesc)
+        loc = 'Allowed locations: %s' % self.get_location()
+        return '### %s\n`%s`\n\n%s\n\n%s\n\n%s' % (self.name, spec, doc,
+                                                   argdesc, loc)
 
 class SetScoreDoc(InstructionDoc):
 
