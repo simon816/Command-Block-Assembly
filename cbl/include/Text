@@ -24,8 +24,17 @@ type Text {
         return this;
     }
 
-    Text operator +=(string str);
-    Text operator <<(string str);
+    constexpr Text operator +=(string str) {
+        ir(this._text, str) {
+            text_append $arg0, $arg1
+        }
+    }
+
+    constexpr Text operator <<(string str) {
+        ir(this._text, str) {
+            text_append $arg0, $arg1
+        }
+    }
 
     macro void send_to_all() {
         _IRType all_players("selector a");
@@ -34,21 +43,4 @@ type Text {
         }
     }
 
-}
-
-intrinsic_extension {
-
-    Text Text::operator <<(string str) Python: {
-        with compiletime:
-            m = this.get_member(compiler, '_text')
-            compiler.add_insn(i.TextAppend(m.value.var, i.VirtualString(args.str.value)))
-            return thisarg
-    }
-
-    Text Text::operator +=(string str) Python: {
-        with compiletime:
-            m = this.get_member(compiler, '_text')
-            compiler.add_insn(i.TextAppend(m.value.var, i.VirtualString(args.str.value)))
-            return thisarg
-    }
 }

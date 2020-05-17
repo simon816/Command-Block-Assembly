@@ -7,7 +7,7 @@ from .core_types import NativeType, FunctionLike, PosUtilEntity, GlobalEntity
 
 from .variables import (Variable, VarType, ParameterVariable, ReturnVariable,
                         LocalStackVariable, LocalVariable, NbtOffsetVariable,
-                        GlobalVariable, ExternVariable)
+                        GlobalVariable, ExternVariable, SubNbtVariable)
 
 class FuncWriter(metaclass=abc.ABCMeta):
 
@@ -462,8 +462,11 @@ class TopLevel(VariableHolder):
                     if isinstance(var, ExternFunction):
                         externs[name].append(var)
                     elif isinstance(var, IRFunction):
-                        # Name must be the same as global name
-                        out.store(name, var)
+                        if var.extern_visibility:
+                            # Name must be the same as global name
+                            out.store(name, var)
+                        else:
+                            private.append((name, var))
                         # re-parent function scopes
                         var.scope.parent = out.scope
                         all_blocks.extend(var.blocks)
@@ -479,7 +482,7 @@ class TopLevel(VariableHolder):
                 elif isinstance(var, ExternVariable):
                     extern_vars[name].append(var)
                 else:
-                    out.generate_name(name, var)
+                    private.append((name, var))
         extern_mapping = {}
         for name, externlist in externs.items():
             new_extern = externlist[0]
@@ -519,7 +522,9 @@ class TopLevel(VariableHolder):
                 block.apply_mapping(ExternVariable, extern_mapping)
 
         for name, var in private:
-            out.generate_name(name, var)
+            newvar = out.generate_name(name, var)
+            if isinstance(newvar, IRFunction):
+                newvar._name = newvar._name.with_name(out.name_for(newvar))
 
         out.end()
         return out
@@ -786,7 +791,7 @@ class IRFunction(VisibleFunction, VariableHolder):
 
     @property
     def is_internal(self):
-        return not self._is_extern and (self.params or self.returns)
+        return not self._is_extern or self.params or self.returns
 
     @property
     def global_name(self):
@@ -903,6 +908,8 @@ class IRFunction(VisibleFunction, VariableHolder):
             else:
                 copy = var.inline_copy()
                 scope_mapping[var] = other.generate_name(name, copy)
+                if isinstance(copy, SubNbtVariable):
+                    copy.apply_mapping(scope_mapping)
 
         # Check iterators have been consumed
         assert all(False for _ in argiter)

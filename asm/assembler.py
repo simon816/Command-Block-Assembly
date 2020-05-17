@@ -138,7 +138,11 @@ class Assembler:
             self.global_mapping.update(assembler.global_mapping)
         elif directive == 'event_handler':
             handler, event, conditions = value.split(' ', 2)
-            event = self.top.preamble.define(CreateEvent(VirtualString(event)))
+            if event in ['minecraft:tick', 'minecraft:load']:
+                insn = CreateTagEvent
+            else:
+                insn = CreateAdvEvent
+            event = self.top.preamble.define(insn(VirtualString(event)))
             if conditions:
                 for cond in conditions.split(';'):
                     key, value = cond.split('=', 1)

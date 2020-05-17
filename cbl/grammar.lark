@@ -11,11 +11,15 @@ include: "include" ESCAPED_STRING
 
 namespace_change: "namespace" IDENT ";" | "no" "namespace" ";"
 
-?scoped_declaration: (var_arr_declaration | func_declaration) ";"
+?scoped_declaration: (var_decl_with_init | func_declaration) ";"
 ?var_arr_declaration: var_declaration | array_declaration
 global_var_arr_decl: (EXTERN | STATIC) var_arr_declaration ";"
 EXTERN: "extern"
 STATIC: "static"
+
+var_init_expr: "=" assignment_expression
+var_ctor_expr: "(" [assignment_expression ("," assignment_expression)*] ")"
+?var_decl_with_init: var_arr_declaration (var_init_expr|var_ctor_expr)?
 
 var_declaration: type_name_hack IDENT
 
@@ -64,9 +68,7 @@ event_condition: IDENT ("." IDENT)* ":" conditional_expression
 
 namespace_name: "[" "Namespace" IDENT "]"
 
-var_init_expr: "=" assignment_expression
-var_ctor_expr: "(" [assignment_expression ("," assignment_expression)*] ")"
-var_init_declaration: var_arr_declaration (var_init_expr|var_ctor_expr)? ";"
+var_init_declaration: var_decl_with_init ";"
 
 property_decl: "property" func_declaration
 property_def: "property" normal_func_def

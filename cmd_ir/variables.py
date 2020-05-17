@@ -510,6 +510,10 @@ class SubNbtVariable(NbtStorableVariable):
         self.__root = root
         self.__subpath = subpath
 
+    def apply_mapping(self, mapping):
+        if self.__root in mapping:
+            self.__root = mapping[self.__root]
+
     @property
     def namespace(self):
         assert False, "TODO"
@@ -534,7 +538,7 @@ class SubNbtVariable(NbtStorableVariable):
 
     def usage_write(self):
         super().usage_write()
-        self.__root.usage.usage_write()
+        self.__root.usage_write()
 
     @property
     def is_read_from(self):

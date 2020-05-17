@@ -1,4 +1,4 @@
-from .native_type import NativeType
+from .native_type import NativeType, MetaType
 from .function_type import FunctionDispatchType, FunctionDispatcher, \
      IntrinsicCallable
 from .containers import InstanceSymbol, Parameter, Temporary, DelegatedWrite
@@ -296,11 +296,11 @@ class CBLType(NativeType):
         return self.__operators[opname].dispatch(compiler, left, args)
 
 # Meta-type: Actions performed on types themselves
-class CBLTypeMeta(CBLType):
+class CBLTypeMeta(CBLType, MetaType):
 
     def __init__(self, the_type):
         super().__init__()
-        self.the_type = the_type
+        MetaType.__init__(self, the_type)
         self._meta_instance = None
 
     def create_meta(self, compiler, namehint):
@@ -312,13 +312,6 @@ class CBLTypeMeta(CBLType):
     @property
     def instance(self):
         return self._meta_instance
-
-    def call_constructor(self, compiler, container, args):
-        the_type = container.type.the_type
-        obj = the_type.allocate(compiler, safe_typename(the_type) + '_inst')
-        tmp = Temporary(the_type, obj)
-        the_type.run_constructor(compiler, tmp, args)
-        return tmp
 
     def complete_type(self, compiler):
         if not self.incomplete:

@@ -1,4 +1,4 @@
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 from commands import CommandBlock, Cmd, NSName, EntityReference, GlobalEntity, \
      ExecuteChain, DataModifyValue, SimpleResolve
@@ -71,6 +71,12 @@ class Scope:
     def function_name(self, name):
         if name not in self.func_names:
             raise NameError('Function name %r not found' % name.uqn)
+        return name.maybe_qualify(self.namespace).fqn
+
+    def namespaced(self, name):
+        return NSName(name).maybe_qualify(self.namespace)
+
+    def func_tag_name(self, name):
         return name.maybe_qualify(self.namespace).fqn
 
     def team_name(self, name):
@@ -178,36 +184,29 @@ class Session:
         self.writer.write_function(name, [cmd.resolve(self.scope)
                                           for cmd in commands])
 
-    def add_event_handlers(self, event_handlers):
+    def add_event_handlers(self, adv_handlers, tag_handlers):
         load_func, clean_func = self.create_load_function()
+        tag_events = defaultdict(list)
 
-        load_list = [load_func] if load_func else []
-        tag_events = {
-            'minecraft:tick': ('minecraft', 'tick', []),
-            'minecraft:load': ('minecraft', 'load', load_list)
-        }
+        if load_func:
+            tag_events[NSName('minecraft:load')].append(load_func)
 
-        for event_handler in event_handlers:
-            event_name, conditions, handler = event_handler
+        for (tag, handler) in tag_handlers:
+            tag_name = self.scope.namespaced(tag)
+            tag_events[tag_name].append(self.scope.function_name(handler))
 
-            # This is a tag-based event
-            if event_name in tag_events:
-                assert not conditions
-                namespace, tag_name, values = tag_events[event_name]
-                values.append(self.scope.function_name(handler))
-            else: # This is an advancement-based event
-                # Note: advancement name = handler func name
-                name = self.scope.advancement_name(handler)
-                adv = Advancement(handler)
-                adv.event_criteria(name, event_name, conditions)
-                adv.reward_function(self.scope.function_name(handler))
-                self.writer.write_advancement(adv)
+        for (event_name, conditions, handler) in adv_handlers:
+            # Note: advancement name = handler func name
+            name = self.scope.advancement_name(handler)
+            adv = Advancement(handler)
+            adv.event_criteria(name, event_name, conditions)
+            adv.reward_function(self.scope.function_name(handler))
+            self.writer.write_advancement(adv)
 
         # Write all tag events if has values
-        for namespace, tag_name, values in tag_events.values():
+        for nsname, values in tag_events.items():
             if values:
-                self.writer.write_tag('functions', tag_name, values,
-                                      namespace=namespace)
+                self.writer.write_tag('functions', nsname, values)
 
         # Return up to main in case cleanup was requested
         return clean_func
@@ -311,7 +310,8 @@ class _SessionWriter(FuncWriter):
 
     def __init__(self, session):
         self.session = session
-        self.event_handlers = []
+        self.adv_event_handlers = []
+        self.tag_event_handlers = []
 
     @property
     def namespace(self):
@@ -324,7 +324,13 @@ class _SessionWriter(FuncWriter):
         self.session.add_function(name, commands)
 
     def write_event_handler(self, handler, event):
-        self.event_handlers.append((
+        if event.is_tag:
+            self.tag_event_handlers.append((
+                event.name,
+                handler.global_name
+            ))
+        else:
+            self.adv_event_handlers.append((
                 event.name,
                 event.conditions,
                 handler.global_name
@@ -346,7 +352,10 @@ class _SessionWriter(FuncWriter):
         self.session.add_global_nbt(storage, path, init_val)
 
     def write_setup_function(self, func):
-        self.event_handlers.append(('minecraft:load', None, func.global_name))
+        self.tag_event_handlers.append(('minecraft:load', func.global_name))
 
     def finish(self):
-        return self.session.add_event_handlers(self.event_handlers)
+        return self.session.add_event_handlers(
+                self.adv_event_handlers,
+                self.tag_event_handlers
+            )

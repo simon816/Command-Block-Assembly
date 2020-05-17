@@ -1,6 +1,5 @@
 from .containers import LiteralInt, LiteralDec, Temporary
-from .native_type import NativeType, as_var
-from .cbl_type import CBLType, CBLTypeInstance
+from .native_type import NativeType
 from .operator_mixins import LogOperatorMixin, IntegerOperators, \
      NumericalOperators, IntrinsicOperatorType
 
@@ -62,14 +61,6 @@ class DecimalType(NumericalOperators, IntrinsicOperatorType):
             return Temporary(type, v)
         return super().coerce_to(compiler, val, type)
 
-class StringInstance:
-    pass
-
-class StringType(NativeType):
-
-    def allocate(self, compiler, namehint):
-        return StringInstance()
-
 class BlockTypeInstance:
 
     def __init__(self):
@@ -97,30 +88,3 @@ class ItemTypeType(NativeType):
 
     def allocate(self, compiler, namehint):
         return ItemTypeInstance()
-
-class EventNameInstance:
-
-    def __init__(self, compiler):
-        self.compiler = compiler
-        self.__name = None
-
-    def init(self, name):
-        assert self.__name is None
-        self.__name = name
-
-    def new_event(self):
-        assert self.__name is not None
-        event = i.CreateEvent(i.VirtualString(self.__name))
-        return self.compiler.global_def(self.__name, event)
-
-    def add_condition(self, event, condition):
-        # TODO type checking etc
-        path = i.VirtualString('.'.join(condition.path))
-        assert type(condition.value.value) == str, condition.value
-        value = i.VirtualString(condition.value.value)
-        self.compiler.top.preamble.add(i.AddEventCondition(event, path, value))
-
-class EventType(NativeType):
-
-    def allocate(self, compiler, namehint):
-        return EventNameInstance(compiler)

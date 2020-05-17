@@ -3,13 +3,14 @@ import contextlib
 
 from .parser_ import Parser, Transformer_WithPre, v_args
 from .struct_type import StructuredType
-from .cbl_type import CBLTypeMeta
-from .native_type import as_var, NativeType, IRType
+from .native_type import as_var, NativeType, MetaType
+from .ir_type import IRType, StringType
 from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
 from .macro_type import MacroType
-from .base_types import VoidType, BoolType, IntType, DecimalType, StringType, \
-     BlockTypeType, ItemTypeType, EventType
+from .base_types import VoidType, BoolType, IntType, DecimalType, \
+     BlockTypeType, ItemTypeType
+from .event_type import TagEventType, AdvancementEventType
 from .maybe_type import MaybeType
 from .template_type import TemplatedType
 from .types import Types
@@ -29,7 +30,7 @@ import cmd_ir.instructions as i
 EventCondition = namedtuple('EventCondition', 'path value')
 FuncAnnotation = namedtuple('FuncAnnotation', 'event_handler namespace')
 
-VarDeclaration = namedtuple('VarDeclaration', 'type name')
+VarDeclaration = namedtuple('VarDeclaration', 'type name init')
 ExternVarDeclaration = namedtuple('ExternVarDeclaration', 'decl')
 StaticVarDeclaration = namedtuple('StaticVarDeclaration', 'decl')
 FuncDeclaration = namedtuple('FuncDeclaration', 'name ret_type params ' + \
@@ -165,7 +166,7 @@ class Compiler(Transformer_WithPre):
         self.inclusion_set = set()
         self.scope = ScopeManager(self)
         self.types = Types()
-        self.create_var = self.__create_var
+        self.create_var = self.__create_global
         self.add_core_types()
         self.top = TopLevel()
         self._global_func_names = set()
@@ -179,6 +180,7 @@ class Compiler(Transformer_WithPre):
         self.funcsym = None
         self.block = None
         self.ret_param = None
+        self._create_init_func()
         self.include_file('__builtin__')
 
     def compile_unit(self, program, filename):
@@ -196,6 +198,7 @@ class Compiler(Transformer_WithPre):
         self.entity_support.finish()
         for fn_container in self.possible_extern:
             fn_container.extern_if_needed()
+        self.func.end()
         self.top.end()
 
     def include_file(self, name):
@@ -232,7 +235,13 @@ class Compiler(Transformer_WithPre):
 
         self.add_type('BlockType', BlockTypeType())
         self.add_type('ItemType', ItemTypeType())
-        self.add_type('Event', EventType())
+        self.add_base_type('TagEvent', TagEventType())
+        self.add_base_type('AdvEvent', AdvancementEventType())
+
+    def _create_init_func(self):
+        self.func = self.top.create_function('.cbl_init')
+        self.top.preamble.add(i.SetupInsn(self.func))
+        self.block = self.func.create_block('entry')
 
     # === Support / Helpers === #
 
@@ -240,8 +249,11 @@ class Compiler(Transformer_WithPre):
         out = []
         # TODO out.append('Defining type: %s' % self.typedef.typename)
         if self.func is not None:
-            out.append('Compiling function %s%s' % (self.funcsym.name,
-                                              self.funcsym.type.param_str()))
+            if self.funcsym is None:
+                fsig = '.cbl_init'
+            else:
+                fsig = self.funcsym.name + self.funcsym.type.param_str()
+            out.append('Compiling function ' + fsig)
             if self.block is not None:
                 out.append('Current basic block: %s' % str(self.block))
                 prev = self.block.serialize().split('\n')
@@ -267,10 +279,10 @@ class Compiler(Transformer_WithPre):
     def dispatch_operator(self, op, left, right=None):
         return left.type.dispatch_operator(self, op, left, right)
 
-    def __create_var(self, namehint, var_type):
-        if self.func is None:
-            return self.top.create_global(namehint, var_type, True,
-                                          self.namespace)
+    def __create_global(self, namehint, var_type):
+        return self.top.create_global(namehint, var_type, True, self.namespace)
+
+    def __create_local(self, namehint, var_type):
         return self.func.create_var(namehint, var_type)
 
     @contextlib.contextmanager
@@ -383,16 +395,17 @@ class Compiler(Transformer_WithPre):
             self.possible_extern.append(symbol.value)
         return symbol
 
-    def _construct_variable_from_decl(self, decl, init=None):
-        if init is not None:
-            if isinstance(init, ConstructorArgs):
-                ctor_args = init.args
-            else:
-                # Assignment initialization - use copy constructor
-                ctor_args = (init,)
-        else:
+    def _ctor_init_args(self, init):
+        if init is None:
             # Use default constructor if no init
-            ctor_args = ()
+            return ()
+        if isinstance(init, ConstructorArgs):
+            return init.args
+        # Assignment initialization - use copy constructor
+        return (init,)
+
+    def _construct_variable_from_decl(self, decl):
+        ctor_args = self._ctor_init_args(decl.init)
         self._construct_variable(decl.name, decl.type, ctor_args)
 
     def _construct_variable(self, name, type, args):
@@ -469,7 +482,7 @@ class Compiler(Transformer_WithPre):
         self.namespace = None if ns is None else ns.value
 
     def var_declaration(self, type, name):
-        return VarDeclaration(type, name.value)
+        return VarDeclaration(type, name.value, None)
 
     def global_var_arr_decl(self, modifier, decl):
         if modifier.type == 'EXTERN':
@@ -500,7 +513,7 @@ class Compiler(Transformer_WithPre):
 
     def array_declaration(self, base_type, name, size):
         type = ArrayType(base_type, size.value)
-        return VarDeclaration(type, name.value)
+        return VarDeclaration(type, name.value, None)
 
     def param_list(self, *params):
         return params
@@ -569,8 +582,7 @@ class Compiler(Transformer_WithPre):
             if annot.namespace is not None:
                 namespace = annot.namespace
         func.set_namespace(namespace)
-        if not func_decl.is_operator and not func_decl.inline \
-           and not func_decl.typespace and not func_decl.params:
+        if not func_decl.inline:
             func.preamble.add(i.ExternInsn())
         if func_decl.inline:
             func.preamble.add(i.InlineInsn())
@@ -595,7 +607,8 @@ class Compiler(Transformer_WithPre):
         if func_sym.type.is_async:
             self.func.preamble.add(i.RunCallbackOnExit())
         self.block = self.func.create_block('entry')
-        yield
+        with self.set_create_var(self.__create_local):
+            yield
         if not self.block.is_terminated():
             self.block.add(i.Return())
         self.func.end()
@@ -712,15 +725,23 @@ class Compiler(Transformer_WithPre):
 
     def pre_event_handler(self, tree, post_transform):
         event, *conditions = tree.children
-        event_expr = self.transform(event)
-        assert isinstance(event_expr.type, EventType)
-        ev_inst = event_expr.value
-        event = ev_inst.new_event()
-        cond = []
-        for condition in conditions:
-            cond = self.transform(condition)
-            ev_inst.add_condition(event, cond)
-        return FuncAnnotation(event_handler=event, namespace=None)
+        eventcont = self.transform(event)
+        is_tag = isinstance(eventcont.type, TagEventType)
+        if is_tag:
+            assert not conditions
+            eventref = eventcont.value.get_var()
+        else:
+            assert isinstance(eventcont.type, AdvancementEventType)
+            if conditions:
+                # Create a new event object with the conditions
+                event = eventcont.value.create_new(self)
+                for condition in conditions:
+                    cond = self.transform(condition)
+                    event.add_condition(cond)
+                eventref = event.get_var()
+            else:
+                eventref = eventcont.value.get_var()
+        return FuncAnnotation(event_handler=eventref, namespace=None)
 
     @v_args(inline=False)
     def event_condition(self, children):
@@ -736,8 +757,11 @@ class Compiler(Transformer_WithPre):
     def var_ctor_expr(self, *ctor_args):
         return ConstructorArgs(ctor_args)
 
-    def var_init_declaration(self, decl, init=None):
-        self._construct_variable_from_decl(decl, init)
+    def var_decl_with_init(self, decl, init):
+        return decl._replace(init=init)
+
+    def var_init_declaration(self, decl):
+        self._construct_variable_from_decl(decl)
 
     def property_decl(self, prop):
         return PropertyDeclaration(prop)
@@ -777,8 +801,9 @@ class Compiler(Transformer_WithPre):
         with self.scope:
             for decl_node in decls:
                 decl = self.transform(decl_node)
+                # n.b. var inits not possible for type definitions
                 self.process_decl_or_def(type, decl, ctor_definitions,
-                                         func_definitions)
+                                         func_definitions, {})
             type.complete_type(self)
             for ctor_def in ctor_definitions:
                 # Set the typespace on the declaration
@@ -793,9 +818,11 @@ class Compiler(Transformer_WithPre):
                 self.process_func_definition(func_def)
 
     def process_decl_or_def(self, type, decl, ctor_definitions,
-                            func_definitions):
+                            func_definitions, var_inits):
         if isinstance(decl, VarDeclaration):
             type.add_variable_member(decl.name, decl.type)
+            if decl.init is not None:
+                var_inits[decl.name] = decl.init
         elif isinstance(decl, FuncDeclaration):
             self.declare_function_on_type(type, decl)
         elif isinstance(decl, CtorDeclaration):
@@ -810,9 +837,7 @@ class Compiler(Transformer_WithPre):
             func_definitions.append(decl)
         elif isinstance(decl, PropertyDeclaration):
             prop = decl.prop
-            if isinstance(prop, VarDeclaration):
-                type.add_variable_property(prop.name, prop.type)
-            elif isinstance(prop, FunctionDefinition):
+            if isinstance(prop, FunctionDefinition):
                 self.declare_function_property_on_type(type, prop.decl)
                 func_definitions.append(prop)
             elif isinstance(prop, FuncDeclaration):
@@ -914,9 +939,11 @@ class Compiler(Transformer_WithPre):
         func_defs = []
         mtype = type.metatype
         with self.scope:
+            var_inits = {}
             for decl_node in decls:
                 decl = self.transform(decl_node)
-                self.process_decl_or_def(mtype, decl, ctor_defs, func_defs)
+                self.process_decl_or_def(mtype, decl, ctor_defs, func_defs,
+                                         var_inits)
                 assert not ctor_defs
             mtype.complete_type(self)
             mtype.create_meta(self, name.value)
@@ -926,6 +953,12 @@ class Compiler(Transformer_WithPre):
                 func_def = func_def._replace(decl=func_def.decl._replace(
                     typespace=mtype))
                 self.process_func_definition(func_def)
+
+            # Call constructor on our members
+            for mname in mtype.get_var_members().keys():
+                sym = mtype.instance[mname]
+                args = self._ctor_init_args(var_inits.get(mname))
+                sym.type.run_constructor(self, sym, args)
 
     def pre_intrinsic(self, tree, post_transform):
         self.intrinsic_support.traverse(tree.children)
@@ -958,7 +991,7 @@ class Compiler(Transformer_WithPre):
             self.block.add(i.RangeBr(as_var(cond), 0, 0, end, body_block))
             self.block = body_block
             self.transform(body)
-            if not self.block.is_terminated:
+            if not self.block.is_terminated():
                 self.block.add(i.Branch(begin))
             self.block = end
 
@@ -978,7 +1011,7 @@ class Compiler(Transformer_WithPre):
                 self.block.add(i.Branch(body_block))
             self.block = body_block
             self.transform(body)
-            if not self.block.is_terminated:
+            if not self.block.is_terminated():
                 self.block.add(i.Branch(after_block))
             self.block = after_block
             self.transform(after)
@@ -1038,7 +1071,7 @@ class Compiler(Transformer_WithPre):
             self.block.add(i.Branch(begin))
             self.block = begin
             self.transform(body)
-            if not self.block.is_terminated:
+            if not self.block.is_terminated():
                 self.block.add(i.Branch(cond_block))
             self.block = cond_block
             cond = self.transform(cond)
@@ -1059,12 +1092,12 @@ class Compiler(Transformer_WithPre):
                                  true_block))
         self.block = true_block
         self.transform(if_true)
-        if not self.block.is_terminated:
+        if not self.block.is_terminated():
             self.block.add(i.Branch(end))
         if if_false:
             self.block = false_block
             self.transform(if_false)
-            if not self.block.is_terminated:
+            if not self.block.is_terminated():
                 self.block.add(i.Branch(end))
         else:
             false_block.add(i.Branch(end))
@@ -1111,10 +1144,7 @@ class Compiler(Transformer_WithPre):
         real_scope = self.func.isolate()
         vars = []
         for n, container in enumerate(exprs):
-            if container.type == self.type('_IRType'):
-                v = container.value.var
-            else:
-                v = as_var(container)
+            v = container.type.as_ir_variable(container.value)
             self.func.store('arg%d' % n, v)
             vars.append(v)
         r.read_blocks(self.func, 'entry:\n' + ir_code)
@@ -1246,7 +1276,7 @@ class Compiler(Transformer_WithPre):
 
     def function_call_expr(self, func_ref, *fn_args):
         # Special case for type constructors
-        if isinstance(func_ref.type, CBLTypeMeta):
+        if isinstance(func_ref.type, MetaType):
             return func_ref.type.call_constructor(self, func_ref, fn_args)
 
         assert isinstance(func_ref.type, Invokable)

@@ -1,3 +1,10 @@
+macro void raw_command(string cmdstr) {
+    _IRType cmd("command", cmdstr);
+    ir(cmd) {
+        run_cmd $arg0
+    }
+}
+
 type vec3<T> {
     T x;
     T y;
@@ -236,7 +243,7 @@ inline vec3<T> vec3<T>::operator*(T scalar) {
     return vec3(T)(this.x * scalar, this.y * scalar, this.z * scalar);
 }
 
-
+/*
 singleton Util {
     Entity pos_util;
 }
@@ -248,3 +255,4 @@ intrinsic_extension {
         ptr.set_fixed_var(compiler.top.lookup('pos_util'))
     }
 }
+*/

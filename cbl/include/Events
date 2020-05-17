@@ -1,10 +1,34 @@
 singleton Events {
-    Event placed_block;
-}
+    TagEvent tick = TagEvent("minecraft:tick");
+    TagEvent load = TagEvent("minecraft:load");
 
-intrinsic_extension {
-    reconfigure_type Events Python: {
-        for name, event in the_type.metatype.instance.items():
-            event.value.init('minecraft:' + name)
-    }
+    AdvEvent bred_animals = AdvEvent("minecraft:bred_animals");
+    AdvEvent brewed_potion = AdvEvent("minecraft:brewed_potion");
+    AdvEvent changed_dimension = AdvEvent("minecraft:changed_dimension");
+    AdvEvent channeled_lightning = AdvEvent("minecraft:channeled_lightning");
+    AdvEvent construct_beacon = AdvEvent("minecraft:construct_beacon");
+    AdvEvent consume_item = AdvEvent("minecraft:consume_item");
+    AdvEvent cured_zombie_villager = AdvEvent("minecraft:cured_zombie_villager");
+    AdvEvent effects_changed = AdvEvent("minecraft:effects_changed");
+    AdvEvent enchanted_item = AdvEvent("minecraft:enchanted_item");
+    AdvEvent enter_block = AdvEvent("minecraft:enter_block");
+    AdvEvent entity_hurt_player = AdvEvent("minecraft:entity_hurt_player");
+    AdvEvent entity_killed_player = AdvEvent("minecraft:entity_killed_player");
+    AdvEvent filled_bucket = AdvEvent("minecraft:filled_bucket");
+    AdvEvent fishing_rod_hooked = AdvEvent("minecraft:fishing_rod_hooked");
+    AdvEvent impossible = AdvEvent("minecraft:impossible");
+    AdvEvent inventory_changed = AdvEvent("minecraft:inventory_changed");
+    AdvEvent item_durability_changed = AdvEvent("minecraft:item_durability_changed");
+    AdvEvent levitation = AdvEvent("minecraft:levitation");
+    AdvEvent location = AdvEvent("minecraft:location");
+    AdvEvent nether_travel = AdvEvent("minecraft:nether_travel");
+    AdvEvent placed_block = AdvEvent("minecraft:placed_block");
+    AdvEvent player_hurt_entity = AdvEvent("minecraft:player_hurt_entity");
+    AdvEvent player_killed_entity = AdvEvent("minecraft:player_killed_entity");
+    AdvEvent recipe_unlocked = AdvEvent("minecraft:recipe_unlocked");
+    AdvEvent slept_in_bed = AdvEvent("minecraft:slept_in_bed");
+    AdvEvent summoned_entity = AdvEvent("minecraft:summoned_entity");
+    AdvEvent tame_animal = AdvEvent("minecraft:tame_animal");
+    AdvEvent used_totem = AdvEvent("minecraft:used_totem");
+    AdvEvent villager_trade = AdvEvent("minecraft:villager_trade");
 }

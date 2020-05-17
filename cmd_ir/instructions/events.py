@@ -2,6 +2,8 @@
 
 from ._core import PreambleInsn, ConstructorInsn, SingleCommandInsn
 from ..core_types import (VirtualString,
+                          AdvEventRef,
+                          TagEventRef,
                           EventRef,
                           Selector,
                           SelectorType,
@@ -9,28 +11,38 @@ from ..core_types import (VirtualString,
 from ..core import IRFunction, VisibleFunction
 import commands as c
 
-class CreateEvent(ConstructorInsn):
-    """Creates a new event object."""
+class CreateAdvEvent(ConstructorInsn):
+    """Creates an advancement-based event object."""
 
     args = [VirtualString]
     argnames = 'event_name'
     argdocs = ["The event name"]
-    rettype = EventRef
-    top_preamble_only = True
-    insn_name = 'event'
+    rettype = AdvEventRef
+    insn_name = 'adv_event'
 
     def construct(self):
-        return EventRef(str(self.event_name))
+        return AdvEventRef(str(self.event_name))
+
+class CreateTagEvent(ConstructorInsn):
+    """Creates a tag-based event object."""
+
+    args = [VirtualString]
+    argnames = 'tag_name'
+    argdocs = ["The function tag name"]
+    rettype = TagEventRef
+    insn_name = 'tag_event'
+
+    def construct(self):
+        return TagEventRef(str(self.tag_name))
 
 class AddEventCondition(PreambleInsn):
     """Add a condition to an event that must be true for the event handler
     to be invoked."""
 
-    args = [EventRef, VirtualString, VirtualString]
+    args = [AdvEventRef, VirtualString, VirtualString]
     argnames = 'event path value'
     argdocs = ["Event to add the condition to", "JSON path in the advancement",
                "Value that must match"]
-    top_preamble_only = True
     insn_name = 'add_event_condition'
 
     def preapply(self, preamble):
@@ -47,7 +59,7 @@ class EventHandler(PreambleInsn):
     insn_name = 'event_handler'
 
     def preapply(self, preamble):
-        if self.event.name not in ['minecraft:tick', 'minecraft:load']:
+        if not self.event.is_tag:
             self.handler.add_advancement_revoke(self.event)
 
     def declare(self):
@@ -56,6 +68,17 @@ class EventHandler(PreambleInsn):
     def postapply(self, out, top):
         assert not self.handler.is_inline
         out.write_event_handler(self.handler, self.event)
+
+class FireEventInsn(SingleCommandInsn):
+    """Fires a tag-based event to all listeners."""
+
+    args = [TagEventRef]
+    argnames = 'event'
+    argdocs = ["Tag event to fire"]
+    insn_name = 'fire_event'
+
+    def get_cmd(self, func):
+        return c.FunctionTag(c.NSName(self.event.name))
 
 class RevokeEventAdvancement(SingleCommandInsn):
     """(Internal) Revokes an advancement to allow an event to re-fire."""

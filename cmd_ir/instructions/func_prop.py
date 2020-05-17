@@ -5,8 +5,8 @@ from .control_flow import RunDeferredCallback
 from ..core_types import VirtualString
 
 class ExternInsn(PreambleInsn):
-    """Marks the function as externally visible. The function will not
-    be removed during optimization."""
+    """Marks the function as externally visible. The function will not be
+    renamed on name conflict and will not be removed during optimization."""
 
     args = []
     argnames = ''

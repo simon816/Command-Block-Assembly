@@ -100,9 +100,9 @@ class DataPackWriter:
         self.func_count += 1
         self.command_count += len(command_list)
 
-    def write_tag(self, type, name, values, replace=False, namespace=None):
-        path = os.path.join('tags', type, name + '.json')
-        with self.open_data(path, namespace=namespace) as f:
+    def write_tag(self, type, nsname, values, replace=False):
+        path = os.path.join('tags', type, nsname.name + '.json')
+        with self.open_data(path, namespace=nsname.namespace) as f:
             json.dump({ 'values': values, 'replace': replace }, f)
 
     def write_advancement(self, advancement):
@@ -172,7 +172,7 @@ class DummyWriter:
     def write_advancement(self, advancement):
         pass
 
-    def write_tag(self, type, name, values, replace=False, namespace=None):
+    def write_tag(self, type, nsname, values, replace=False):
         pass
 
     def write_mcc_meta(self, meta):
@@ -210,11 +210,11 @@ class DebugWriterWrapper:
         print()
         self.writer.write_advancement(advancement)
 
-    def write_tag(self, type, name, values, replace=False, namespace=None):
+    def write_tag(self, type, nsname, values, replace=False):
         print('Tag')
-        print('%s: %s' % (name, values))
+        print('%s: %s' % (nsname.uqn, values))
         print()
-        self.writer.write_tag(type, name, values, replace, namespace)
+        self.writer.write_tag(type, nsname, values, replace)
 
     def write_mcc_meta(self, meta):
         print('MCC Metadata')

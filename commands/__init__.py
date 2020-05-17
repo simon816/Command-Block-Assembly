@@ -21,6 +21,15 @@ class Function(Command):
     def resolve(self, scope):
         return 'function %s' % scope.function_name(self.name)
 
+class FunctionTag(Command):
+
+    def __init__(self, tag_name):
+        assert isinstance(tag_name, NSName)
+        self._name = tag_name
+
+    def resolve(self, scope):
+        return 'function #' + scope.func_tag_name(self._name)
+
 class Teleport(Command):
 
     def __init__(self, target, *more):

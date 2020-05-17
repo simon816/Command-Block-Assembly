@@ -371,15 +371,29 @@ def Opt(optype):
 
 class EventRef(NativeType):
 
-    def __init__(self, name):
+    def __init__(self, name, is_tag):
         self.name = name
+        self.is_tag = is_tag
+
+class TagEventRef(EventRef):
+
+    def __init__(self, name):
+        super().__init__(name, True)
+
+    def clone(self):
+        return self
+
+class AdvEventRef(EventRef):
+
+    def __init__(self, name):
+        super().__init__(name, False)
         self.conditions = {}
 
     def add_condition(self, path, value):
         self.conditions[path] = value
 
     def clone(self):
-        copy = EventRef(self.name)
+        copy = AdvEventRef(self.name)
         copy.conditions.update(self.conditions)
         return copy
 

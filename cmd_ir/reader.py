@@ -24,6 +24,7 @@ class BuildProgram(Interpreter):
         self.holder = self.top
         self.curr_seq = None
         self.func = None
+        self._hook_more_args = None
 
     def preamble(self, node):
         self.curr_seq = self.holder.preamble
@@ -134,6 +135,8 @@ class BuildProgram(Interpreter):
         opname, operands = self.visit_children(node)
         insn = Insn.lookup(opname.value)
         assert insn is not None, opname.value
+        if self._hook_more_args:
+            operands.extend(self._hook_more_args)
         assert len(operands) == len(insn.args), opname.value
         ctor_args = []
         for i, argtype in enumerate(insn.args):
@@ -230,10 +233,11 @@ class Reader:
         builder.holder = func
         builder.visit(tree)
 
-    def read_instruction(self, func, insn):
+    def read_instruction(self, func, insn, moreargs=()):
         tree = self.parser.parse('%HOOK INSN ' + insn)
         builder = BuildProgram()
         builder.func = func
         builder.holder = func
+        builder._hook_more_args = moreargs
         # the "start" visitor returns a list with one element - the insn
         return builder.visit(tree)[0]
