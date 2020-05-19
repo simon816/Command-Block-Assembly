@@ -28,13 +28,15 @@ class SetScore(RunAndCompileInsn):
             self.value.usage_read()
 
     def apply(self, out, func):
-        if isinstance(self.value, Variable):
+        if isinstance(self.value, CompilerVariable):
+            self.var.set_const_val(self.value.get_value(), out)
+        elif isinstance(self.value, Variable):
             self.value.clone_to(self.var, out)
         else:
             self.var.set_const_val(self.value, out)
 
     def run(self, ev):
-        assert isinstance(self.var, CompilerVariable)
+        assert isinstance(self.var, CompilerVariable), self
         if isinstance(self.value, Variable):
             assert isinstance(self.value, CompilerVariable), self
             value = self.value.get_value()

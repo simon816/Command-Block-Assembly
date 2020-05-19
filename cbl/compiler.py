@@ -657,6 +657,12 @@ class Compiler(Transformer_WithPre):
     def _allocate_return(self, type):
         def create_return(vname, var_type):
             return self.define(vname, i.ReturnVarInsn(var_type))
+
+        # Bit of a hack to support returns in constexpr
+        from cmd_ir.core import CompileTimeFunction
+        if isinstance(self.func, CompileTimeFunction):
+            create_return = self.__create_local
+
         with self.set_create_var(create_return):
             return Temporary(type, type.allocate(self, 'ret_' + \
                                                  safe_typename(type)))
@@ -1179,6 +1185,7 @@ class Compiler(Transformer_WithPre):
                    "Cannot return value in void function"
             self.dispatch_operator('=', self.ret_param, expr)
         self.add_insn(i.Return())
+        self.block = self.func.create_block('dead_code')
 
     def expression_statement(self, expr):
         # Force type and value to be present (e.g. check AsyncReturn)

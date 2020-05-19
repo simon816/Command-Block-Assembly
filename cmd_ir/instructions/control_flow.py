@@ -66,7 +66,7 @@ def make_stack_frame_from(values, out, destns):
             vtype = VarType.i32
         elif type(val) == float:
             default = val
-            vtype = VarType.decimal
+            vtype = VarType.q10
         elif isinstance(val, Variable):
             vtype = val.type
             default = vtype.default_val
