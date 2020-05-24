@@ -87,7 +87,7 @@ class NativeType:
         assert False
 
     def run_constructor(self, compiler, container, arguments):
-        assert not arguments
+        assert not arguments, (self, arguments)
 
     def do_construction(self, compiler, instance, member_inits):
         assert not member_inits

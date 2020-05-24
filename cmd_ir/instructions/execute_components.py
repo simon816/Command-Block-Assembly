@@ -33,8 +33,13 @@ class ExecChain(HolderHolder, NativeType, MultiOpen):
         chain = c.ExecuteChain()
         for component in self.components:
             component.apply(self, chain, out)
-        yield chain
-        self.close()
+        try:
+            yield chain
+        finally:
+            self.close()
+
+    def __str__(self):
+        return 'ExecChain(%s)' % ', '.join(map(str, self.components))
 
 class ExecComponent(metaclass=abc.ABCMeta):
 
@@ -188,7 +193,7 @@ class ExecComponentCondNBTVar(ExecComponent):
         self._var = var
 
     def add_holder(self, chain):
-        self.holder = chain.hold(self._var)
+        self.holder = chain.hold(self._var, Variable)
 
     def declare(self):
         self.holder.val.usage_read()
@@ -221,8 +226,8 @@ class ExecComponentCondCmp(ExecComponent):
         self.right = right
 
     def add_holder(self, chain):
-        self.lholder = chain.hold(self.left)
-        self.rholder = chain.hold(self.right)
+        self.lholder = chain.hold(self.left, Variable)
+        self.rholder = chain.hold(self.right, Variable)
 
     def declare(self):
         self.lholder.val.usage_read()

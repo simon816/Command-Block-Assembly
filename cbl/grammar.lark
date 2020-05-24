@@ -71,7 +71,7 @@ namespace_name: "[" "Namespace" IDENT "]"
 var_init_declaration: var_decl_with_init ";"
 
 property_decl: "property" func_declaration
-property_def: "property" normal_func_def
+property_def: "property" function_definition
 
 // All function definitions must occur after variable declarations have finished
 ?non_var_decl: func_declaration | property_decl | ctor_declaration

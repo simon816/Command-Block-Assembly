@@ -22,8 +22,9 @@ class MacroType(FunctionType, Invokable):
         else:
             return self.__expand_macro(compiler, args)
 
-    def __expand_macro(self, compiler, args):
-        with compiler._process_body_main(self.ret_type) as ret:
+    def __expand_macro(self, compiler, args, ret_does_return=False):
+        with compiler._process_body_main(self.ret_type,
+                return_var=False, ret_does_return=ret_does_return) as ret:
             compiler._alloc_and_copy_params(self.params, args)
             if self._init_list != False:
                 compiler.construct_this(self._init_list)
@@ -34,4 +35,4 @@ class MacroType(FunctionType, Invokable):
 
     def __expand_compiletime(self, compiler, args):
         with compiler.compiletime():
-            return self.__expand_macro(compiler, args)
+            return self.__expand_macro(compiler, args, True)

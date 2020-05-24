@@ -183,15 +183,23 @@ class StructuredType(CBLType):
         self.__construct_members(compiler, thisobj, member_inits)
 
     def __construct_members(self, compiler, thisobj, member_inits):
+        own_members = self.__var_members
+        if isinstance(self.parent_type, StructuredType):
+            p_members = self.parent_type.get_var_members().keys()
+            own_members = { name: m for name, m in self.__var_members.items() \
+                            if name not in p_members }
         for name in member_inits.keys():
-            assert name in self.__var_members
+            assert name in own_members, (self, name)
 
-        for varname in self.__var_members.keys():
+        for varname in own_members.keys():
             member = thisobj.get_member(compiler, varname)
             args = member_inits.get(varname, ())
             member.type.run_constructor(compiler, member, args)
 
     def coerce_to(self, compiler, container, type):
+        super_did_coerce = super().coerce_to(compiler, container, type)
+        if super_did_coerce:
+            return super_did_coerce
         if self.parent_type is not None:
             if type == self.parent_type and isinstance(type, StructuredType):
                 # Can re-use the nbt wrapper. Since extend is append-only
@@ -207,7 +215,7 @@ class StructuredType(CBLType):
                 return Temporary(type, val)
             # Walk the hierarchy to see if we can coerce from a parent type
             return self.parent_type.coerce_to(compiler, container, type)
-        return super().coerce_to(compiler, container, type)
+        return None
 
 class StructTypeMeta(CBLTypeMeta, StructuredType):
 

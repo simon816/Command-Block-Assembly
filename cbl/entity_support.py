@@ -112,7 +112,7 @@ class EntityPointerType(CBLType):
 
     def _copy_impl(self, compiler, this, other):
         this.value.ctor_from(other.value)
-#        compiler.add_insn(i.SetScore(this.value.variable, other.value.variable))
+        # compiler.add_insn(i.SetScore(this.value.variable, other.value.variable))
         return other
 
 class EntityTypeInstance:
@@ -189,6 +189,9 @@ class EntityPosComponentType(DecimalType):
     def as_variables(self, instance):
         return ()
 
+    def allocate(self, compiler, namehint):
+        assert False
+
     def new_temporary(self, compiler, namehint='tmp'):
         val = super().allocate(compiler, namehint)
         dec = compiler.type('decimal')
@@ -209,7 +212,7 @@ class EntityPosComponentType(DecimalType):
         if isinstance(right, (LiteralInt, LiteralDec)):
             left.value.tp_offset(-right.value)
             return left
-        return super().operator_add_assign(left, right)
+        return super().operator_sub_assign(left, right)
 
     def get_property(self, compiler, instance, prop):
         if prop == 'decval':
@@ -345,6 +348,10 @@ class EntitySupport:
         self.assign_pointer_to_sender(val)
         return Temporary(_ptr_type, val)
 
+    def constructor(self, this, ptr):
+        this.get_member(self.compiler, '_ptr').value.ctor_from(ptr.value)
+        return Temporary(self.compiler.type('void'), None)
+
     @contextlib.contextmanager
     def set_sender(self, ptr):
         assert isinstance(ptr, EntityPointer)
@@ -382,20 +389,29 @@ class EntitySupport:
         func = top.define_function('_internal/entity_ptr')
         func.preamble.add(i.PureInsn())
         retvar = func.preamble.define(i.ReturnVarInsn(i.VarType.i32))
+        ct = func.create_compiletime()
         entry = func.create_block('entry')
         set_uid = func.create_block('set_uid')
-        end = func.create_block('end')
+        set_uid.set_is_function()
+        ctblock = ct.create_block('ct_entry')
 
         uid_obj = top.preamble.add(cls.objective(), True, '__uid')
         sender = func.preamble.define(i.CreateSelector(i.SelectorType.SENDER))
         self_uid = func.preamble.define(i.CreateEntityLocalAccess(uid_obj, sender))
         next_uid = func.preamble.define(i.CreateEntityLocalAccess(uid_obj,
                                       top.lookup('_global_entity')))
-        entry.add(i.RangeBr(self_uid, 0, 0, set_uid, end))
+        ex = func.preamble.define(i.CreateExec())
+
+        # unless our uid is 1 or greater...
+        ctblock.add(i.ExecUnlessVar(ex, self_uid, 1, None))
+
+        ct.run_and_return()
+
+        entry.add(i.ExecRun(ex, set_uid))
+        entry.add(i.SetScore(retvar, self_uid))
+        entry.add(i.Return())
+
         set_uid.add(i.SetScore(self_uid, next_uid))
         set_uid.add(i.AddScore(next_uid, 1))
-        set_uid.add(i.Branch(end))
-        end.add(i.SetScore(retvar, self_uid))
-        end.add(i.Return())
         func.end()
         return func

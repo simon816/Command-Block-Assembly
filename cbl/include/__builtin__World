@@ -1,0 +1,143 @@
+include "__builtin__NBT"
+
+type BlockType {
+    _IRType _block;
+    constexpr constructor(string type): _block("block", type) {}
+    constexpr constructor(_IRType block): _block(block) {}
+    
+    constexpr BlockType with(string property, string value) {
+        _IRType copy("copy", this._block);
+        ir (copy, property, value) {
+            add_block_prop $arg0, $arg1, $arg2
+        }
+        return BlockType(copy);
+    }
+}
+
+type RuntimeBlock {
+    __EntityPtr _ptr;
+
+    constructor(__EntityPtr ptr);
+    bool operator ==(BlockType block);
+}
+intrinsic_extension {
+    RuntimeBlock::constructor(__EntityPtr ptr) Python: {
+        return compiler.entity_support.constructor(this, args.ptr)
+    }
+}
+
+type World {
+    __EntityPtr _ptr;
+
+    constructor(__EntityPtr ptr);
+    void spawn(EntityType type, vec3i pos);
+    void spawn(EntityType type, decimal x, decimal y, decimal z, NBTCompound data);
+    void set_block(BlockType type);
+    void set_block(int x, int y, int z, BlockType block);
+
+    macro RuntimeBlock get_block() {
+        return RuntimeBlock(this._ptr);
+    }
+
+    bool block_is_at(int x, int y, int z, BlockType block);
+    void clone_blocks(int s0x, int s0y, int s0z, int s1x, int s1y, int s1z, int dx, int dy, int dz);
+}
+
+intrinsic_extension {
+    World::constructor(__EntityPtr ptr) Python: {
+        return compiler.entity_support.constructor(this, args.ptr)
+    }
+}
+
+intrinsic_extension {
+
+    void World::spawn(EntityType type, vec3i pos) Python: {
+        ptr = this.get_member(compiler, '_ptr').value
+        entity_id = i.VirtualString(args.type.value.name)
+        block = ptr.at_entity()
+        vec = [comp.type.as_variable(comp.value) for comp in [
+                args.pos.type.get_property(compiler, args.pos, c) for c in 'xyz']]
+        # TODO non-constant positions
+        pos = compiler.insn_def(i.CreatePosition(*vec))
+        block.add(i.SpawnEntityInsn(entity_id, pos, None))
+        return void
+    }
+    
+    void World::spawn(EntityType type, decimal x, decimal y, decimal z, NBTCompound data) Python: {
+        ptr = this.get_member(compiler, '_ptr').value
+        entity_id = i.VirtualString(args.type.value.name)
+        block = ptr.at_entity()
+        vec = (args.x.value, args.y.value, args.z.value)
+        # TODO non-constant positions
+        pos = compiler.insn_def(i.CreatePosition(*vec))
+        data = args.data.value.get_member(compiler, '_nbt')
+        data = data.type.as_ir_variable(data.value)
+        block.add(i.SpawnEntityInsn(entity_id, pos, data))
+        return void
+    }
+    
+    void World::set_block(BlockType type) Python: {
+        ptr = this.get_member(compiler, '_ptr').value
+        block = ptr.at_entity()
+        rel0 = compiler.insn_def(i.CreateRelPos(0))
+        pos = compiler.insn_def(i.CreatePosition(rel0, rel0, rel0))
+        t = args.type.value.get_member(compiler, '_block')
+        t = t.type.as_ir_variable(t.value)
+        block.add(i.SetBlockInsn(pos, t))
+        return void
+    }
+
+    void World::set_block(int x, int y, int z, BlockType type) Python: {
+        ptr = this.get_member(compiler, '_ptr').value
+        x, y, z, _ = map(lambda c: c.value, args)
+        pos = compiler.insn_def(i.CreatePosition(x, y, z))
+        block = ptr.at_entity()
+        t = args.type.value.get_member(compiler, '_block')
+        t = t.type.as_ir_variable(t.value)
+        block.add(i.SetBlockInsn(pos, t))
+        return void
+    }
+
+    bool World::block_is_at(int x, int y, int z, BlockType block) Python: {
+        x, y, z, _ = map(lambda c: c.value, args)
+        block = args.block.value.get_member(compiler, '_block')
+        ret = compiler._construct_tmp('block_at', compiler.type('bool'), ())
+        pos = compiler.insn_def(i.CreatePosition(x, y, z))
+        with compiler.compiletime():
+            ex = compiler.insn_def(i.CreateExec())
+            store = compiler.insn_def(i.ExecStoreVar(ret.type.as_variable(ret.value)))
+            compiler.add_insn(i.ExecStore(ex, 'success', store))
+            compiler.add_insn(i.ExecIfBlock(ex, pos, block.type.as_ir_variable(block.value)))
+        compiler.add_insn(i.ExecFinish(ex))
+        return ret
+    }
+
+    void World::clone_blocks(int s0x, int s0y, int s0z, int s1x, int s1y, int s1z, int dx, int dy, int dz) Python: {
+        ptr = this.get_member(compiler, '_ptr').value
+        s0x, s0y, s0z, s1x, s1y, s1z, dx, dy, dz = map(lambda c: compiler.insn_def(i.CreateRelPos(c.value)), args)
+        s0 = compiler.insn_def(i.CreatePosition(s0x, s0y, s0z))
+        s1 = compiler.insn_def(i.CreatePosition(s1x, s1y, s1z))
+        d = compiler.insn_def(i.CreatePosition(dx, dy, dz))
+        block = ptr.at_entity()
+        block.add(i.CloneInsn(s0, s1, d))
+        return void
+    }
+
+    bool RuntimeBlock::operator==(BlockType block) Python: {
+        ptr = this.get_member(compiler, '_ptr').value
+        ret = compiler._construct_tmp('block_eq', compiler.type('bool'), ())
+        as_block, sender = ptr.as_entity()
+        rel0 = compiler.insn_def(i.CreateRelPos(0))
+        pos = compiler.insn_def(i.CreatePosition(rel0, rel0, rel0))
+        with compiler.compiletime():
+            ex = compiler.insn_def(i.CreateExec())
+            compiler.add_insn(i.ExecAtEntity(ex, sender))
+            store = compiler.insn_def(i.ExecStoreVar(ret.type.as_variable(ret.value)))
+            compiler.add_insn(i.ExecStore(ex, 'success', store))
+            block = args.block.value.get_member(compiler, '_block')
+            compiler.add_insn(i.ExecIfBlock(ex, pos, block.type.as_ir_variable(block.value)))
+        as_block.add(i.ExecFinish(ex))
+        return ret
+    }
+}
+

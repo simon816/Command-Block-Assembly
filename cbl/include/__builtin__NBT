@@ -1,0 +1,40 @@
+type NBTBase {
+    _IRType _nbt;
+    constexpr constructor(string insn): _nbt(insn) {}
+    constexpr constructor(string insn, string arg1, string arg2): _nbt(insn, arg1, arg2) {}
+}
+
+type NBTString : NBTBase {
+    constexpr constructor(string value): NBTBase("nbt_val", "string", value) {}
+}
+
+type NBTList : NBTBase {
+    constexpr constructor(): NBTBase("nbt_list NULL") {}
+
+    constexpr void append(NBTBase value) {
+        ir (this._nbt, value._nbt) {
+            nbt_list_append $arg0, $arg1
+        }
+    }
+}
+
+type NBTCompoundKey {
+    _IRType _nbt;
+    string _key;
+
+    constexpr constructor(_IRType nbt, string key): _nbt(nbt), _key(key) {}
+
+    constexpr void operator =(NBTBase value) {
+        ir (this._nbt, this._key, value._nbt) {
+            nbt_compound_set $arg0, $arg1, $arg2
+        }
+    }
+}
+
+type NBTCompound : NBTBase {
+    constexpr constructor(): NBTBase("nbt_compound") {}
+
+    constexpr NBTCompoundKey operator [](string key) {
+        return NBTCompoundKey(this._nbt, key);
+    }
+}

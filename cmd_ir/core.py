@@ -876,6 +876,7 @@ class IRFunction(VisibleFunction, VariableHolder):
                 new_insn.declare()
 
     def inline_into(self, other, args, retvars):
+        assert other is not self, 'cannot inline %s into itself' % self
         self.validate_args(args, retvars)
         assert not self._varsfinalized
         assert not other._varsfinalized
@@ -1135,6 +1136,9 @@ class Evaluator:
         self.insns = block.insns
         self.ptr = 0
 
+    def fork_jump(self, block):
+        Evaluator(block).run()
+
     def run(self):
         while self.ptr < len(self.insns):
             p = self.ptr
@@ -1188,6 +1192,9 @@ class CompileTimeFunction(VariableHolder):
 
     def serialize(self):
         if not list(self.scope.keys()):
+            return ''
+        if not any(b.insns for b in self.scope.values() \
+                   if isinstance(b, CompileTimeBlock)):
             return ''
         return '\n    compiletime {\n%s\n    }\n' % '\n\n'.join(
             block.serialize(8) for block in self.scope.values() \

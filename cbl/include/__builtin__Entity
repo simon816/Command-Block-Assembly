@@ -1,0 +1,186 @@
+type EntityPos;
+type World;
+type RuntimeEntityType;
+type SelectorFilter;
+
+type Entity {
+
+    __EntityPtr _ptr;
+
+    constructor(__EntityPtr ptr);
+
+    property macro EntityPos pos() {
+        return EntityPos(this._ptr);
+    }
+
+    property macro World world() {
+        return World(this._ptr);
+    }
+
+    property RuntimeEntityType type();
+//    property EntityFacing facing();
+
+    void kill();
+    SelectorFilter has_tag(string tag);
+//    void joinTeam(Team team);
+}
+
+intrinsic_extension {
+    Entity::constructor(__EntityPtr ptr) Python: {
+        return compiler.entity_support.constructor(this, args.ptr)
+    }
+}
+
+include "__builtin__Vector"
+include "__builtin__World"
+
+type EntityPos {
+    __EntityPtr _ptr;
+
+    constructor(__EntityPtr ptr);
+    property EntityPosComponent x();
+    property EntityPosComponent y();
+    property EntityPosComponent z();
+
+    vec3d as_vec();
+    EntityPos operator +=(vec3i shift);
+    EntityPos operator =(vec3<decimal> pos);
+}
+
+// This needs to be before any function definitions on EntityPos
+intrinsic_extension {
+
+    EntityPos::constructor(__EntityPtr ptr) Python: {
+        return compiler.entity_support.constructor(this, args.ptr)
+    }
+
+    EntityPosComponent EntityPos::x() Python: {
+        from .entity_support import PositionComponent
+        from .containers import Temporary
+        ptr = this.get_member(compiler, '_ptr').value
+        t = compiler.type('EntityPosComponent')
+        v = PositionComponent(compiler, ptr, 0)
+        return Temporary(t, v)
+    }
+
+    EntityPosComponent EntityPos::y() Python: {
+        from .entity_support import PositionComponent
+        from .containers import Temporary
+        ptr = this.get_member(compiler, '_ptr').value
+        t = compiler.type('EntityPosComponent')
+        v = PositionComponent(compiler, ptr, 1)
+        return Temporary(t, v)
+    }
+
+    EntityPosComponent EntityPos::z() Python: {
+        from .entity_support import PositionComponent
+        from .containers import Temporary
+        ptr = this.get_member(compiler, '_ptr').value
+        t = compiler.type('EntityPosComponent')
+        v = PositionComponent(compiler, ptr, 2)
+        return Temporary(t, v)
+    }
+
+}
+
+inline vec3d EntityPos::as_vec() {
+    return vec3d(this.x.decval, this.y.decval, this.z.decval);
+}
+
+EntityPos EntityPos::operator +=(vec3i shift) {
+    this.x += shift.x;
+    this.y += shift.y;
+    this.z += shift.z;
+    return this;
+}
+
+EntityPos EntityPos::operator =(vec3<decimal> pos) {
+    this.x = pos.x;
+    this.y = pos.y;
+    this.z = pos.z;
+    return this;
+}
+
+
+type SelectorFilter {
+}
+
+type RuntimeEntityType {
+    __EntityPtr _ptr;
+
+    SelectorFilter operator==(EntityType other);
+    constructor(__EntityPtr ptr);
+}
+
+intrinsic_extension {
+    RuntimeEntityType::constructor(__EntityPtr ptr) Python: {
+        return compiler.entity_support.constructor(this, args.ptr)
+    }
+}
+
+
+type EntityCollection {
+    Entity first();
+    EntityCollection sortNearest();
+}
+
+inline RuntimeEntityType Entity::type() {
+    return RuntimeEntityType(this._ptr);
+}
+
+intrinsic_extension {
+
+    Entity EntityCollection::first() Python: {
+        from .entity_support import EntityCollection
+        from .containers import Temporary
+        t = compiler.type('EntityCollection')
+        copy = compiler._construct_tmp('sorted', t, (Temporary(t, this),))
+        new_col = copy.value
+        with compiler.compiletime():
+            compiler.add_insn(i.SetSelector(new_col.selector, 'limit', i.VirtualString('1')))
+            assert new_col.boolvar is None, "TODO"
+            exec = compiler.insn_def(i.CreateExec())
+            compiler.add_insn(i.ExecAsEntity(exec, new_col.selector))
+        body = compiler.create_block('first')
+        body.set_is_function()
+
+        old_block = compiler.block
+        compiler.block = body
+        ptr = compiler.entity_support.construct_sender()
+        compiler.block = old_block
+
+        compiler.add_insn(i.ExecRun(exec, body))
+        return compiler._construct_tmp('first', compiler.type('Entity'), (ptr,))
+    }
+
+    EntityCollection EntityCollection::sortNearest() Python: {
+        from .containers import Temporary
+        t = compiler.type('EntityCollection')
+        copy = compiler._construct_tmp('sorted', t, (Temporary(t, this),))
+        with compiler.compiletime():
+            compiler.add_insn(i.SetSelector(copy.value.selector, 'sort', i.VirtualString('nearest')))
+        return copy
+    }
+
+    SelectorFilter RuntimeEntityType::operator==(EntityType other) Python: {
+        from .entity_support import EntityFilterExpression
+        ptr = this.get_member(compiler, '_ptr').value
+        res = EntityFilterExpression(ptr, 'type', args.other.value.name)
+        from .containers import Temporary
+        return Temporary(compiler.type('SelectorFilter'), res)
+    }
+
+    SelectorFilter Entity::has_tag(string tag) Python: {
+        return this.get_member(compiler, '_ptr').value.has_tag_filter(compiler, args.tag.value)
+    }
+
+    void Entity::kill() Python: {
+        ptr = compiler.entity_support.get_pointer(thisarg)
+        block, sender = ptr.as_entity()
+        block.add(i.KillInsn(sender))
+        return void
+    }
+
+}
+
+

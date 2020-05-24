@@ -142,6 +142,8 @@ class BuildProgram(Interpreter):
         for i, argtype in enumerate(insn.args):
             # Only allowable for non-tuple args
             if type(argtype) != tuple and issubclass(argtype, InsnArg):
+                if argtype != VirtualString and isinstance(operands[i], VirtualString):
+                    operands[i] = str(operands[i])
                 ctor_args.append(argtype._init_from_parser(operands[i]))
             # Special case for Opt types
             elif type(argtype) == tuple and len(argtype) == 2 and \

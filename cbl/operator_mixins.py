@@ -103,8 +103,6 @@ class CmpOperatorMixin:
     def _cmp_operator(self, compiler, left, right, op, min_int, max_int, invert=False):
         if_true = compiler.create_block('cmp_true')
         if_false = compiler.create_block('cmp_false')
-        if invert:
-            if_false, if_true = if_true, if_false
         bool = compiler.type('bool')
         res = bool.allocate(compiler, 'cmpres')
         retblock = compiler.create_block('after_cmp')
@@ -114,6 +112,8 @@ class CmpOperatorMixin:
                              if_false)
         else:
             insn = i.CmpBr(as_var(left), op, rval, if_true, if_false)
+        if invert:
+            if_false, if_true = if_true, if_false
         compiler.add_insn(insn)
         if_true.add(i.SetScore(res, 1))
         if_false.add(i.SetScore(res, 0))
@@ -126,7 +126,7 @@ class ArithOperatorMixin:
 
     def _arithmetic_op(self, compiler, left, right, insn):
         res = self.new_temporary(compiler)
-        self.dispatch_operator(compiler, '=', res, left)
+        res.type.dispatch_operator(compiler, '=', res, left)
         compiler.add_insn(insn(as_var(res), as_var(right)))
         return res
 

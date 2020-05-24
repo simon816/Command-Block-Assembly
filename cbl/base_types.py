@@ -19,6 +19,13 @@ class BoolType(LogOperatorMixin, IntrinsicOperatorType):
     def as_variable(self, instance):
         return instance
 
+    def coerce_to(self, compiler, val, type):
+        if type == compiler.type('int'):
+            v = type.allocate(compiler, 'bcast')
+            compiler.add_insn(i.SetScore(v, val.value))
+            return Temporary(type, v)
+        return super().coerce_to(compiler, val, type)
+
 class IntType(IntegerOperators, IntrinsicOperatorType):
 
     @property
@@ -61,15 +68,6 @@ class DecimalType(NumericalOperators, IntrinsicOperatorType):
             return Temporary(type, v)
         return super().coerce_to(compiler, val, type)
 
-class BlockTypeInstance:
-
-    def __init__(self):
-        self.__name = None
-
-    def init(self, name):
-        assert self.__name is None
-        self.__name = name
-
 class ItemTypeInstance:
 
     def __init__(self):
@@ -78,11 +76,6 @@ class ItemTypeInstance:
     def init(self, name):
         assert self.__name is None
         self.__name = name
-
-class BlockTypeType(NativeType):
-
-    def allocate(self, compiler, namehint):
-        return BlockTypeInstance()
 
 class ItemTypeType(NativeType):
 

@@ -1,0 +1,20 @@
+type vec3<T> {
+    T x;
+    T y;
+    T z;
+
+    constructor(T x, T y, T z): x(x), y(y), z(z) {}
+
+    inline vec3<T> operator *(T scalar) {
+        return vec3(T)(this.x * scalar, this.y * scalar, this.z * scalar);
+    }
+}
+
+type vec3i is vec3<int>;
+
+type vec3d: vec3<decimal> {
+    constructor(decimal x, decimal y, decimal z): vec3<decimal>(x, y, z) {}
+    inline vec3i to_int() {
+        return vec3i(this.x, this.y, this.z);
+    }
+}

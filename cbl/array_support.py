@@ -32,20 +32,20 @@ class ArrayType(NativeType):
         return instance
 
     def run_constructor(self, compiler, instance, arguments):
-        assert not arguments
+        assert len(arguments) <= self.size
         compiler.array_support.allocate(self.size)
-        self._init_array(compiler, instance.value)
-
-    def _init_array(self, compiler, var):
+        var = instance.value
         array = compiler.insn_def(i.CreateNBTList(self.nbt_type))
         init_val = self._init_val(compiler)
         with compiler.compiletime():
             for _ in range(self.size):
                 compiler.add_insn(i.NBTListAppend(array, init_val))
         compiler.add_insn(i.NBTAssign(var, array))
+        for n, arg in enumerate(arguments):
+            compiler.array_support.set(var, n, arg.type.as_variable(arg.value))
 
     def _init_val(self, compiler):
-        # TODO
+        # TODO non-int defaults
         return compiler.insn_def(i.CreateNBTValue(self.nbt_type, 0))
 
     def dispatch_operator(self, compiler, op, left, right=None):

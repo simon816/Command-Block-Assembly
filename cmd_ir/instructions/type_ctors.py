@@ -132,13 +132,13 @@ class BlockInsn(ConstructorInsn):
 class AddBlockPropInsn(CompileTimeInsn):
     """Adds a property to the block reference."""
 
-    args = [BlockType, str, VirtualString]
+    args = [BlockType, (VirtualString, str), VirtualString]
     argnames = 'block key value'
     argdocs = ["Block", "Property name", "Property value"]
     insn_name = 'add_block_prop'
 
     def run(self, ev):
-        self.block.add_prop(self.key, self.value)
+        self.block.add_prop(str(self.key), str(self.value))
 
 class SetBlockNBT(CompileTimeInsn):
     """Sets NBT data to a block reference."""

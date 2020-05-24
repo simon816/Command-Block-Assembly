@@ -47,13 +47,15 @@ class Call(Branch):
     label has been executed."""
 
     is_block_terminator = False
-    is_compiletime = False
     argdocs = ["Label tagged as a function"]
     insn_name = 'call'
 
     def get_cmd(self, func):
         assert self.label.is_function, self.label
         return super().get_cmd(func)
+
+    def run(self, ev):
+        ev.fork_jump(self.label)
 
 
 def make_stack_frame_from(values, out, destns):

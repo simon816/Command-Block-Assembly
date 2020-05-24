@@ -9,7 +9,7 @@ from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
 from .macro_type import MacroType
 from .base_types import VoidType, BoolType, IntType, DecimalType, \
-     BlockTypeType, ItemTypeType
+     ItemTypeType
 from .event_type import TagEventType, AdvancementEventType
 from .maybe_type import MaybeType
 from .template_type import TemplatedType
@@ -25,6 +25,7 @@ from .util import escape_function_name, safe_typename
 from cmd_ir.core import TopLevel, Pragma
 from cmd_ir.variables import VarType
 from cmd_ir.core_types import SelectorType
+from cmd_ir.reader import Reader
 import cmd_ir.instructions as i
 
 EventCondition = namedtuple('EventCondition', 'path value')
@@ -162,6 +163,7 @@ class Compiler(Transformer_WithPre):
 
     def __init__(self, search_path):
         self._parser = Parser(self)
+        self._ir_reader = Reader()
         self.search_path = search_path
         self.inclusion_set = set()
         self.scope = ScopeManager(self)
@@ -180,6 +182,7 @@ class Compiler(Transformer_WithPre):
         self.funcsym = None
         self.block = None
         self.ret_param = None
+        self.ret_does_return = True
         self._create_init_func()
         self.include_file('__builtin__')
 
@@ -233,7 +236,6 @@ class Compiler(Transformer_WithPre):
         self.add_type('EntityType', EntityTypeType())
         self.add_type('EntityCollection', EntityCollectionType())
 
-        self.add_type('BlockType', BlockTypeType())
         self.add_type('ItemType', ItemTypeType())
         self.add_base_type('TagEvent', TagEventType())
         self.add_base_type('AdvEvent', AdvancementEventType())
@@ -623,15 +625,19 @@ class Compiler(Transformer_WithPre):
         return self.entity_support.set_sender(sender_ptr.value)
 
     @contextlib.contextmanager
-    def _process_body_main(self, ret_type):
+    def _process_body_main(self, ret_type, return_var=True,
+                           ret_does_return=True):
         old_ret_param = self.ret_param
+        old_ret_does_return = self.ret_does_return
+        self.ret_does_return = ret_does_return
         with self.scope:
             if ret_type != self.type('void'):
-                self.ret_param = self._allocate_return(ret_type)
+                self.ret_param = self._allocate_return(ret_type, return_var)
             else:
                 self.ret_param = None
             yield self.ret_param
         self.ret_param = old_ret_param
+        self.ret_does_return = old_ret_does_return
 
     def _allocate_parameters(self, params):
         for param in params:
@@ -654,18 +660,16 @@ class Compiler(Transformer_WithPre):
                 self.scope.store(param.name, sym)
                 self.dispatch_operator('=', sym, var)
 
-    def _allocate_return(self, type):
-        def create_return(vname, var_type):
-            return self.define(vname, i.ReturnVarInsn(var_type))
+    def __create_return(self, vname, var_type):
+        return self.define(vname, i.ReturnVarInsn(var_type))
 
-        # Bit of a hack to support returns in constexpr
-        from cmd_ir.core import CompileTimeFunction
-        if isinstance(self.func, CompileTimeFunction):
-            create_return = self.__create_local
-
-        with self.set_create_var(create_return):
-            return Temporary(type, type.allocate(self, 'ret_' + \
-                                                 safe_typename(type)))
+    def _allocate_return(self, type, return_var):
+        name = 'ret_' + safe_typename(type)
+        if return_var:
+            with self.set_create_var(self.__create_return):
+                return Temporary(type, type.allocate(self, name))
+        else:
+            return Temporary(type, type.allocate(self, name))
 
     def pre_ctor_definition(self, tree, post_transform):
         if len(tree.children) == 2:
@@ -692,7 +696,7 @@ class Compiler(Transformer_WithPre):
             ctor_decl.params,)
         fn_type, func = ctor
         # TODO check inline is the same
-        ctor_sym = Symbol(fn_type, None, func) # No name for this symbol
+        ctor_sym = Symbol(fn_type, '.ctor', func)
         if ctor_decl.inline:
             func = ctor_sym.value.get_or_create_definition()
             func.preamble.add(i.InlineInsn())
@@ -848,6 +852,22 @@ class Compiler(Transformer_WithPre):
                 func_definitions.append(prop)
             elif isinstance(prop, FuncDeclaration):
                 self.declare_function_property_on_type(type, prop)
+            elif isinstance(prop, ConstexprDefinition):
+                dl = prop.def_.decl
+                set_param = None
+                if dl.params:
+                    assert len(dl.params) == 1
+                    set_param = dl.params[0]
+                type.add_macro_property(self, dl.name, dl.ret_type,
+                        set_param, prop.def_.body, True)
+            elif isinstance(prop, MacroDefinition):
+                dl = prop.def_.decl
+                set_param = None
+                if dl.params:
+                    assert len(dl.params) == 1
+                    set_param = dl.params[0]
+                type.add_macro_property(self, dl.name, dl.ret_type,
+                        set_param, prop.def_.body, False)
             else:
                 assert False, prop
         elif isinstance(decl, ConstexprDefinition):
@@ -1142,9 +1162,7 @@ class Compiler(Transformer_WithPre):
     def ir_statement(self, *args):
         *exprs, block = args
         ir_code = block[1:-1]
-        from cmd_ir.reader import Reader
         from cmd_ir.core import BasicBlock
-        r = Reader()
         # We create an isolated scope so that it can't conflict with other
         # variables etc in the real scope
         real_scope = self.func.isolate()
@@ -1153,7 +1171,7 @@ class Compiler(Transformer_WithPre):
             v = container.type.as_ir_variable(container.value)
             self.func.store('arg%d' % n, v)
             vars.append(v)
-        r.read_blocks(self.func, 'entry:\n' + ir_code)
+        self._ir_reader.read_blocks(self.func, 'entry:\n' + ir_code)
         first_block = last_block = None
         isolated_scope = self.func.scope
         self.func.scope = real_scope
@@ -1184,10 +1202,13 @@ class Compiler(Transformer_WithPre):
             assert self.ret_param is not None, \
                    "Cannot return value in void function"
             self.dispatch_operator('=', self.ret_param, expr)
-        self.add_insn(i.Return())
-        self.block = self.func.create_block('dead_code')
+        if self.ret_does_return:
+            self.add_insn(i.Return())
+            self.block = self.func.create_block('dead_code')
 
-    def expression_statement(self, expr):
+    def expression_statement(self, expr=False):
+        if expr is False:
+            return
         # Force type and value to be present (e.g. check AsyncReturn)
         expr.type
         expr.value

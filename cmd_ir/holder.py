@@ -22,7 +22,7 @@ class Holder:
 
     @val.setter
     def val(self, value):
-        assert isinstance(value, self.__type)
+        assert isinstance(value, self.__type), (value, self.__type)
         self.__value = value
 
     def accepts(self, vtype):

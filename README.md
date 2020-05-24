@@ -314,8 +314,8 @@ MCC is invoked by `python mcc.py` (If python 3 is not your default python comman
 Command help text:
 ```
 usage: mcc.py [-h] [-o outfile] [-E] [-c] [-S] [-dump-asm] [-O {0,1}]
-              [-dump-ir] [--dummy-datapack] [--stats] [--dump-commands]
-              [--c-page-size SIZE]
+              [-dump-ir] [-shared] [--dummy-datapack] [--stats]
+              [--dump-commands] [--c-page-size SIZE]
               infile [infile ...]
 
 Command line tool for the Minecraft Compiler Collection
@@ -356,6 +356,8 @@ Linker arguments:
 Packer arguments:
   Arguments that control how the packer behaves.
 
+  -shared             Include a symbol table and other metadata to enable
+                      dynamic linking of datapacks
   --dummy-datapack    Don't write an output datapack. This can be used for
                       debugging with --dump-commands
   --stats             Print statistics about the generated datapack

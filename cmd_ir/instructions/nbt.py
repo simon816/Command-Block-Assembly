@@ -71,13 +71,13 @@ class CreateNBTCompound(ConstructorInsn):
 class NBTCompoundSet(CompileTimeInsn):
     """Sets a key to the given NBT value in a compound tag."""
 
-    args = [NBTCompound, str, NBTBase]
-    argnames = 'var name val'
+    args = [NBTCompound, VirtualString, NBTBase]
+    argnames = 'var key val'
     argdocs = ["Compound to set on", "Key", "Value"]
     insn_name = 'nbt_compound_set'
 
     def run(self, ev):
-        self.var.set(self.name, self.val)
+        self.var.set(str(self.key), self.val)
 
 class NBTDataMerge(SingleCommandInsn, RuntimeHeldInsn):
     """Merge the given NBT compound with a block or entity."""

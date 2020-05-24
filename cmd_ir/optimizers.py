@@ -198,6 +198,8 @@ class BranchInliner(BlockVisitor):
             if insn.label.use_count() == 1:
                 #print("inline", insn.label, "into", self._block)
                 return insn.label.insns
+            # TODO If only one insn, replace branch with that insn
+            # Note: need to consider mutations
         return insn
 
 class InvokeInliner(BlockVisitor):

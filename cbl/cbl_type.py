@@ -61,6 +61,15 @@ class FuncPropertyMember:
         return self.dispatcher.add_resolution(compiler, ret_type, (set_param,),
                                               inline, False)
 
+    def add_macro_getter(self, compiler, ret_type, body, compiletime):
+        return self.dispatcher.add_macro_resolution(compiler, ret_type, (),
+                                                    body, compiletime)
+
+    def add_macro_setter(self, compiler, ret_type, set_param, body,
+                         compiletime):
+        return self.dispatcher.add_macro_resolution(compiler, ret_type,
+                                            (set_param,), body, compiletime)
+
     def lookup_func(self, params):
         return self.dispatcher.lookup_resolution(params)
 
@@ -162,8 +171,7 @@ class CBLType(NativeType):
         return dispatcher.add_resolution(compiler, ret_type, params, inline,
                                          is_async)
 
-    def add_function_property(self, compiler, name, ret_type, inline,
-                              set_param):
+    def _ensure_property(self, name):
         self._check_incomplete()
         prop = self.instance_member(name)
         if prop:
@@ -171,6 +179,11 @@ class CBLType(NativeType):
         else:
             prop = FuncPropertyMember(self, self.__dispatcher(name, name))
             self.__func_properties[name] = prop
+        return prop
+
+    def add_function_property(self, compiler, name, ret_type, inline,
+                              set_param):
+        prop = self._ensure_property(name)
         if set_param:
             return prop.add_setter(compiler, ret_type, inline, set_param)
         else:
@@ -182,6 +195,15 @@ class CBLType(NativeType):
         dispatcher = self._ensure_dispatcher(name)
         return dispatcher.add_macro_resolution(compiler, ret_type, params, body,
                                                compiletime)
+
+    def add_macro_property(self, compiler, name, ret_type, set_param, body,
+                           compiletime):
+        prop = self._ensure_property(name)
+        if set_param:
+            return prop.add_macro_setter(compiler, ret_type, set_param, body,
+                                         compiletime)
+        else:
+            return prop.add_macro_getter(compiler, ret_type, body, compiletime)
 
     def lookup_function_member(self, name, params):
         if name in self.__func_properties:
