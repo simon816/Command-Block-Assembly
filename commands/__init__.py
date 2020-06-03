@@ -10,7 +10,21 @@ class Cmd(Command):
         self.command = cmd
 
     def resolve(self, scope):
-        return self.command
+        cmd = self.command
+        # This should be refactored eventually
+        # Support set_scoreboard_tracking() and text_set_click_run()
+        # in the C compiler
+        import re
+        while True:
+            m = re.search('\\$(func|entity_local):(.+?)\\$', cmd)
+            if not m:
+                break
+            if m.group(1) == 'func':
+                replace = scope.function_name(NSName('sub_' + m.group(2)))
+            else:
+                replace = scope.objective(m.group(2))
+            cmd = cmd[:m.start()] + replace + cmd[m.end():]
+        return cmd
 
 class Function(Command):
 
