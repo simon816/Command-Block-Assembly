@@ -747,7 +747,7 @@ class Compiler(Transformer_WithPre):
                 event = eventcont.value.create_new(self)
                 for condition in conditions:
                     cond = self.transform(condition)
-                    event.add_condition(cond)
+                    event.add_condition(self, cond)
                 eventref = event.get_var()
             else:
                 eventref = eventcont.value.get_var()

@@ -37,18 +37,18 @@ class AdvEventInstance(EventInstance):
     # Create a derivitive variable for adding conditions to
     def create_new(self, compiler):
         assert self.var is not None
-        event = AdvEventInstance()
+        event = compiler.type('AdvEvent').allocate(compiler, 'deriv')
         event.ctor(compiler, self._name)
         return event
 
-    def add_condition(self, condition):
+    def add_condition(self, compiler, condition):
         assert self.var is not None
         event = self.var
         # TODO type checking etc
         path = i.VirtualString('.'.join(condition.path))
         assert type(condition.value.value) == str, condition.value
         value = i.VirtualString(condition.value.value)
-        self.compiler.top.preamble.add(i.AddEventCondition(event, path, value))
+        compiler.top.preamble.add(i.AddEventCondition(event, path, value))
 
 class _EventType(CBLType):
 
