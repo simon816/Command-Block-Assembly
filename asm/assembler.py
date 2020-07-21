@@ -131,9 +131,6 @@ class Assembler:
             assembler.global_mapping.update(self.global_mapping)
             assembler.parse(data, path)
             self.top.include_from(assembler.top)
-            for name, val in assembler.constants.items():
-                if isinstance(val, Variable) and val.owner:
-                    val.owner = self.top
             self.constants.update(assembler.constants)
             self.global_mapping.update(assembler.global_mapping)
         elif directive == 'event_handler':
