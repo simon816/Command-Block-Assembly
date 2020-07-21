@@ -352,7 +352,8 @@ class TopLevel(VariableHolder):
     def include_from(self, other):
         for name, var in other.scope.items():
             if isinstance(var, VisibleFunction) and not name.startswith('__'):
-                self.scope[name] = ExternFunction(var.global_name.name, self)
+                self.scope[name] = DynLinkFunction(var.global_name,
+                                                   var.params, var.returns, var.is_pure)
             elif isinstance(var, Variable):
                 self.scope[name] = var
 
