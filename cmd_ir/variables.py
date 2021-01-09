@@ -613,7 +613,7 @@ class CompilerVariable(Variable):
         assert False
 
     def _store_from_cmd(self, cmd, out):
-        assert False
+        assert False, "Attempted store %s into %s" % (cmd, self)
 
     def read(self):
         assert False

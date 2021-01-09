@@ -351,6 +351,7 @@ class CBLTypeMeta(CBLType, MetaType):
         assert False
 
     def get_property(self, compiler, container, prop):
+        assert self._meta_instance is not None, "Meta not initialized!"
         if prop in self._meta_instance:
             return self._meta_instance[prop]
         raise TypeError('Unknown property %s on %s' % (prop, self))

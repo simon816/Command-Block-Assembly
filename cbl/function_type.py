@@ -227,7 +227,8 @@ class FunctionDispatcher:
         else:
             new_params = params
         from .macro_type import MacroType
-        type = MacroType(ret_type, new_params, body, compiletime)
+        type = MacroType(ret_type, new_params, body, compiler.types.snapshot(),
+                         compiletime)
         return self.__add(compiler, name, type)
 
     def __add(self, compiler, name, type):

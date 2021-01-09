@@ -67,17 +67,3 @@ class DecimalType(NumericalOperators, IntrinsicOperatorType):
             compiler.add_insn(i.SetScore(v, val.value))
             return Temporary(type, v)
         return super().coerce_to(compiler, val, type)
-
-class ItemTypeInstance:
-
-    def __init__(self):
-        self.__name = None
-
-    def init(self, name):
-        assert self.__name is None
-        self.__name = name
-
-class ItemTypeType(NativeType):
-
-    def allocate(self, compiler, namehint):
-        return ItemTypeInstance()

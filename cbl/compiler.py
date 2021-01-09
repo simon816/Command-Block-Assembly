@@ -8,8 +8,7 @@ from .ir_type import IRType, StringType
 from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
 from .macro_type import MacroType
-from .base_types import VoidType, BoolType, IntType, DecimalType, \
-     ItemTypeType
+from .base_types import VoidType, BoolType, IntType, DecimalType
 from .event_type import TagEventType, AdvancementEventType
 from .maybe_type import MaybeType
 from .template_type import TemplatedType
@@ -236,7 +235,6 @@ class Compiler(Transformer_WithPre):
         self.add_type('EntityType', EntityTypeType())
         self.add_type('EntityCollection', EntityCollectionType())
 
-        self.add_type('ItemType', ItemTypeType())
         self.add_base_type('TagEvent', TagEventType())
         self.add_base_type('AdvEvent', AdvancementEventType())
 
@@ -367,7 +365,8 @@ class Compiler(Transformer_WithPre):
         return self.define(None, insn)
 
     def _declare_macro(self, name, ret_type, params, body, compiletime):
-        fn_type = MacroType(ret_type, params, body, compiletime)
+        fn_type = MacroType(ret_type, params, body, self.types.snapshot(),
+                            compiletime)
         self.scope.declare_symbol(name, fn_type)
 
     def _declare_function(self, decl, has_definition):
@@ -1165,23 +1164,26 @@ class Compiler(Transformer_WithPre):
         from cmd_ir.core import BasicBlock
         # We create an isolated scope so that it can't conflict with other
         # variables etc in the real scope
+        pre_scope = self.func.preamble.holder.scope
         real_scope = self.func.isolate()
+        # To allow variable construction, can remove once not allowed
+        self.func.preamble.holder.scope = self.func.scope
         vars = []
         for n, container in enumerate(exprs):
             v = container.type.as_ir_variable(container.value)
             self.func.store('arg%d' % n, v)
             vars.append(v)
-        self._ir_reader.read_blocks(self.func, 'entry:\n' + ir_code)
-        first_block = last_block = None
+        blocks = self._ir_reader.read_blocks(self.func, 'entry:\n' + ir_code)
+        first_block, last_block = blocks[0], blocks[-1]
         isolated_scope = self.func.scope
         self.func.scope = real_scope
+        self.func.preamble.holder.scope = pre_scope
         for name, var in isolated_scope.items():
-            if isinstance(var, BasicBlock):
-                if not first_block:
-                    first_block = var
-                last_block = var
             if var not in vars:
                 self.func.generate_name(name, var)
+                # bit awkward but we need to sync the new name with the block
+                if isinstance(var, BasicBlock):
+                    var._name = self.func.name_for(var)
         self.block.add(i.Branch(first_block))
         self.block = last_block
 

@@ -3,8 +3,9 @@ from .containers import Temporary
 
 class MacroType(FunctionType, Invokable):
 
-    def __init__(self, ret_type, params, body, compiletime):
+    def __init__(self, ret_type, params, body, typescope, compiletime):
         super().__init__(ret_type, params, True, False)
+        self._typescope = typescope
         if type(body) == tuple:
             self._body, self._init_list = body
         else:
@@ -25,13 +26,14 @@ class MacroType(FunctionType, Invokable):
     def __expand_macro(self, compiler, args, ret_does_return=False):
         with compiler._process_body_main(self.ret_type,
                 return_var=False, ret_does_return=ret_does_return) as ret:
-            compiler._alloc_and_copy_params(self.params, args)
-            if self._init_list != False:
-                compiler.construct_this(self._init_list)
-            compiler.transform(self._body)
-            if ret is None:
-                return Temporary(compiler.type('void'), None)
-            return ret
+            with compiler.types.typescope(self._typescope):
+                compiler._alloc_and_copy_params(self.params, args)
+                if self._init_list != False:
+                    compiler.construct_this(self._init_list)
+                compiler.transform(self._body)
+                if ret is None:
+                    return Temporary(compiler.type('void'), None)
+                return ret
 
     def __expand_compiletime(self, compiler, args):
         with compiler.compiletime():

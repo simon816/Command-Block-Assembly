@@ -26,6 +26,12 @@ intrinsic_extension {
     }
 }
 
+type ItemType {
+    _IRType _item;
+    constexpr constructor(string type): _item("item", type) {}
+    constexpr constructor(_IRType item): _item(item) {}
+}
+
 type World {
     __EntityPtr _ptr;
 

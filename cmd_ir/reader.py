@@ -99,10 +99,11 @@ class BuildProgram(Interpreter):
             name = node.children[1].value[:-1]
         else:
             name = node.children[0].value[:-1]
-        self.curr_seq = self.func.get_or_create_block(name)
+        self.curr_seq = block = self.func.get_or_create_block(name)
         self.visit_children(node)
         self.curr_seq.defined = True
         self.curr_seq = None
+        return block
 
     def block_modifier(self, node):
         modifier = str(node.children[0].value)
@@ -233,7 +234,8 @@ class Reader:
         builder = BuildProgram()
         builder.func = func
         builder.holder = func
-        builder.visit(tree)
+        # Return blocks in order of occurence
+        return builder.visit(tree)
 
     def read_instruction(self, func, insn, moreargs=()):
         tree = self.parser.parse('%HOOK INSN ' + insn)

@@ -48,7 +48,12 @@ class Types:
         self.tscope.alias(type, alias_name)
 
     @contextlib.contextmanager
-    def typescope(self):
-        self.tscope = TypeScope(self.tscope)
+    def typescope(self, restored=None):
+        orig = self.tscope
+        base = self.tscope if restored is None else restored
+        self.tscope = TypeScope(base)
         yield
-        self.tscope = self.tscope.parent
+        self.tscope = orig
+
+    def snapshot(self):
+        return self.tscope

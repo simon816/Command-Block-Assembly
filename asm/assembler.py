@@ -536,6 +536,7 @@ void OP(int src, int *dest) {
 
     def handle_print(self, arg1, *args):
         args = [arg1] + list(args)
+        # TODO define inside a block is deprecated
         text = self.func.preamble.define(CreateText())
         ct = self.func.create_compiletime()
         block = ct.create_block('entry')

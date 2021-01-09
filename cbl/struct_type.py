@@ -26,8 +26,8 @@ class StructTypeInstance(CBLTypeInstance):
             return vars
         return (self.__this,)
 
-    def as_variable(self):
-        assert self.__this is not None, "Cannot convert %s to variable" % self
+    def as_variable(self, typename):
+        assert self.__this is not None, "Cannot convert %s to variable" % typename
         return self.__this
 
 class StructTypeInstanceShadow(StructTypeInstance):
@@ -72,7 +72,7 @@ class StructuredType(CBLType):
         return types
 
     def as_variable(self, instance):
-        return instance.as_variable()
+        return instance.as_variable(self.typename)
 
     def as_variables(self, instance):
         return instance.as_variables()
@@ -152,8 +152,8 @@ class StructuredType(CBLType):
     def _copy_impl(self, compiler, this, other):
         thisobj = this.value
         if self._is_nbt:
-            compiler.add_insn(i.SetScore(thisobj.as_variable(),
-                                         other.value.as_variable()))
+            compiler.add_insn(i.SetScore(thisobj.as_variable(self.typename),
+                                         other.value.as_variable(other.type.typename)))
         else:
             # Pair each var member
             for var in self.__var_members.keys():

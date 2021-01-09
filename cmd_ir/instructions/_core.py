@@ -290,7 +290,7 @@ class CompileTimeInsn(Insn):
     is_compiletime = True
 
     def declare(self):
-        assert False, "Compile time insns don't declare"
+        assert False, "Compile time insns don't declare %s" % self
 
     def activate(self, seq):
         pass

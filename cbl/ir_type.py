@@ -79,6 +79,10 @@ class StringType(NativeType):
         return other
 
     def as_ir_variable(self, instance):
+        # e.g. LiteralString
+        if type(instance) == str:
+            return i.VirtualString(instance)
+        assert instance._str is not None, "String has no value"
         return instance._str
 
     def run_constructor(self, compiler, container, args):
