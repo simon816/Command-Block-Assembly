@@ -4,15 +4,6 @@ type Container {
 
     macro constructor(_IRType pos): _pos(pos) {}
 
-    constexpr _IRType _exec_store_result(int &res) {
-        _IRType exec("execute");
-        ir(exec, res) {
-            $spec = exec_store_var $arg1
-            exec_store $arg0, result, $spec
-        }
-        return exec;
-    }
-
     constexpr _IRType _exec_if_var(_IRType &var) {
         _IRType exec("execute");
         ir (exec, var) {
@@ -28,20 +19,14 @@ type Container {
     }
 
     macro int get_item_count(ItemType item) {
-        NBT<NBTList> tmp;
-        ir(tmp.var, this._pos, this.create_path_constraint(item)) {
+        // Create an NBT list containing the counts of all items matching the constraint
+        NBT<NBTList> item_counts;
+        ir(item_counts.var, this._pos, this.create_path_constraint(item)) {
             nbt_modify_var_from $arg0, append, $arg1, $arg2
         }
-
-        int length;
-        _IRType exec = this._exec_store_result(length);
-        ir (exec, tmp.var) {
-            $getter = nbt_get_length $arg1
-            exec_run $arg0, $getter
-        }
-
+        // Sum the values in item_counts
         int count = 0;
-        NBTSubvar head = tmp["[0]"];
+        NBTSubvar head = item_counts["[0]"];
         _IRType exec2 = this._exec_if_var(head.asInt());
         ir (exec2, count, head.asInt()) {
             call :loop
