@@ -199,7 +199,9 @@ class ExecComponentCondNBTVar(ExecComponent):
         self.holder.val.usage_read()
 
     def apply(self, exec, chain, out):
-        path, storage = self.holder.val._direct_nbt()
+        nbt = self.holder.val._direct_nbt()
+        assert nbt is not None, self.holder.val
+        path, storage = nbt
         chain.cond(self.condtype).data(storage, path)
 
     def clone(self):

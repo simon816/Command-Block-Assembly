@@ -1,5 +1,6 @@
-from .containers import LiteralInt, LiteralDec, Temporary
-from .native_type import NativeType
+from .containers import LiteralInt, LiteralDec, Temporary, DelegatedWrite
+from .cbl_type import CBLType, CBLTypeInstance
+from .native_type import NativeType, as_var
 from .operator_mixins import LogOperatorMixin, IntegerOperators, \
      NumericalOperators, IntrinsicOperatorType
 
@@ -67,3 +68,29 @@ class DecimalType(NumericalOperators, IntrinsicOperatorType):
             compiler.add_insn(i.SetScore(v, val.value))
             return Temporary(type, v)
         return super().coerce_to(compiler, val, type)
+
+class NBTInstance(CBLTypeInstance):
+
+    def __init__(self, var, func_members, func_properties):
+        super().__init__(func_members, func_properties)
+        self.var = var
+
+class NBTType(CBLType):
+
+    @property
+    def ir_type(self):
+        return i.VarType.nbt
+
+    def as_variable(self, instance):
+        return instance.var
+
+    def allocate(self, compiler, namehint):
+        return NBTInstance(compiler.create_var(namehint, self.ir_type),
+                           self.get_func_members(),
+                           self.get_func_properties())
+
+    def _copy_impl(self, compiler, this, other):
+        if isinstance(this, DelegatedWrite):
+            return this.write(compiler, other)
+        compiler.add_insn(i.NBTAssign(as_var(this), as_var(other)))
+        return other

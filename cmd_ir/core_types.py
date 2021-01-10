@@ -76,6 +76,31 @@ class VirtualString(NativeType):
     def serialize(self):
         return '"%s"' % self.val.replace('\\', '\\\\').replace('"', '\\"')
 
+class MutableString(NativeType):
+
+    def __init__(self, init_val):
+        self.val = init_val or ''
+
+    def set(self, val):
+        self.val = val or ''
+
+    def __str__(self):
+        return self.val
+
+    def as_str(self):
+        return VirtualString(self.val)
+
+    def clone(self):
+        return MutableString(self.val)
+
+    def append(self, val):
+        if isinstance(val, MutableString):
+            self.val += val.val
+        elif isinstance(val, VirtualString):
+            self.val += str(val)
+        else:
+            assert False, val
+
 class FunctionLike(NativeType, metaclass=abc.ABCMeta):
 
     @property
@@ -197,6 +222,17 @@ class GlobalEntity(EntityRef):
 
     def as_resolve(self):
         return c.GlobalEntity(None)
+
+    def clone(self):
+        return self
+
+class BlockPos(BlockRef):
+
+    def __init__(self, x, y, z):
+        self.pos = Position(x, y, z)
+
+    def as_cmdref(self):
+        return self.pos.as_blockpos().ref
 
     def clone(self):
         return self

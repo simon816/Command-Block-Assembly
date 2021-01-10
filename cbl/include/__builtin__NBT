@@ -2,10 +2,22 @@ type NBTBase {
     _IRType _nbt;
     constexpr constructor(string insn): _nbt(insn) {}
     constexpr constructor(string insn, string arg1, string arg2): _nbt(insn, arg1, arg2) {}
+
+    constexpr string to_string() {
+        _IRType str("mut_string NULL");
+        ir (str, this._nbt) {
+            nbt_serialize $arg0, $arg1
+        }
+        return str;
+    }
 }
 
 type NBTString : NBTBase {
     constexpr constructor(string value): NBTBase("nbt_val", "string", value) {}
+}
+
+type NBTInt : NBTBase {
+    constexpr constructor(): NBTBase("nbt_val int, 0") {}
 }
 
 type NBTList : NBTBase {
@@ -37,4 +49,29 @@ type NBTCompound : NBTBase {
     constexpr NBTCompoundKey operator [](string key) {
         return NBTCompoundKey(this._nbt, key);
     }
+}
+
+type NBTSubvar {
+    _NBT root;
+    string path;
+    macro constructor(_NBT &root, string path): root(root), path(path) {}
+
+    macro _IRType asInt() {
+        return _IRType("nbtsubpath", this.root, this.path, "i32");
+    }
+}
+
+type NBT<T> {
+    _NBT var;
+    constructor() {
+        T defaultValue;
+        ir (this.var, defaultValue._nbt) {
+            nbt_assign $arg0, $arg1
+        }
+    }
+
+    macro NBTSubvar operator [](string path) {
+        return NBTSubvar(this.var, path);
+    }
+
 }

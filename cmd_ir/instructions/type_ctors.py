@@ -4,6 +4,7 @@ from ._core import ConstructorInsn, CompileTimeInsn
 from ..core_types import (SelectorType,
                           Selector,
                           VirtualString,
+                          MutableString,
                           EntityLocal,
                           Opt,
                           PosType,
@@ -11,6 +12,7 @@ from ..core_types import (SelectorType,
                           ItemType,
                           CmdFunction,
                           EntitySelection,
+                          BlockPos,
                           Position,
                           RelPosVal,
                           AncPosVal,
@@ -25,6 +27,29 @@ from ..variables import (VarType, LocalVariable, ParameterVariable, Variable,
 from ..nbt import NBTBase, NBTCompound
 from .text import TextObject
 import commands as c
+
+class CreateString(ConstructorInsn):
+    """Creates a new mutable string with an optional initial value."""
+
+    args = [Opt(VirtualString)]
+    argdocs = ["Initial value"]
+    argnames = 'val'
+    rettype = MutableString
+    insn_name = 'mut_string'
+
+    def construct(self):
+        return MutableString(None if self.val is None else str(self.val))
+
+class StringConcat(CompileTimeInsn):
+    """Appends src onto the mutable string dest. src is copied by value."""
+
+    args = [MutableString, (MutableString, VirtualString)]
+    argdocs = ["String to modify", "Source string"]
+    argnames = 'dest src'
+    insn_name = 'string_concat'
+
+    def run(self, ev):
+        self.dest.append(self.src)
 
 class CreateSelector(ConstructorInsn):
     """Creates a new selector object."""
@@ -91,6 +116,18 @@ class CreatePosition(ConstructorInsn):
 
     def construct(self):
         return Position(self.x, self.y, self.z)
+
+class CreateBlockPos(ConstructorInsn):
+    """Create a block position variable."""
+
+    args = [PosType, PosType, PosType]
+    argnames = 'x y z'
+    argdocs = ["X value", "Y value", "Z value"]
+    rettype = Position
+    insn_name = 'block_pos'
+
+    def construct(self):
+        return BlockPos(self.x, self.y, self.z)
 
 class CreateRelPos(ConstructorInsn):
     """Create a position component that is relative to the sender (i.e. '~')."""
@@ -162,6 +199,18 @@ class ItemInsn(ConstructorInsn):
 
     def construct(self):
         return ItemType(str(self.item_id))
+
+class ItemName(ConstructorInsn):
+    """Constructs a string containing the given item's name."""
+
+    args = [ItemType]
+    argdocs = ["Item to get the name of"]
+    argnames = 'item'
+    rettype = VirtualString
+    insn_name = 'item_name'
+
+    def construct(self):
+        return VirtualString(self.item.item_id)
 
 class AddItemPropInsn(CompileTimeInsn):
     """Adds an NBT value to the item properties."""

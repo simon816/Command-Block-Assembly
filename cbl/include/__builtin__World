@@ -4,7 +4,7 @@ type BlockType {
     _IRType _block;
     constexpr constructor(string type): _block("block", type) {}
     constexpr constructor(_IRType block): _block(block) {}
-    
+
     constexpr BlockType with(string property, string value) {
         _IRType copy("copy", this._block);
         ir (copy, property, value) {
@@ -30,6 +30,10 @@ type ItemType {
     _IRType _item;
     constexpr constructor(string type): _item("item", type) {}
     constexpr constructor(_IRType item): _item(item) {}
+
+    constexpr string name() {
+        return _IRType("item_name", this._item);
+    }
 }
 
 type World {
@@ -68,7 +72,7 @@ intrinsic_extension {
         block.add(i.SpawnEntityInsn(entity_id, pos, None))
         return void
     }
-    
+
     void World::spawn(EntityType type, decimal x, decimal y, decimal z, NBTCompound data) Python: {
         ptr = this.get_member(compiler, '_ptr').value
         entity_id = i.VirtualString(args.type.value.name)
@@ -81,7 +85,7 @@ intrinsic_extension {
         block.add(i.SpawnEntityInsn(entity_id, pos, data))
         return void
     }
-    
+
     void World::set_block(BlockType type) Python: {
         ptr = this.get_member(compiler, '_ptr').value
         block = ptr.at_entity()

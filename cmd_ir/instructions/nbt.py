@@ -3,6 +3,7 @@
 from ._core import (ConstructorInsn, CompileTimeInsn, SingleCommandInsn,
                     RuntimeHeldInsn, READ, WRITE)
 from ..core_types import (VirtualString,
+                          MutableString,
                           Opt,
                           BlockRef,
                           EntityRef,
@@ -79,6 +80,18 @@ class NBTCompoundSet(CompileTimeInsn):
     def run(self, ev):
         self.var.set(str(self.key), self.val)
 
+class NBTSerialize(CompileTimeInsn):
+    """Serializes an NBT tag to a string, sets the given MutableString
+    to the serialized value."""
+
+    args = [MutableString, NBTBase]
+    argnames = 'dest nbt'
+    argdocs = ["Destination string", "NBT data to serialize"]
+    insn_name = 'nbt_serialize'
+
+    def run(self, ev):
+        self.dest.set(self.nbt.serialize())
+
 class NBTDataMerge(SingleCommandInsn, RuntimeHeldInsn):
     """Merge the given NBT compound with a block or entity."""
 
@@ -114,7 +127,7 @@ class NBTDataGetter(ConstructorInsn):
     to whatever the value at the path is in a block or entity."""
 
     # Should be EntityRef but need to handle @e[limit=1]
-    args = [(BlockRef, EntitySelection), VirtualString, float]
+    args = [(BlockRef, EntitySelection), VirtualString, Opt(float)]
     argnames = 'target path scale'
     argdocs = ["Block or entity to retrieve the value from",
                "NBT path to the value", "Scale the result before returning"]
@@ -127,6 +140,36 @@ class NBTDataGetter(ConstructorInsn):
         else:
             target = c.EntityReference(self.target.as_resolve())
         return NBTGetterFunc(target, str(self.path), self.scale)
+
+class NBTVarGetterFunc(CmdFunction):
+
+    def __init__(self, var):
+        self.var = var
+
+    def as_cmd(self, func):
+        direct = self.var._direct_nbt()
+        assert direct is not None, self.var
+        path, storage = direct
+        return c.DataGet(storage, path, None)
+
+class NBTVarLengthInsn(ConstructorInsn):
+    """Creates a command variable that when called, sets the 'result' value
+    to the length of this NBT variable (list, compound or string)."""
+
+    args = [Variable]
+    argsdocs = ["NBT variable"]
+    argnames = 'var'
+    rettype = CmdFunction
+    insn_name = 'nbt_get_length'
+
+    def validate(self):
+        assert self.var.type is VarType.nbt
+
+    def declare(self):
+        self.var.usage_read()
+
+    def construct(self):
+        return NBTVarGetterFunc(self.var)
 
 class FuncRefInsn(ConstructorInsn):
     """Create an NBT compound value that refers to the given function.
@@ -204,7 +247,8 @@ class NBTDataRemove(SingleCommandInsn):
     insn_name = 'nbt_remove'
 
     def validate(self):
-        assert self.nbtvar.type is VarType.nbt
+        # Could be an int variable stored on nbt, so cannot validate here
+        pass #assert self.nbtvar.type is VarType.nbt
 
     def declare(self):
         self.nbtvar.usage_write()
@@ -304,3 +348,36 @@ class NBTModifyFromInsn(SingleCommandInsn):
             assert False
         return c.DataModifyFrom(target, c.NbtPath(str(self.target_path)),
                           self.action, source, c.NbtPath(str(self.source_path)))
+
+class NBTModifyVarFrom(SingleCommandInsn):
+    """Similar to nbt_modify_from except modifies an NBT variable."""
+
+    args = [Variable, str, (BlockRef, EntitySelection), (VirtualString,
+                                                         MutableString)]
+    argdocs = ["Variable to modify", "Action", "Source entity or block",
+               "Path in source"]
+    argnames = 'var action source source_path'
+    insn_name = 'nbt_modify_var_from'
+
+    def validate(self):
+        assert self.var.type is VarType.nbt
+        assert self.action in ['append', 'insert', 'merge', 'prepend', 'set']
+        assert self.action != 'insert', "TODO"
+
+    def declare(self):
+        self.var.usage_write()
+
+    def get_cmd(self, func):
+        direct = self.var._direct_nbt()
+        assert direct is not None, self.var
+        dest_path, dest_storage = direct
+
+        if isinstance(self.source, BlockRef):
+            source = self.source.as_cmdref()
+        elif isinstance(self.source, EntitySelection):
+            source = c.EntityReference(self.source.as_resolve())
+        else:
+            assert False
+
+        return c.DataModifyFrom(dest_storage, dest_path, self.action,
+                                source, c.NbtPath(str(self.source_path)))

@@ -135,6 +135,7 @@ class InstructionSeq:
                 name = self.holder.uniq_name(namehint or insn.insn_name)
             self.holder.store(name, ret)
             return ret
+        assert ret is None, ret
         return None
 
     def define(self, insn):
@@ -235,6 +236,9 @@ class Scope(OrderedDict):
             return self.parent.for_value(value)
         raise KeyError(value)
 
+    def __repr__(self):
+        return repr(self.parent) + ' => ' + super().__repr__()
+
 class VariableHolder:
 
     def isolate(self):
@@ -252,7 +256,8 @@ class VariableHolder:
 
     def uniq(self, hint, callback):
         name = self.uniq_name(hint)
-        obj = self.scope[name] = callback(name)
+        obj = callback(name)
+        self.store(name, obj)
         return obj
 
     def generate_name(self, namehint, value):
@@ -1160,6 +1165,14 @@ class CompileTimeFunction(VariableHolder):
         self._exitblock = self.uniq('0ret', self._create_block)
         self.post_exit_insns = []
 
+    def store(self, name, value):
+        if not isinstance(value, CompileTimeBlock):
+            # The compiletime local scope is just for creating blocks,
+            # delegate variable stores to the real function scope
+            self._real_func.store(name, value)
+        else:
+            super().store(name, value)
+
     @property
     def preamble(self):
         return self._real_func.preamble
@@ -1201,7 +1214,8 @@ class CompileTimeFunction(VariableHolder):
             return ''
         return '\n    compiletime {\n%s\n    }\n' % '\n\n'.join(
             block.serialize(8) for block in self.scope.values() \
-                if isinstance(block, CompileTimeBlock))
+                if isinstance(block, CompileTimeBlock) \
+                    and block != self._exitblock)
 
 class CompileTimeBlock(BasicBlock):
 

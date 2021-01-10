@@ -119,14 +119,16 @@ class DataGet(Command):
 
     def __init__(self, target, path, scale=1):
         assert isinstance(target, NBTStorable)
-        assert isinstance(scale, (int, float))
+        assert isinstance(scale, (int, float)) or scale is None
         self.target = target
         self.path = path
-        self.scale = int(scale) if scale == int(scale) else scale
+        self.scale = None if scale is None else \
+                     int(scale) if scale == int(scale) else scale
 
     def resolve(self, scope):
-        return 'data get %s %s %s' % (self.target.resolve(scope),
-                                      self.path.resolve(scope), self.scale)
+        scale = ' %s' % self.scale if self.scale is not None else ''
+        return 'data get %s %s%s' % (self.target.resolve(scope),
+                                      self.path.resolve(scope), scale)
 
 class DataMerge(Command):
 

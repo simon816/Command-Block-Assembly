@@ -8,7 +8,7 @@ from .ir_type import IRType, StringType
 from .function_type import FunctionDispatchType, FunctionType, Invokable, \
      InstanceFunctionType
 from .macro_type import MacroType
-from .base_types import VoidType, BoolType, IntType, DecimalType
+from .base_types import VoidType, BoolType, IntType, DecimalType, NBTType
 from .event_type import TagEventType, AdvancementEventType
 from .maybe_type import MaybeType
 from .template_type import TemplatedType
@@ -182,6 +182,7 @@ class Compiler(Transformer_WithPre):
         self.block = None
         self.ret_param = None
         self.ret_does_return = True
+        self.ret_block = None
         self._create_init_func()
         self.include_file('__builtin__')
 
@@ -226,6 +227,7 @@ class Compiler(Transformer_WithPre):
         self.add_base_type('int', IntType())
         self.add_base_type('bool', BoolType())
         self.add_base_type('decimal', DecimalType())
+        self.add_base_type('_NBT', NBTType())
         self.add_type('Maybe', MaybeType())
         self.add_type('_IRType', IRType())
 
@@ -239,7 +241,7 @@ class Compiler(Transformer_WithPre):
         self.add_base_type('AdvEvent', AdvancementEventType())
 
     def _create_init_func(self):
-        self.func = self.top.create_function('.cbl_init')
+        self._init_func = self.func = self.top.create_function('.cbl_init')
         self.top.preamble.add(i.SetupInsn(self.func))
         self.block = self.func.create_block('entry')
 
@@ -316,19 +318,29 @@ class Compiler(Transformer_WithPre):
     def compiletime(self):
         old_func = self.func
         old_block = self.block
+        old_ret_block = self.ret_block
         fn = self.func
         from cmd_ir.core import CompileTimeFunction
         in_compiletime = isinstance(fn, CompileTimeFunction)
         # If we're already inside a compiletime function, remain within
         # the current one instead of creating a new one
+        # Need to map return blocks to jump to end of this nested call rather
+        # than return from whole compiletime function
         if not in_compiletime:
             self.func = fn = fn.create_compiletime()
             self.block = fn.create_block('entry')
+        else:
+            self.ret_block = fn.create_block('nested_ct')
         yield
         if not in_compiletime:
             fn.run_and_return()
             self.func = old_func
             self.block = old_block
+        else:
+            if not self.block.is_terminated():
+                self.block.add(i.Branch(self.ret_block))
+            self.block = self.ret_block
+            self.ret_block = old_ret_block
 
     def type(self, name):
         t = self.types.lookup(name)
@@ -357,7 +369,9 @@ class Compiler(Transformer_WithPre):
         return self.top.preamble.add(insn, True, namehint)
 
     def define(self, namehint, insn):
-        if self.func is None:
+        # Use globals if we are in the init func - check preamble as
+        # we might be inside a compiletime of the init func
+        if self.func is None or self.func.preamble is self._init_func.preamble:
             return self.top.preamble.add(insn, True, namehint)
         return self.func.preamble.add(insn, True, namehint)
 
@@ -1205,7 +1219,11 @@ class Compiler(Transformer_WithPre):
                    "Cannot return value in void function"
             self.dispatch_operator('=', self.ret_param, expr)
         if self.ret_does_return:
-            self.add_insn(i.Return())
+            # For compiletime returns
+            if self.ret_block is not None:
+                self.add_insn(i.Branch(self.ret_block))
+            else:
+                self.add_insn(i.Return())
             self.block = self.func.create_block('dead_code')
 
     def expression_statement(self, expr=False):

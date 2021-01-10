@@ -1,0 +1,63 @@
+type Container {
+
+    _IRType _pos;
+
+    macro constructor(_IRType pos): _pos(pos) {}
+
+    constexpr _IRType _exec_store_result(int &res) {
+        _IRType exec("execute");
+        ir(exec, res) {
+            $spec = exec_store_var $arg1
+            exec_store $arg0, result, $spec
+        }
+        return exec;
+    }
+
+    constexpr _IRType _exec_if_var(_IRType &var) {
+        _IRType exec("execute");
+        ir (exec, var) {
+            exec_if_nbt_var $arg0, $arg1
+        }
+        return exec;
+    }
+
+    constexpr string create_path_constraint(ItemType item) {
+        NBTCompound itemName;
+        itemName["id"] = NBTString(item.name());
+        return "Items[" + itemName.to_string() + "].Count";
+    }
+
+    macro int get_item_count(ItemType item) {
+        NBT<NBTList> tmp;
+        ir(tmp.var, this._pos, this.create_path_constraint(item)) {
+            nbt_modify_var_from $arg0, append, $arg1, $arg2
+        }
+
+        int length;
+        _IRType exec = this._exec_store_result(length);
+        ir (exec, tmp.var) {
+            $getter = nbt_get_length $arg1
+            exec_run $arg0, $getter
+        }
+
+        int count = 0;
+        NBTSubvar head = tmp["[0]"];
+        _IRType exec2 = this._exec_if_var(head.asInt());
+        ir (exec2, count, head.asInt()) {
+            call :loop
+            branch :cont
+
+            [function] loop:
+            exec_run $arg0, :count
+
+            [function] count:
+            $arg1 += $arg2
+            nbt_remove $arg2
+            branch :loop
+
+            cont:
+        }
+        return count;
+    }
+
+}

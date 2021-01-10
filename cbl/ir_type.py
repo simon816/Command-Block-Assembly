@@ -1,4 +1,4 @@
-from .containers import LiteralString
+from .containers import LiteralString, Temporary
 from .native_type import NativeType, MetaType
 
 import cmd_ir.instructions as i
@@ -16,6 +16,9 @@ class IRTypeInstance:
         insn = _READER_.read_instruction(compiler.func, insn_str, moreargs)
         self.var = compiler.define(self._name, insn)
 
+    def __repr__(self):
+        return 'IRTypeInstance(%s)' % self.var
+
 class IRType(NativeType):
 
     @property
@@ -31,7 +34,8 @@ class IRType(NativeType):
         return 0
 
     def as_ir_variable(self, instance):
-        assert instance.var is not None
+        assert instance.var is not None, "Cannot convert %s to variable" % (
+            instance._name)
         return instance.var
 
     def run_constructor(self, compiler, container, args):
@@ -49,8 +53,7 @@ class IRType(NativeType):
         else:
             assert len(args) == 1
             assert s.type is self
-            assert s.value.var is not None
-            container.value.var = s.value.var
+            container.value.var = s.type.as_ir_variable(s.value)
 
     def dispatch_operator(self, compiler, op, left, right=None):
         if op == '=':
@@ -62,8 +65,11 @@ class IRType(NativeType):
 
 class StringInstance:
 
-    def __init__(self):
-        self._str = None
+    def __init__(self, val=None):
+        self._str = val
+
+    def __repr__(self):
+        return 'StringInstance(%s)' % self._str
 
 class StringType(NativeType):
 
@@ -94,12 +100,30 @@ class StringType(NativeType):
         if op == '=':
             self.__copy(left, right)
             return left
+        if op == '+':
+            return self.__concat(compiler, left, right)
         return super().dispatch_operator(compiler, op, left, right)
 
-    def __copy(self, this, other):
-        if isinstance(other, LiteralString):
-            this.value._str = i.VirtualString(other.value)
+    def _as_string(self, container):
+        if isinstance(container, LiteralString):
+            return i.VirtualString(container.value)
+        if isinstance(container.type, IRType):
+            # Allow strings wrapped in _IRType
+            v = container.type.as_ir_variable(container.value)
+            if isinstance(v, (i.VirtualString, i.MutableString)):
+                return v
+            assert False, container
         else:
-            assert other.type is self, other
-            assert other.value._str is not None
-            this.value._str = other.value._str
+            assert container.type is self, container
+            assert isinstance(container.value, StringInstance), container
+            assert container.value._str is not None, container
+            return container.value._str
+
+    def __copy(self, this, other):
+        this.value._str = self._as_string(other)
+
+    def __concat(self, compiler, s1, s2):
+        concat = compiler.define('concat', i.CreateString(None))
+        compiler.add_insn(i.StringConcat(concat, self._as_string(s1)))
+        compiler.add_insn(i.StringConcat(concat, self._as_string(s2)))
+        return Temporary(self, StringInstance(concat))
