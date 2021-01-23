@@ -175,7 +175,7 @@ There is only one built-in type, `int`. Fundamentally, all data is stored in a s
 which is a 32 bit signed integer.
 
 
-The [mclib.h](https://github.com/simon816/Command-Block-Assembly/blob/master/compiler/include/mclib.h) file
+The [mclib.h](https://github.com/simon816/Command-Block-Assembly/blob/master/c_comp/include/mclib.h) file
 contains several useful macros and definitions.
 
 
